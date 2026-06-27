@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -322,4 +322,108 @@ test("start rejects unknown agents and unknown tools", () => {
   assert.equal(badTool.status, 1);
   assert.match(badTool.stderr, /Unknown tool/);
   assert.doesNotMatch(badTool.stdout, /Start badtool/);
+});
+
+test("task add writes a markdown task file and queue index", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+
+  const result = run(["task", "add", "--agent", "worker", "--title", "Implement X", "--body", "Do the work"], cwd);
+
+  assert.equal(result.status, 0, result.stderr);
+  const queue = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "queue.json"), "utf8"));
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].status, "ready");
+  assert.equal(queue[0].title, "Implement X");
+  assert.match(queue[0].task_file, /^tasks\/task-/);
+  const task = readFileSync(join(cwd, ".agent-rig", "worker", queue[0].task_file), "utf8");
+  assert.match(task, /title: Implement X/);
+  assert.match(task, /status: ready/);
+  assert.match(task, /## Objective\n\nDo the work/);
+  assert.equal(run(["validate"], cwd).status, 0);
+});
+
+test("task add accepts body-file", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  writeFileSync(join(cwd, "task.md"), "Line one\nLine two\n", "utf8");
+
+  const result = run(["task", "add", "--agent", "worker", "--title", "From file", "--body-file", "task.md"], cwd);
+
+  assert.equal(result.status, 0, result.stderr);
+  const queue = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "queue.json"), "utf8"));
+  const task = readFileSync(join(cwd, ".agent-rig", "worker", queue[0].task_file), "utf8");
+  assert.match(task, /Line one\nLine two/);
+});
+
+test("watch --once completes ready tasks and writes run and handoff records", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["task", "add", "--agent", "worker", "--title", "Implement X", "--body", "Do the work"], cwd).status, 0);
+
+  const result = run(["watch", "--once"], cwd);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Processed 1 task/);
+  const queue = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "queue.json"), "utf8"));
+  assert.equal(queue[0].status, "done");
+  assert.match(queue[0].run_id, /^202/);
+  assert.equal(queue[0].message, `Fake adapter completed ${queue[0].id}.`);
+  const task = readFileSync(join(cwd, ".agent-rig", "worker", queue[0].task_file), "utf8");
+  assert.match(task, /status: done/);
+  assert.match(task, new RegExp(`run_id: ${queue[0].run_id}`));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", queue[0].run_id, "prompt.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", queue[0].run_id, "result.json")));
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", queue[0].run_id, "result.json"), "utf8")).status, "done");
+  assert.equal(readdirSync(join(cwd, ".agent-rig", "_shared", "handoff_logs")).length, 1);
+  const session = JSON.parse(readFileSync(join(cwd, ".agent-rig", "_shared", "session.json"), "utf8"));
+  assert.equal(session.agents.worker.status, "idle");
+});
+
+test("watch --once blocks simulated blocked tasks and updates status counts", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["task", "add", "--agent", "worker", "--title", "Blocked X", "--body", "Try it"], cwd).status, 0);
+  const queuePath = join(cwd, ".agent-rig", "worker", "queue.json");
+  const queue = JSON.parse(readFileSync(queuePath, "utf8"));
+  queue[0].simulate = "blocked";
+  writeFileSync(queuePath, `${JSON.stringify(queue, null, 2)}\n`, "utf8");
+
+  assert.equal(run(["watch", "--once"], cwd).status, 0);
+
+  const updated = JSON.parse(readFileSync(queuePath, "utf8"));
+  assert.equal(updated[0].status, "blocked");
+  assert.equal(updated[0].message, `Fake adapter blocked ${updated[0].id}.`);
+  const session = JSON.parse(readFileSync(join(cwd, ".agent-rig", "_shared", "session.json"), "utf8"));
+  assert.equal(session.agents.worker.status, "blocked");
+  assert.equal(session.blockers.length, 1);
+  const status = JSON.parse(run(["status", "--json"], cwd).stdout);
+  assert.equal(status.agents[0].queue.pending, 0);
+  assert.equal(status.agents[0].queue.blocked, 1);
+  assert.equal(status.agents[0].queue.done, 0);
+});
+
+test("validate fails queue and task markdown drift", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["task", "add", "--agent", "worker", "--title", "Drift", "--body", "No drift"], cwd).status, 0);
+  const queue = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "queue.json"), "utf8"));
+  const taskPath = join(cwd, ".agent-rig", "worker", queue[0].task_file);
+  writeFileSync(taskPath, readFileSync(taskPath, "utf8").replace("status: ready", "status: done"), "utf8");
+
+  const result = run(["validate"], cwd);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /frontmatter status must match/);
+});
+
+test("watch refuses an existing lock", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "watch.lock"), "123", "utf8");
+
+  const result = run(["watch", "--once"], cwd);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /watch\.lock already exists/);
 });
