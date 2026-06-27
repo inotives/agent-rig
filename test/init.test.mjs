@@ -12,7 +12,7 @@ function tempProject() {
 }
 
 function run(args, cwd, input = "") {
-  return spawnSync(process.execPath, [cli, ...args], { cwd, input, encoding: "utf8" });
+  return spawnSync(process.execPath, [cli, ...args], { cwd, input, encoding: "utf8", env: { ...process.env, AGENT_RIG_SKIP_SKILLS: "1" } });
 }
 
 test("init --yes creates solo Codex worker scaffold", () => {
@@ -24,7 +24,8 @@ test("init --yes creates solo Codex worker scaffold", () => {
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "agent.toml")));
   assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "agent.toml"), "utf8"), /tool = "codex"/);
   assert.match(readFileSync(join(cwd, ".gitignore"), "utf8"), /^\.agent-rig\/$/m);
-  assert.equal(readFileSync(join(cwd, ".agent-rig", ".creds", ".gitignore"), "utf8"), "*\n!.gitignore\n");
+  assert.equal(readFileSync(join(cwd, ".agent-rig", ".creds", ".gitignore"), "utf8"), "*\n!.gitignore\n!*.toml\n!*.env.example\n");
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "skills", "find-skills")));
 });
 
 test("init refuses an existing .agent-rig workspace", () => {
@@ -114,7 +115,7 @@ test("validate fails tracked credential files in a git repo", () => {
   const result = run(["validate"], cwd);
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Credential files must not be tracked/);
+  assert.match(result.stderr, /Real credential .env files must not be tracked/);
 });
 
 test("validate --json returns structured errors and warnings", () => {
@@ -152,4 +153,86 @@ writable_paths = ["logs"]
   const result = run(["validate"], cwd);
 
   assert.equal(result.status, 0, result.stderr);
+});
+
+test("add creates a valid new agent and rejects duplicates", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+
+  const added = run(["add", "reviewer", "--role", "reviewer", "--tool", "claude"], cwd);
+  assert.equal(added.status, 0, added.stderr);
+  assert.ok(existsSync(join(cwd, ".agent-rig", "reviewer", "agent.toml")));
+  assert.equal(run(["validate"], cwd).status, 0);
+
+  const duplicate = run(["add", "reviewer", "--role", "reviewer", "--tool", "claude"], cwd);
+  assert.equal(duplicate.status, 1);
+  assert.match(duplicate.stderr, /already exists/);
+
+  const invalid = run(["add", "BadName", "--role", "worker", "--tool", "codex"], cwd);
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /lowercase slug/);
+});
+
+test("agents lists configured agents as text and json", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer", "--tool", "claude"], cwd).status, 0);
+
+  const text = run(["agents"], cwd);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /worker/);
+  assert.match(text.stdout, /reviewer/);
+
+  const json = run(["agents", "--json"], cwd);
+  assert.equal(json.status, 0, json.stderr);
+  assert.deepEqual(JSON.parse(json.stdout).map((agent) => agent.name), ["reviewer", "worker"]);
+});
+
+test("creds init writes declarations, examples, and placeholders", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+
+  const shared = run(["creds", "init", "--shared", "AGENTRIG_GITHUB_SHARED_APIKEY"], cwd);
+  assert.equal(shared.status, 0, shared.stderr);
+  const agent = run(["creds", "init", "--agent", "worker", "AGENTRIG_GITHUB_WORKER_APIKEY"], cwd);
+  assert.equal(agent.status, 0, agent.stderr);
+
+  assert.match(readFileSync(join(cwd, ".agent-rig", ".creds", "_shared.toml"), "utf8"), /AGENTRIG_GITHUB_SHARED_APIKEY/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", ".creds", "worker.env.example"), "utf8"), /^AGENTRIG_GITHUB_WORKER_APIKEY=/m);
+  assert.match(readFileSync(join(cwd, ".agent-rig", ".creds", "worker.env"), "utf8"), /^AGENTRIG_GITHUB_WORKER_APIKEY=/m);
+  assert.equal(run(["validate"], cwd).status, 0);
+
+  const invalid = run(["creds", "init", "--agent", "worker", "AGENTRIG_GITHUB_REVIEWER_APIKEY"], cwd);
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /Invalid credential key/);
+});
+
+test("creds list groups shared and agent keys without values", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["creds", "init", "--shared", "AGENTRIG_GITHUB_SHARED_APIKEY"], cwd).status, 0);
+  assert.equal(run(["creds", "init", "--agent", "worker", "AGENTRIG_GITHUB_WORKER_APIKEY"], cwd).status, 0);
+  writeFileSync(join(cwd, ".agent-rig", ".creds", "worker.env"), "AGENTRIG_GITHUB_WORKER_APIKEY=secret\n", "utf8");
+
+  const result = run(["creds", "list", "--agent", "worker"], cwd);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /AGENTRIG_GITHUB_SHARED_APIKEY/);
+  assert.match(result.stdout, /AGENTRIG_GITHUB_WORKER_APIKEY/);
+  assert.doesNotMatch(result.stdout, /secret/);
+});
+
+test("skills list and add dry-run handle shared and agent destinations", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  mkdirSync(join(cwd, ".agent-rig", "worker", "skills", "worker-only"), { recursive: true });
+
+  const list = run(["skills", "list", "--agent", "worker"], cwd);
+  assert.equal(list.status, 0, list.stderr);
+  assert.match(list.stdout, /find-skills/);
+  assert.match(list.stdout, /worker-only/);
+
+  const add = run(["skills", "add", "owner/repo-skill", "--agent", "worker", "--dry-run"], cwd);
+  assert.equal(add.status, 0, add.stderr);
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "skills", "repo-skill")));
 });

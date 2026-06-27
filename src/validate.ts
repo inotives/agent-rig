@@ -2,12 +2,11 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "@iarna/toml";
+import { credsGitignore, roles, tools } from "./workspace.js";
 
 type Problem = { path: string; message: string };
 type Result = { errors: Problem[]; warnings: Problem[] };
 
-const roles = new Set(["supervisor", "planner", "worker", "verifier", "reviewer", "tester", "custom"]);
-const tools = new Set(["claude", "codex", "opencode", "custom"]);
 const flatKeys = new Set(["name", "role", "tool", "instructions", "context", "queue", "handoff_log", "shared_context", "shared_queue"]);
 const topKeys = new Set([...flatKeys, "agent", "permissions"]);
 const agentKeys = new Set(flatKeys);
@@ -137,12 +136,47 @@ function validateCreds(cwd: string, root: string, result: Result) {
   const git = spawnSync("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
   if (git.status === 0) {
     const tracked = spawnSync("git", ["-C", cwd, "ls-files", ".agent-rig/.creds"], { encoding: "utf8" }).stdout.trim().split(/\r?\n/).filter(Boolean);
-    for (const file of tracked) error(result, file, "Credential files must not be tracked by git.");
-    return;
+    for (const file of tracked) {
+      if (file.endsWith(".env") && !file.endsWith(".env.example")) error(result, file, "Real credential .env files must not be tracked by git.");
+    }
   }
 
   const ignore = join(root, ".creds", ".gitignore");
-  if (!existsSync(ignore)) error(result, rel(ignore), ".creds/.gitignore is required outside git repos.");
+  if (!existsSync(ignore)) error(result, rel(ignore), ".creds/.gitignore is required.");
+  else if (readFileSync(ignore, "utf8") !== credsGitignore) error(result, rel(ignore), ".creds/.gitignore must allow *.toml and *.env.example while ignoring real *.env files.");
+
+  const dir = join(root, ".creds");
+  if (!existsSync(dir)) return;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".toml")) validateCredDeclaration(join(dir, entry.name), result);
+  }
+}
+
+function validateCredDeclaration(path: string, result: Result) {
+  let data: unknown;
+  try {
+    data = parse(readFileSync(path, "utf8"));
+  } catch (cause) {
+    error(result, rel(path), `Invalid TOML: ${cause instanceof Error ? cause.message : String(cause)}`);
+    return;
+  }
+  if (!isRecord(data) || !isRecord(data.keys)) {
+    error(result, rel(path), "Credential declaration must contain a [keys] table.");
+    return;
+  }
+
+  const scope = path.endsWith("_shared.toml") ? "SHARED" : path.split(/[\\/]/).pop()!.replace(/\.toml$/, "").toUpperCase().replaceAll("-", "_");
+  const keys = Object.keys(data.keys);
+  for (const key of keys) {
+    const parts = key.match(/^AGENTRIG_([A-Z0-9]+)_([A-Z0-9_]+)_([A-Z0-9]+)$/);
+    if (!parts || parts[2] !== scope) error(result, rel(path), `Invalid AgentRig credential key for ${scope}: ${key}`);
+  }
+
+  const example = path.replace(/\.toml$/, ".env.example");
+  if (!requireFile(example, result)) return;
+  const exampleKeys = readFileSync(example, "utf8").split(/\r?\n/).filter(Boolean).map((line) => line.split("=")[0]);
+  for (const key of keys) if (!exampleKeys.includes(key)) error(result, rel(example), `Missing key from .env.example: ${key}`);
+  for (const key of exampleKeys) if (!keys.includes(key)) error(result, rel(example), `Unexpected key in .env.example: ${key}`);
 }
 
 function jsonObject(path: string, result: Result, keys: string[], extra?: (data: Record<string, unknown>) => void) {

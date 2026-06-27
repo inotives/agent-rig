@@ -2,12 +2,8 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-
-type Agent = {
-  name: string;
-  role: string;
-  tool: string;
-};
+import { spawnSync } from "node:child_process";
+import { addAgent, Agent, defaultSkills, normalizeInstalledSkill, repairCredsGitignore, skillFolderName, workspaceRoot } from "./workspace.js";
 
 type Pattern = "solo" | "coder-reviewer" | "trinity" | "supervisor-worker" | "swarm" | "testing-reviewer" | "custom";
 
@@ -101,12 +97,11 @@ async function runInteractiveInit(cwd: string) {
 }
 
 function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: boolean }) {
-  const root = join(cwd, ".agent-rig");
+  const root = workspaceRoot(cwd);
   mkdirSync(join(root, "_shared"), { recursive: true });
-  mkdirSync(join(root, ".creds"), { recursive: true });
   mkdirSync(join(root, "human"), { recursive: true });
 
-  writeFileSync(join(root, ".creds", ".gitignore"), "*\n!.gitignore\n", "utf8");
+  repairCredsGitignore(root);
   writeFileSync(join(root, "_shared", "task_queue.json"), "[]\n", "utf8");
   writeJson(join(root, "_shared", "agent-rig.json"), {
     workspace_version: 1,
@@ -125,13 +120,9 @@ function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: 
   writeFileSync(join(root, "human", "README.md"), "# Human\n\nUse this folder for approval, unblock, and override notes.\n", "utf8");
 
   for (const agent of options.agents) {
-    const dir = join(root, agent.name);
-    mkdirSync(join(dir, "logs"), { recursive: true });
-    writeFileSync(join(dir, "agent.toml"), agentToml(agent), "utf8");
-    writeFileSync(join(dir, "instructions.md"), instructionsMarkdown(agent), "utf8");
-    writeFileSync(join(dir, "context.md"), `# ${agent.name} Context\n\nAgent-local notes for ${agent.name}.\n`, "utf8");
-    writeFileSync(join(dir, "queue.json"), "[]\n", "utf8");
+    addAgent(root, agent);
   }
+  installDefaultSkills(join(root, "_shared", "skills"));
 
   if (options.addProjectGitignore) {
     addGitignoreEntry(cwd, ".agent-rig/");
@@ -144,14 +135,6 @@ function contextMarkdown(cwd: string) {
   return `# Project Context\n\nProject: ${project.name}\nType: ${project.type}\n${readme}`;
 }
 
-function agentToml(agent: Agent) {
-  return `role = "${agent.role}"\ntool = "${agent.tool}"\ninstructions = "instructions.md"\ncontext = "context.md"\nqueue = "queue.json"\n`;
-}
-
-function instructionsMarkdown(agent: Agent) {
-  return `# ${agent.name}\n\nRole: ${agent.role}\nTool: ${agent.tool}\n\nShared context: ../_shared/context.md\nTask queue: ../_shared/task_queue.json\nAgent context: ./context.md\n\nStart by reading the shared context, then your agent-local context.\n`;
-}
-
 function addGitignoreEntry(cwd: string, entry: string) {
   const file = join(cwd, ".gitignore");
   const current = existsSync(file) ? readFileSync(file, "utf8") : "";
@@ -162,6 +145,19 @@ function addGitignoreEntry(cwd: string, entry: string) {
 
 function writeJson(path: string, value: unknown) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function installDefaultSkills(dir: string) {
+  mkdirSync(dir, { recursive: true });
+  for (const skill of defaultSkills) {
+    if (process.env.AGENT_RIG_SKIP_SKILLS === "1") {
+      mkdirSync(join(dir, skillFolderName(skill)), { recursive: true });
+      continue;
+    }
+    const result = spawnSync("npx", ["skills", "add", skill, "--yes"], { cwd: dir, stdio: "inherit" });
+    if (result.status) throw new Error(`Failed to install default skill: ${skill}`);
+    normalizeInstalledSkill(dir, skill);
+  }
 }
 
 function detectProject(cwd: string) {
