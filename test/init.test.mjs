@@ -26,6 +26,7 @@ test("init --yes creates solo Codex worker scaffold", () => {
   assert.match(readFileSync(join(cwd, ".gitignore"), "utf8"), /^\.agent-rig\/$/m);
   assert.equal(readFileSync(join(cwd, ".agent-rig", ".creds", ".gitignore"), "utf8"), "*\n!.gitignore\n!*.toml\n!*.env.example\n");
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "skills", "find-skills")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "skills", "handoff")));
 });
 
 test("init refuses an existing .agent-rig workspace", () => {
@@ -235,4 +236,90 @@ test("skills list and add dry-run handle shared and agent destinations", () => {
   const add = run(["skills", "add", "owner/repo-skill", "--agent", "worker", "--dry-run"], cwd);
   assert.equal(add.status, 0, add.stderr);
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "skills", "repo-skill")));
+});
+
+test("status lists agents, queues, and handoffs as text and json", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  const logDir = join(cwd, ".agent-rig", "_shared", "handoff_logs");
+  mkdirSync(logDir, { recursive: true });
+  for (let i = 1; i <= 6; i++) writeFileSync(join(logDir, `2026-06-27-140${i}_s${i}_codex_worker.md`), "# handoff\n", "utf8");
+  writeFileSync(join(logDir, "notes.md"), "# ignored\n", "utf8");
+
+  const text = run(["status"], cwd);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /worker/);
+  assert.match(text.stdout, /Shared queue: 0 pending/);
+  assert.match(text.stdout, /2026-06-27-1406_s6_codex_worker\.md/);
+  assert.doesNotMatch(text.stdout, /notes\.md/);
+
+  const json = run(["status", "--json"], cwd);
+  assert.equal(json.status, 0, json.stderr);
+  const data = JSON.parse(json.stdout);
+  assert.equal(data.agents[0].name, "worker");
+  assert.equal(data.agents[0].queue.pending, 0);
+  assert.equal(data.queues.shared.pending, 0);
+  assert.deepEqual(data.handoffs.map((item) => item.file), [
+    "2026-06-27-1406_s6_codex_worker.md",
+    "2026-06-27-1405_s5_codex_worker.md",
+    "2026-06-27-1404_s4_codex_worker.md",
+    "2026-06-27-1403_s3_codex_worker.md",
+    "2026-06-27-1402_s2_codex_worker.md"
+  ]);
+});
+
+test("status reports invalid queue json as an error", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  writeFileSync(join(cwd, ".agent-rig", "worker", "queue.json"), "{bad", "utf8");
+
+  const result = run(["status", "--json"], cwd);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).agents[0].queue.status, "error");
+});
+
+test("validate warns for off-format handoff log names", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  mkdirSync(join(cwd, ".agent-rig", "_shared", "handoff_logs"), { recursive: true });
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "handoff_logs", "notes.md"), "# bad\n", "utf8");
+
+  const result = run(["validate"], cwd);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Handoff log filename/);
+});
+
+test("start prints launch context, credential keys, and skill precedence", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["creds", "init", "--shared", "AGENTRIG_GITHUB_SHARED_APIKEY"], cwd).status, 0);
+  assert.equal(run(["creds", "init", "--agent", "worker", "AGENTRIG_GITHUB_WORKER_APIKEY"], cwd).status, 0);
+  writeFileSync(join(cwd, ".agent-rig", ".creds", "worker.env"), "AGENTRIG_GITHUB_WORKER_APIKEY=secret\n", "utf8");
+
+  const result = run(["start", "--agent", "worker"], cwd);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Tool: codex/);
+  assert.match(result.stdout, /Project cwd:/);
+  assert.match(result.stdout, /\.agent-rig\/worker\/instructions\.md/);
+  assert.match(result.stdout, /\.agent-rig\/\.creds\/_shared\.env/);
+  assert.match(result.stdout, /AGENTRIG_GITHUB_SHARED_APIKEY/);
+  assert.match(result.stdout, /AGENTRIG_GITHUB_WORKER_APIKEY/);
+  assert.match(result.stdout, /Skill precedence/);
+  assert.doesNotMatch(result.stdout, /secret/);
+});
+
+test("start rejects unknown agents and unknown tools", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+
+  const missing = run(["start", "--agent", "missing"], cwd);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /Unknown agent/);
+
+  const toml = join(cwd, ".agent-rig", "worker", "agent.toml");
+  writeFileSync(toml, readFileSync(toml, "utf8").replace('tool = "codex"', 'tool = "badtool"'), "utf8");
+  const badTool = run(["start", "--agent", "worker"], cwd);
+  assert.equal(badTool.status, 1);
+  assert.match(badTool.stderr, /Unknown tool/);
+  assert.doesNotMatch(badTool.stdout, /Start badtool/);
 });

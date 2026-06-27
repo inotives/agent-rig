@@ -8,9 +8,19 @@ export type Agent = {
   tool: string;
 };
 
+export type SkillSpec = {
+  source: string;
+  name: string;
+  args?: string[];
+};
+
 export const roles = new Set(["supervisor", "planner", "worker", "verifier", "reviewer", "tester", "custom"]);
 export const tools = new Set(["claude", "codex", "opencode", "custom"]);
-export const defaultSkills = ["vercel-labs/skills@find-skills", "anthropics/skills@skill-creator"];
+export const defaultSkills: SkillSpec[] = [
+  { source: "vercel-labs/skills@find-skills", name: "find-skills" },
+  { source: "anthropics/skills@skill-creator", name: "skill-creator" },
+  { source: "https://github.com/mattpocock/skills", name: "handoff", args: ["--skill", "handoff"] }
+];
 export const credsGitignore = "*\n!.gitignore\n!*.toml\n!*.env.example\n";
 
 export function workspaceRoot(cwd: string) {
@@ -59,12 +69,13 @@ export function repairCredsGitignore(root: string) {
   writeFileSync(join(dir, ".gitignore"), credsGitignore, "utf8");
 }
 
-export function skillFolderName(source: string) {
-  return source.includes("@") ? source.split("@").pop()! : source.split("/").pop()!;
+export function skillFolderName(skill: string | SkillSpec) {
+  if (typeof skill !== "string") return skill.name;
+  return skill.includes("@") ? skill.split("@").pop()! : skill.split("/").pop()!;
 }
 
-export function normalizeInstalledSkill(dir: string, source: string) {
-  const name = skillFolderName(source);
+export function normalizeInstalledSkill(dir: string, skill: string | SkillSpec) {
+  const name = skillFolderName(skill);
   const direct = join(dir, name);
   const nested = join(dir, ".agents", "skills", name);
   if (!existsSync(direct) && existsSync(nested)) renameSync(nested, direct);
