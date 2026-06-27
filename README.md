@@ -60,16 +60,25 @@ AgentRig will be distributed as an npm CLI package.
 
 ## Install and First Run
 
-Planned first run:
+Planned install:
 
 ```bash
-npx agent-rig init
+npm install -g agent-rig
+# or
+pnpm add -g agent-rig
+```
+
+Then run AgentRig from inside the project you want to scaffold:
+
+```bash
+cd path/to/your-project
+agent-rig init
 ```
 
 Non-interactive MVP default:
 
 ```bash
-npx agent-rig init --yes
+agent-rig init --yes
 ```
 
 ## Common Commands

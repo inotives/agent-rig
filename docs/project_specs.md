@@ -8,6 +8,8 @@
 
 AgentRig bootstraps a structured `.agent-rig/` directory into any new or existing project. The layout is inspired by Vercel's eve framework — every concern has a predictable home on the filesystem.
 
+The intended user flow is: install AgentRig globally with npm or pnpm, `cd` into the user's own project repository, then run `agent-rig init` to scaffold `.agent-rig/` into that repository.
+
 The key design principle is **user-defined agent composition**. AgentRig does not prescribe how many agents a project needs, which roles exist, or which AI tool runs each role. A project might have a single research agent running Claude. Another might have the full planner-worker-verifier trinity, all running Codex. Another might use Claude for both planner and verifier, with OpenCode as the worker. All of these are first-class configurations.
 
 Agents share context through structured files in `.agent-rig/_shared/` — not ad-hoc prompts — making every workflow auditable, version-controlled, and reproducible regardless of how many agents are involved.
