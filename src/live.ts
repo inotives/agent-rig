@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { parse } from "@iarna/toml";
 import { readAgents, requireWorkspace, tools } from "./workspace.js";
 
-const handoffName = /^\d{4}-\d{2}-\d{2}-\d{4}_[^_]+_[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
+const handoffName = /^\d{4}-\d{2}-\d{2}-\d{4}_.+_[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
 
 export function runStatus(args: string[], cwd: string) {
   try {
@@ -86,9 +86,16 @@ function queueState(cwd: string, file: string) {
   try {
     const data = JSON.parse(readFileSync(file, "utf8"));
     if (!Array.isArray(data)) throw new Error("not an array");
-    return { path: relative(cwd, file), status: "ok", pending: data.length };
+    return {
+      path: relative(cwd, file),
+      status: "ok",
+      pending: data.filter((item) => isRecord(item) && item.status === "ready").length,
+      running: data.filter((item) => isRecord(item) && item.status === "running").length,
+      blocked: data.filter((item) => isRecord(item) && item.status === "blocked").length,
+      done: data.filter((item) => isRecord(item) && item.status === "done").length
+    };
   } catch {
-    return { path: relative(cwd, file), status: "error", pending: null };
+    return { path: relative(cwd, file), status: "error", pending: null, running: null, blocked: null, done: null };
   }
 }
 
@@ -141,8 +148,8 @@ function printCredScope(cwd: string, name: string, scope: { env: string; keys: s
   console.log(`  ${name} keys: ${scope.keys.length ? scope.keys.join(", ") : "(none declared)"}`);
 }
 
-function formatQueue(queue: { status: string; pending: number | null }) {
-  return queue.status === "ok" ? `${queue.pending} pending` : "error";
+function formatQueue(queue: { status: string; pending: number | null; running: number | null; blocked: number | null; done: number | null }) {
+  return queue.status === "ok" ? `${queue.pending} pending, ${queue.running} running, ${queue.blocked} blocked, ${queue.done} done` : "error";
 }
 
 function flag(args: string[], name: string) {

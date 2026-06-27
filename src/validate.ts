@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { resolve, join, relative } from "node:path";
+import { dirname, resolve, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "@iarna/toml";
 import { credsGitignore, roles, tools } from "./workspace.js";
@@ -11,7 +11,9 @@ const flatKeys = new Set(["name", "role", "tool", "instructions", "context", "qu
 const topKeys = new Set([...flatKeys, "agent", "permissions"]);
 const agentKeys = new Set(flatKeys);
 const permissionKeys = new Set(["writable_paths"]);
-const handoffName = /^\d{4}-\d{2}-\d{2}-\d{4}_[^_]+_[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
+const handoffName = /^\d{4}-\d{2}-\d{2}-\d{4}_.+_[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
+const taskStates = new Set(["ready", "running", "done", "blocked"]);
+const queueKeys = new Set(["id", "agent", "status", "title", "task_file", "simulate", "run_id", "started_at", "finished_at", "message"]);
 
 export function runValidate(args: string[], cwd: string) {
   const json = args.includes("--json");
@@ -57,7 +59,7 @@ function validateShared(root: string, result: Result) {
     }
   });
   jsonObject(join(root, "_shared", "session.json"), result, ["version", "created_at", "updated_at", "agents", "current_task_id", "blockers"]);
-  jsonArray(join(root, "_shared", "task_queue.json"), result);
+  validateQueue(join(root, "_shared", "task_queue.json"), root, result, true);
   nonEmptyMarkdown(join(root, "_shared", "context.md"), result);
 }
 
@@ -106,7 +108,7 @@ function validateAgent(name: string, dir: string, tomlPath: string, result: Resu
   validateSharedRef(agentTable, "shared_queue", dir, result, false);
 
   const queue = stringField(agentTable, "queue");
-  if (queue) jsonArray(resolve(dir, queue), result);
+  if (queue) validateQueue(resolve(dir, queue), resolve(dir, ".."), result, false, name);
 
   if (isRecord(data.permissions) && Array.isArray(data.permissions.writable_paths)) {
     for (const path of data.permissions.writable_paths) {
@@ -186,9 +188,62 @@ function validateHandoffLogs(root: string, result: Result) {
   if (!existsSync(dir)) return;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isFile() && entry.name.endsWith(".md") && !handoffName.test(entry.name)) {
-      warn(result, rel(join(dir, entry.name)), "Handoff log filename should use <date-YYYY-MM-DD-hhmm>_<session_id>_<tool>_<role>.md.");
+      warn(result, rel(join(dir, entry.name)), "Handoff log filename should use <date-YYYY-MM-DD-hhmm>_<run_id>_<tool>_<role>.md.");
     }
   }
+}
+
+function validateQueue(path: string, root: string, result: Result, shared: boolean, localAgent?: string) {
+  const data = readJson(path, result);
+  if (data === undefined) return;
+  if (!Array.isArray(data)) {
+    error(result, rel(path), "Expected a JSON array.");
+    return;
+  }
+
+  for (const item of data) {
+    if (!isRecord(item)) {
+      error(result, rel(path), "Queue task must be an object.");
+      continue;
+    }
+    warnUnknown(item, queueKeys, rel(path), result);
+    for (const key of ["id", "status", "title", "task_file"]) {
+      if (typeof item[key] !== "string") error(result, rel(path), `Queue task ${key} is required.`);
+    }
+    if (typeof item.status === "string" && !taskStates.has(item.status)) error(result, rel(path), `Invalid task status "${item.status}".`);
+
+    const agent = shared ? stringField(item, "agent") : localAgent;
+    if (shared && !agent) error(result, rel(path), "Shared queue task agent is required.");
+    if (agent && (!/^[a-z][a-z0-9-]{0,39}$/.test(agent) || !existsSync(join(root, agent, "agent.toml")))) error(result, rel(path), `Unknown task agent "${agent}".`);
+    if (typeof item.task_file === "string") validateTaskFile(resolve(dirname(path), item.task_file), item, agent, result);
+  }
+}
+
+function validateTaskFile(path: string, task: Record<string, unknown>, agent: string | undefined, result: Result) {
+  if (!requireFile(path, result)) return;
+  const text = readFileSync(path, "utf8");
+  const match = text.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!match) {
+    error(result, rel(path), "Task Markdown must contain YAML frontmatter.");
+    return;
+  }
+  const meta = frontmatter(match[1]);
+  for (const key of ["id", "title", "status", "agent"]) {
+    if (!meta[key]) error(result, rel(path), `Task frontmatter ${key} is required.`);
+  }
+  if (meta.id && meta.id !== task.id) error(result, rel(path), "Task frontmatter id must match queue item id.");
+  if (meta.title && meta.title !== task.title) error(result, rel(path), "Task frontmatter title must match queue item title.");
+  if (meta.status && meta.status !== task.status) error(result, rel(path), "Task frontmatter status must match queue item status.");
+  if (agent && meta.agent && meta.agent !== agent) error(result, rel(path), "Task frontmatter agent must match queue owner.");
+}
+
+function frontmatter(text: string) {
+  const data: Record<string, string> = {};
+  for (const line of text.split(/\r?\n/)) {
+    const index = line.indexOf(":");
+    if (index >= 0) data[line.slice(0, index).trim()] = line.slice(index + 1).trim();
+  }
+  return data;
 }
 
 function jsonObject(path: string, result: Result, keys: string[], extra?: (data: Record<string, unknown>) => void) {
