@@ -5,7 +5,7 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 ## Phase Order
 
 1. [Phase 1: CLI Scaffold](../_archived/phase-1-cli-scaffold.md) — completed
-2. [Phase 2: Workspace Model and Validation](./phase-2-workspace-model-validation.md)
+2. [Phase 2: Workspace Model and Validation](../_archived/phase-2-workspace-model-validation.md) — completed
 3. [Phase 3: Credentials and Agent Management](./phase-3-credentials-agent-management.md)
 4. [Phase 4: Live State and Launch](./phase-4-live-state-launch.md)
 5. [Phase 5: First MVP Watch Loop](./phase-5-first-mvp-watch-loop.md)
