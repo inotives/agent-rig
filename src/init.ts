@@ -154,8 +154,8 @@ function installDefaultSkills(dir: string) {
       mkdirSync(join(dir, skillFolderName(skill)), { recursive: true });
       continue;
     }
-    const result = spawnSync("npx", ["skills", "add", skill, "--yes"], { cwd: dir, stdio: "inherit" });
-    if (result.status) throw new Error(`Failed to install default skill: ${skill}`);
+    const result = spawnSync("npx", ["skills", "add", skill.source, ...(skill.args ?? []), "--yes"], { cwd: dir, stdio: "inherit" });
+    if (result.status) throw new Error(`Failed to install default skill: ${skill.name}`);
     normalizeInstalledSkill(dir, skill);
   }
 }

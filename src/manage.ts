@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "@iarna/toml";
-import { addAgent, defaultSkills, normalizeInstalledSkill, readAgents, repairCredsGitignore, requireWorkspace, roles, skillFolderName, tools, validSlug } from "./workspace.js";
+import { addAgent, defaultSkills, normalizeInstalledSkill, readAgents, repairCredsGitignore, requireWorkspace, roles, SkillSpec, skillFolderName, tools, validSlug } from "./workspace.js";
 
 type CredScope = { name: string; file: string; env: string; example: string; scope: string };
 
@@ -113,14 +113,15 @@ function credsList(args: string[], cwd: string) {
 function skillsAdd(args: string[], cwd: string) {
   try {
     const root = requireWorkspace(cwd);
-    const repo = args.find((arg) => !arg.startsWith("--"));
+    const repo = args[0];
+    const skillName = flag(args, "--skill");
     const shared = args.includes("--shared");
     const agent = flag(args, "--agent");
     const dryRun = args.includes("--dry-run");
-    if (!repo || Number(shared) + Number(Boolean(agent)) !== 1) return fail("Usage: agent-rig skills add <owner/repo> (--shared|--agent <name>)");
+    if (!repo || repo.startsWith("--") || Number(shared) + Number(Boolean(agent)) !== 1) return fail("Usage: agent-rig skills add <source> [--skill <name>] (--shared|--agent <name>)");
     const dest = skillsDir(root, shared, agent);
     mkdirSync(dest, { recursive: true });
-    return runNpxSkills(repo, dest, dryRun);
+    return runNpxSkills(skillName ? { source: repo, name: skillName, args: ["--skill", skillName] } : { source: repo, name: skillFolderName(repo) }, dest, dryRun);
   } catch (cause) {
     return fail(message(cause));
   }
@@ -199,14 +200,14 @@ function skillsDir(root: string, shared: boolean, agent?: string) {
   return join(root, agent, "skills");
 }
 
-function runNpxSkills(repo: string, cwd: string, dryRun: boolean) {
+function runNpxSkills(skill: SkillSpec, cwd: string, dryRun: boolean) {
   if (dryRun || process.env.AGENT_RIG_SKIP_SKILLS === "1") {
-    mkdirSync(join(cwd, skillFolderName(repo)), { recursive: true });
-    console.log(`Skipped npx skills add ${repo}.`);
+    mkdirSync(join(cwd, skill.name), { recursive: true });
+    console.log(`Skipped npx skills add ${skill.source}.`);
     return 0;
   }
-  const result = spawnSync("npx", ["skills", "add", repo, "--yes"], { cwd, encoding: "utf8", stdio: "inherit" });
-  if (result.status === 0) normalizeInstalledSkill(cwd, repo);
+  const result = spawnSync("npx", ["skills", "add", skill.source, ...(skill.args ?? []), "--yes"], { cwd, encoding: "utf8", stdio: "inherit" });
+  if (result.status === 0) normalizeInstalledSkill(cwd, skill);
   return result.status ?? 1;
 }
 

@@ -3,12 +3,13 @@ import { pathToFileURL } from "node:url";
 import { runInit } from "./init.js";
 import { runValidate } from "./validate.js";
 import { runAdd, runAgents, runCreds, runSkills } from "./manage.js";
+import { runStart, runStatus } from "./live.js";
 
 export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   const [command, ...args] = argv;
 
   if (!command || command === "--help" || command === "-h") {
-    console.log("Usage: agent-rig <init|validate|add|agents|creds|skills> [options]");
+    console.log("Usage: agent-rig <init|validate|add|agents|creds|skills|status|start> [options]");
     return 0;
   }
 
@@ -24,6 +25,8 @@ export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   if (command === "agents") return runAgents(args, cwd);
   if (command === "creds") return runCreds(args, cwd);
   if (command === "skills") return runSkills(args, cwd);
+  if (command === "status") return runStatus(args, cwd);
+  if (command === "start") return runStart(args, cwd);
 
   console.error(`Unknown command: ${command}`);
   return 1;

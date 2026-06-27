@@ -11,6 +11,7 @@ const flatKeys = new Set(["name", "role", "tool", "instructions", "context", "qu
 const topKeys = new Set([...flatKeys, "agent", "permissions"]);
 const agentKeys = new Set(flatKeys);
 const permissionKeys = new Set(["writable_paths"]);
+const handoffName = /^\d{4}-\d{2}-\d{2}-\d{4}_[^_]+_[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
 
 export function runValidate(args: string[], cwd: string) {
   const json = args.includes("--json");
@@ -37,6 +38,7 @@ function validateWorkspace(cwd: string): Result {
 
   validateShared(root, result);
   validateCreds(cwd, root, result);
+  validateHandoffLogs(root, result);
 
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.name.startsWith(".") || ["_shared", "human", "skills", "tools", "channels"].includes(entry.name)) continue;
@@ -177,6 +179,16 @@ function validateCredDeclaration(path: string, result: Result) {
   const exampleKeys = readFileSync(example, "utf8").split(/\r?\n/).filter(Boolean).map((line) => line.split("=")[0]);
   for (const key of keys) if (!exampleKeys.includes(key)) error(result, rel(example), `Missing key from .env.example: ${key}`);
   for (const key of exampleKeys) if (!keys.includes(key)) error(result, rel(example), `Unexpected key in .env.example: ${key}`);
+}
+
+function validateHandoffLogs(root: string, result: Result) {
+  const dir = join(root, "_shared", "handoff_logs");
+  if (!existsSync(dir)) return;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".md") && !handoffName.test(entry.name)) {
+      warn(result, rel(join(dir, entry.name)), "Handoff log filename should use <date-YYYY-MM-DD-hhmm>_<session_id>_<tool>_<role>.md.");
+    }
+  }
 }
 
 function jsonObject(path: string, result: Result, keys: string[], extra?: (data: Record<string, unknown>) => void) {
