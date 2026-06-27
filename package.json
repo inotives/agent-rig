@@ -1,0 +1,25 @@
+{
+  "name": "agent-rig",
+  "version": "0.0.1",
+  "description": "Filesystem-first agent workspaces for Claude, Codex, OpenCode, and custom subscription tools.",
+  "type": "module",
+  "bin": {
+    "agent-rig": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
