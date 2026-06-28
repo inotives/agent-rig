@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-white?style=for-the-badge&labelColor=000000"></a>
-  <a href="docs/project_specs.md"><img alt="Status: planning" src="https://img.shields.io/badge/status-planning-white?style=for-the-badge&labelColor=000000"></a>
+  <a href="docs/project_specs.md"><img alt="Status: MVP" src="https://img.shields.io/badge/status-MVP-white?style=for-the-badge&labelColor=000000"></a>
   <img alt="Runtime: Node.js 20" src="https://img.shields.io/badge/runtime-node.js%2020-white?style=for-the-badge&labelColor=000000">
   <img alt="CLI: TypeScript" src="https://img.shields.io/badge/cli-typescript-white?style=for-the-badge&labelColor=000000">
 </p>
@@ -31,7 +31,7 @@ AgentRig is a TypeScript CLI tool for scaffolding a filesystem-first agent works
 
 It creates a `.agent-rig/` directory where agents, shared context, task queues, handoff logs, credentials, and launch instructions live as ordinary files. AgentRig does not orchestrate AI APIs; users run subscription tools such as Claude, Codex, OpenCode, or custom tools directly.
 
-Planning is complete through the first MVP phases. Implementation has not started yet.
+The first filesystem-only MVP is implemented. AgentRig can scaffold a workspace, manage agents and credentials, install default skills, create Markdown-backed tasks, run the MVP watch loop, and report live status.
 
 ## Core Model
 
@@ -41,7 +41,7 @@ AgentRig workspaces are ordinary project files:
 .agent-rig/
 ├── _shared/        # context, task queue, decisions, session state, handoff logs
 ├── .creds/         # gitignored local secrets
-├── <agent>/        # agent.toml, instructions.md, context, queues, logs
+├── <agent>/        # agent.toml, instructions.md, context, queues, tasks, runs
 └── human/          # human approval, unblock, and override helpers
 ```
 
@@ -56,11 +56,9 @@ node >= 20
 npm or npx
 ```
 
-AgentRig will be distributed as an npm CLI package.
+AgentRig is packaged as an npm CLI.
 
 ## Install and First Run
-
-Planned install:
 
 ```bash
 npm install -g agent-rig
@@ -81,6 +79,14 @@ Non-interactive MVP default:
 agent-rig init --yes
 ```
 
+Filesystem-only MVP flow:
+
+```bash
+agent-rig task add --agent worker --title "Implement X" --body "Detailed task instructions"
+agent-rig watch --once
+agent-rig status
+```
+
 ## Common Commands
 
 | Command | Purpose |
@@ -91,13 +97,16 @@ agent-rig init --yes
 | `agent-rig agents` | List configured agents and tools. |
 | `agent-rig validate` | Validate workspace files without mutating them. |
 | `agent-rig creds` | Create credential placeholders and `.env.example` files. |
+| `agent-rig skills` | Install and list shared or agent-local skills. |
 | `agent-rig status` | Show live session state, queue counts, and recent handoffs. |
-| `agent-rig start` | Print launch commands for configured agents. |
-| `agent-rig watch` | Run the MVP filesystem watch loop. |
+| `agent-rig start --agent <agent-name>` | Print neutral launch guidance for a configured agent. |
+| `agent-rig task add --agent <agent-name>` | Create a Markdown-backed task and append it to the agent queue. |
+| `agent-rig watch --once` | Process currently ready tasks and exit. |
+| `agent-rig watch` | Run the filesystem watch loop continuously. |
 
 ## Implementation Phases
 
-The first MVP is split into five documented phases:
+The first MVP is split into five completed implementation phases, followed by a pre-release preparation phase:
 
 ```text
 1. CLI scaffold
@@ -105,15 +114,21 @@ The first MVP is split into five documented phases:
 3. Credentials and agent management
 4. Live state and launch
 5. First MVP watch loop
+6. Pre-release and npm registry preparation
 ```
 
 See [docs/phases](docs/phases/).
 
 ## Development
 
-Implementation has not started. The current repository contains planning docs only.
+Run the local checks:
 
-Before implementation, follow the phase workflow in [AGENTS.md](AGENTS.md): grill the phase docs, commit docs first, then implement from a feature branch.
+```bash
+npm test
+npm --cache /tmp/agent-rig-npm-cache pack --dry-run
+```
+
+For future phases, follow the phase workflow in [AGENTS.md](AGENTS.md): grill the phase docs, commit docs first, then implement from a feature branch.
 
 ## Repository Layout
 
@@ -121,7 +136,10 @@ Before implementation, follow the phase workflow in [AGENTS.md](AGENTS.md): gril
 agent-rig/
 ├── docs/
 │   ├── project_specs.md
+│   ├── _archived/
 │   └── phases/
+├── src/
+├── test/
 ├── AGENTS.md
 ├── README.md
 └── LICENSE

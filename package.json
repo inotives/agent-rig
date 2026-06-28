@@ -8,6 +8,8 @@
   },
   "files": [
     "dist",
+    "docs/**/*.md",
+    "logo.png",
     "README.md",
     "LICENSE"
   ],
