@@ -1,8 +1,26 @@
 {
   "name": "agent-rig",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Filesystem-first agent workspaces for Claude, Codex, OpenCode, and custom subscription tools.",
   "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inotives/agent-rig.git"
+  },
+  "homepage": "https://github.com/inotives/agent-rig#readme",
+  "bugs": {
+    "url": "https://github.com/inotives/agent-rig/issues"
+  },
+  "keywords": [
+    "agent",
+    "agents",
+    "cli",
+    "codex",
+    "claude",
+    "opencode",
+    "workspace"
+  ],
   "bin": {
     "agent-rig": "./dist/index.js"
   },
@@ -15,7 +33,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test"
+    "test": "npm run build && node --test",
+    "prepublishOnly": "npm test"
   },
   "engines": {
     "node": ">=20"

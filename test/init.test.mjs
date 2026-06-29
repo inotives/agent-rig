@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync, readdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -14,6 +14,17 @@ function tempProject() {
 function run(args, cwd, input = "") {
   return spawnSync(process.execPath, [cli, ...args], { cwd, input, encoding: "utf8", env: { ...process.env, AGENT_RIG_SKIP_SKILLS: "1" } });
 }
+
+test("npm-style symlink bin runs the CLI", () => {
+  const cwd = tempProject();
+  const bin = join(cwd, "agent-rig");
+  symlinkSync(cli, bin);
+
+  const result = spawnSync(process.execPath, [bin, "--help"], { cwd, encoding: "utf8" });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Usage: agent-rig/);
+});
 
 test("init --yes creates solo Codex worker scaffold", () => {
   const cwd = tempProject();
