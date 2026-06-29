@@ -28,7 +28,8 @@ Release runbook: [AgentRig 0.1.0 Release Checklist](../release/0.1.0-checklist.m
 ## Important npm Notes
 
 - npm package names are claimed by the first successful publish. There is no separate "reserve this package name" step for the public registry.
-- `agent-rig` will be published from the maintainer's personal npm account as an unscoped public package.
+- npm rejected the unscoped `agent-rig` package name because it is too similar to the existing `agentrig` package. Publish as scoped package `@inotives/agent-rig`.
+- The installed CLI binary remains `agent-rig`.
 - Publishing should happen only after `npm whoami`, tarball review, and install smoke tests pass.
 - Do not publish from a dirty git tree.
 - The first publish is manual so the maintainer can claim the package name and verify account setup directly.
@@ -57,14 +58,14 @@ npm whoami
 Before publish, check the registry:
 
 ```bash
-npm view agent-rig name version --json
+npm view @inotives/agent-rig name version --json
 ```
 
 Expected before first release:
 
-- `E404 Not Found`, which means no visible package named `agent-rig` exists.
+- `E404 Not Found`, which means no visible package named `@inotives/agent-rig` exists.
 
-If the package exists, stop and decide whether to use a scoped package such as `@inotives/agent-rig`.
+If the package exists, stop and decide whether to publish a new version or change scope.
 
 ## Release Metadata Checklist
 
@@ -150,7 +151,7 @@ Run a project-local install smoke:
 tmp=$(mktemp -d /tmp/agent-rig-release-XXXXXX)
 cd "$tmp"
 npm init -y
-npm install /path/to/agent-rig-0.1.0.tgz
+npm install /path/to/inotives-agent-rig-0.1.0.tgz
 npx agent-rig init --yes
 npx agent-rig task add --agent worker --title "Smoke" --body "Confirm release package"
 npx agent-rig watch --once
@@ -161,7 +162,7 @@ npx agent-rig status
 Run a global install smoke:
 
 ```bash
-npm install -g /path/to/agent-rig-0.1.0.tgz
+npm install -g /path/to/inotives-agent-rig-0.1.0.tgz
 agent-rig --help
 ```
 
@@ -186,8 +187,8 @@ npm publish --access public
 After publish:
 
 ```bash
-npm view agent-rig name version --json
-npm install -g agent-rig
+npm view @inotives/agent-rig name version --json
+npm install -g @inotives/agent-rig
 agent-rig --help
 ```
 
@@ -208,7 +209,7 @@ The release notes should include:
 
 After the first manual publish, configure npm trusted publishing for GitHub Actions:
 
-1. In npm package settings for `agent-rig`, add a trusted publisher.
+1. In npm package settings for `@inotives/agent-rig`, add a trusted publisher.
 2. Use GitHub Actions as the publisher.
 3. Configure repository owner `inotives`, repository `agent-rig`, and workflow filename `publish.yml`.
 4. Allow `npm publish`.
@@ -228,7 +229,7 @@ The workflow must:
 ## Decisions
 
 - npm account owner: personal maintainer account.
-- Package name: unscoped `agent-rig`; scoped fallback only if the name is unavailable.
+- Package name: scoped `@inotives/agent-rig` after npm rejected unscoped `agent-rig` as too similar to `agentrig`.
 - First publish mode: manual publish plus `v0.1.0` git tag and GitHub release.
 - Release automation: GitHub Actions trusted publishing after first manual publish.
 - Trusted publishing workflow timing: post-first-publish only.

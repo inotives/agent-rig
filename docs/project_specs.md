@@ -870,10 +870,10 @@ AgentRig is published to npm as a CLI package. No installation required to scaff
 
 ```bash
 # One-shot scaffold into any project
-npx agent-rig init
+npx @inotives/agent-rig init
 
 # Or install globally
-npm install -g agent-rig
+npm install -g @inotives/agent-rig
 agent-rig init
 ```
 

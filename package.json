@@ -1,5 +1,5 @@
 {
-  "name": "agent-rig",
+  "name": "@inotives/agent-rig",
   "version": "0.1.0",
   "description": "Filesystem-first agent workspaces for Claude, Codex, OpenCode, and custom subscription tools.",
   "type": "module",

@@ -61,9 +61,9 @@ AgentRig is packaged as an npm CLI.
 ## Install and First Run
 
 ```bash
-npm install -g agent-rig
+npm install -g @inotives/agent-rig
 # or
-pnpm add -g agent-rig
+pnpm add -g @inotives/agent-rig
 ```
 
 Then run AgentRig from inside the project you want to scaffold:
@@ -77,6 +77,12 @@ Non-interactive MVP default:
 
 ```bash
 agent-rig init --yes
+```
+
+You can also run it without a global install:
+
+```bash
+npx @inotives/agent-rig init
 ```
 
 Filesystem-only MVP flow:
