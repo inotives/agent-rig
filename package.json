@@ -26,6 +26,7 @@
   },
   "files": [
     "dist",
+    "templates",
     "docs/**/*.md",
     "logo.png",
     "README.md",
@@ -44,6 +45,7 @@
     "typescript": "^5.8.0"
   },
   "dependencies": {
-    "@iarna/toml": "^2.2.5"
+    "@iarna/toml": "^2.2.5",
+    "yaml": "^2.9.0"
   }
 }

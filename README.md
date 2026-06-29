@@ -18,6 +18,8 @@
 <p align="center">
   <a href="docs/project_specs.md">Spec</a>
   ·
+  <a href="docs/profiles.md">Profiles</a>
+  ·
   <a href="docs/phases/README.md">Implementation Phases</a>
   ·
   <a href="LICENSE">License</a>
@@ -31,7 +33,7 @@ AgentRig is a TypeScript CLI tool for scaffolding a filesystem-first agent works
 
 It creates a `.agent-rig/` directory where agents, shared context, task queues, handoff logs, credentials, and launch instructions live as ordinary files. AgentRig does not orchestrate AI APIs; users run subscription tools such as Claude, Codex, OpenCode, or custom tools directly.
 
-The first filesystem-only MVP is implemented. AgentRig can scaffold a workspace, manage agents and credentials, install default skills, create Markdown-backed tasks, run the MVP watch loop, and report live status.
+The first filesystem-only MVP is implemented. AgentRig can scaffold a workspace, manage agents and credentials, install profile-declared skills, create Markdown-backed tasks, run the MVP watch loop, and report live status.
 
 ## Core Model
 
@@ -46,6 +48,8 @@ AgentRig workspaces are ordinary project files:
 ```
 
 The default `agent-rig init --yes` workspace is a solo `worker` agent using `codex`. Interactive setup can scaffold solo, coder-reviewer, trinity, supervisor-worker, swarm, testing-reviewer, or custom patterns.
+
+Agent instructions start from editable profiles in `.agent-rig/_shared/profiles/`. Built-in profiles are `planner`, `worker`, and `reviewer`; custom profiles are plain Markdown files with YAML frontmatter.
 
 ## Dependencies
 
@@ -105,6 +109,7 @@ After setup, validate the workspace:
 
 ```bash
 agent-rig validate
+agent-rig doctor
 agent-rig agents
 agent-rig status
 ```
@@ -130,6 +135,10 @@ agent-rig status
 | `agent-rig init` | Run the setup-pattern interview and scaffold `.agent-rig/`. |
 | `agent-rig init --yes` | Scaffold a solo `worker` using `codex`. |
 | `agent-rig add <agent-name>` | Add an agent to an existing workspace. |
+| `agent-rig add <agent-name> --profile worker` | Add an agent from an editable profile. |
+| `agent-rig profiles` | List available agent profiles. |
+| `agent-rig profiles show worker` | Print a profile Markdown template. |
+| `agent-rig doctor` | Check local AgentRig environment and workspace health. |
 | `agent-rig agents` | List configured agents and tools. |
 | `agent-rig validate` | Validate workspace files without mutating them. |
 | `agent-rig creds` | Create credential placeholders and `.env.example` files. |
@@ -172,9 +181,11 @@ For future phases, follow the phase workflow in [AGENTS.md](AGENTS.md): grill th
 agent-rig/
 ├── docs/
 │   ├── project_specs.md
+│   ├── profiles.md
 │   ├── _archived/
 │   └── phases/
 ├── src/
+├── templates/
 ├── test/
 ├── AGENTS.md
 ├── README.md
