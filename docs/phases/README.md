@@ -9,7 +9,7 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 3. [Phase 3: Credentials and Agent Management](../_archived/phase-3-credentials-agent-management.md) — completed
 4. [Phase 4: Live State and Launch](../_archived/phase-4-live-state-launch.md) — completed
 5. [Phase 5: First MVP Watch Loop](../_archived/phase-5-first-mvp-watch-loop.md) — completed
-6. [Phase 6: Pre-Release and npm Registry Preparation](./phase-6-pre-release-npm.md)
+6. [Phase 6: Pre-Release and npm Registry Preparation](../_archived/phase-6-pre-release-npm.md) — completed
 
 ## Workflow
 
