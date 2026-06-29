@@ -58,7 +58,7 @@ npm or npx
 
 AgentRig is packaged as an npm CLI.
 
-## Install and First Run
+## Installation
 
 ```bash
 npm install -g @inotives/agent-rig
@@ -66,23 +66,53 @@ npm install -g @inotives/agent-rig
 pnpm add -g @inotives/agent-rig
 ```
 
-Then run AgentRig from inside the project you want to scaffold:
+Verify the CLI is available:
+
+```bash
+agent-rig --help
+```
+
+You can also run AgentRig without a global install:
+
+```bash
+npx @inotives/agent-rig --help
+```
+
+## Setup
+
+Run AgentRig from inside the project you want to scaffold:
 
 ```bash
 cd path/to/your-project
 agent-rig init
 ```
 
-Non-interactive MVP default:
+`agent-rig init` starts a setup interview and writes a `.agent-rig/` workspace into the current project.
+
+For the non-interactive MVP default, scaffold a solo `worker` agent using `codex`:
 
 ```bash
 agent-rig init --yes
 ```
 
-You can also run it without a global install:
+Or do the same through `npx`:
 
 ```bash
-npx @inotives/agent-rig init
+npx @inotives/agent-rig init --yes
+```
+
+After setup, validate the workspace:
+
+```bash
+agent-rig validate
+agent-rig agents
+agent-rig status
+```
+
+AgentRig installs default shared skills during setup. To skip network skill installs in automation or tests:
+
+```bash
+AGENT_RIG_SKIP_SKILLS=1 agent-rig init --yes
 ```
 
 Filesystem-only MVP flow:
