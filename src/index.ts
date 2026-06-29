@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { runInit } from "./init.js";
 import { runValidate } from "./validate.js";
@@ -35,7 +36,7 @@ export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   return 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const code = await main();
   process.exitCode = code;
 }
