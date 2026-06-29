@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "@iarna/toml";
+import { loadWorkspaceProfile, profileInstructions, roleProfile } from "./profiles.js";
 
 export type Agent = {
   name: string;
@@ -37,11 +38,16 @@ export function validSlug(value: string) {
   return /^[a-z][a-z0-9-]{0,39}$/.test(value);
 }
 
-export function addAgent(root: string, agent: Agent) {
+export function addAgent(root: string, agent: Agent, profileName = roleProfile(agent.role)) {
   const dir = join(root, agent.name);
   mkdirSync(join(dir, "logs"), { recursive: true });
+  mkdirSync(join(dir, "skills"), { recursive: true });
+  mkdirSync(join(dir, "tools"), { recursive: true });
+  mkdirSync(join(dir, "tasks"), { recursive: true });
   writeFileSync(join(dir, "agent.toml"), agentToml(agent), "utf8");
-  writeFileSync(join(dir, "instructions.md"), instructionsMarkdown(agent), "utf8");
+  writeFileSync(join(dir, "skills", ".gitkeep"), "", "utf8");
+  writeFileSync(join(dir, "tools", ".gitkeep"), "", "utf8");
+  writeFileSync(join(dir, "instructions.md"), profileInstructions(loadWorkspaceProfile(join(dir, ".."), profileName), agent.name), "utf8");
   writeFileSync(join(dir, "context.md"), `# ${agent.name} Context\n\nAgent-local notes for ${agent.name}.\n`, "utf8");
   writeFileSync(join(dir, "queue.json"), "[]\n", "utf8");
 }
@@ -85,8 +91,4 @@ export function normalizeInstalledSkill(dir: string, skill: string | SkillSpec) 
 
 function agentToml(agent: Agent) {
   return `role = "${agent.role}"\ntool = "${agent.tool}"\ninstructions = "instructions.md"\ncontext = "context.md"\nqueue = "queue.json"\n`;
-}
-
-function instructionsMarkdown(agent: Agent) {
-  return `# ${agent.name}\n\nRole: ${agent.role}\nTool: ${agent.tool}\n\nShared context: ../_shared/context.md\nTask queue: ../_shared/task_queue.json\nAgent context: ./context.md\n\nStart by reading the shared context, then your agent-local context.\n`;
 }

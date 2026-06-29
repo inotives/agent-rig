@@ -3,9 +3,10 @@ import { dirname, resolve, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "@iarna/toml";
 import { credsGitignore, roles, tools } from "./workspace.js";
+import { listWorkspaceProfiles } from "./profiles.js";
 
-type Problem = { path: string; message: string };
-type Result = { errors: Problem[]; warnings: Problem[] };
+export type Problem = { path: string; message: string };
+export type Result = { errors: Problem[]; warnings: Problem[] };
 
 const flatKeys = new Set(["name", "role", "tool", "instructions", "context", "queue", "handoff_log", "shared_context", "shared_queue"]);
 const topKeys = new Set([...flatKeys, "agent", "permissions"]);
@@ -29,7 +30,7 @@ export function runValidate(args: string[], cwd: string) {
   return result.errors.length ? 1 : 0;
 }
 
-function validateWorkspace(cwd: string): Result {
+export function validateWorkspace(cwd: string): Result {
   const result: Result = { errors: [], warnings: [] };
   const root = join(cwd, ".agent-rig");
 
@@ -53,6 +54,9 @@ function validateWorkspace(cwd: string): Result {
 }
 
 function validateShared(root: string, result: Result) {
+  warnMissingDir(join(root, "_shared", "profiles"), result);
+  warnMissingDir(join(root, "_shared", "tools"), result);
+  for (const warning of listWorkspaceProfiles(root).warnings) warn(result, warning.path, warning.message);
   jsonObject(join(root, "_shared", "agent-rig.json"), result, ["workspace_version", "scaffold_version", "created_by"], (data) => {
     if (!isRecord(data.created_by) || typeof data.created_by.name === "undefined" || typeof data.created_by.version === "undefined") {
       error(result, "_shared/agent-rig.json", "created_by.name and created_by.version are required.");
@@ -64,6 +68,8 @@ function validateShared(root: string, result: Result) {
 }
 
 function validateAgent(name: string, dir: string, tomlPath: string, result: Result) {
+  warnMissingDir(join(dir, "skills"), result);
+  warnMissingDir(join(dir, "tools"), result);
   let data: unknown;
   try {
     data = parse(readFileSync(tomlPath, "utf8"));
@@ -280,6 +286,10 @@ function requireFile(path: string, result: Result) {
   if (existsSync(path) && statSync(path).isFile()) return true;
   error(result, rel(path), "Missing referenced file.");
   return false;
+}
+
+function warnMissingDir(path: string, result: Result) {
+  if (!existsSync(path) || !statSync(path).isDirectory()) warn(result, rel(path), "Missing recommended directory.");
 }
 
 function ensureInside(target: string, base: string, path: string, message: string, result: Result) {

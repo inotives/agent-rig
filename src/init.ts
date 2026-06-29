@@ -3,7 +3,8 @@ import { stdin as input, stdout as output } from "node:process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { addAgent, Agent, defaultSkills, normalizeInstalledSkill, repairCredsGitignore, skillFolderName, workspaceRoot } from "./workspace.js";
+import { addAgent, Agent, normalizeInstalledSkill, repairCredsGitignore, SkillSpec, skillFolderName, workspaceRoot } from "./workspace.js";
+import { dedupeSkills, loadWorkspaceProfile, roleProfile, seedProfiles, skillSpecs } from "./profiles.js";
 
 type Pattern = "solo" | "coder-reviewer" | "trinity" | "supervisor-worker" | "swarm" | "testing-reviewer" | "custom";
 
@@ -99,7 +100,11 @@ async function runInteractiveInit(cwd: string) {
 function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: boolean }) {
   const root = workspaceRoot(cwd);
   mkdirSync(join(root, "_shared"), { recursive: true });
+  mkdirSync(join(root, "_shared", "tools"), { recursive: true });
+  mkdirSync(join(root, "_shared", "handoff_logs"), { recursive: true });
   mkdirSync(join(root, "human"), { recursive: true });
+  writeFileSync(join(root, "_shared", "tools", ".gitkeep"), "", "utf8");
+  seedProfiles(root);
 
   repairCredsGitignore(root);
   writeFileSync(join(root, "_shared", "task_queue.json"), "[]\n", "utf8");
@@ -119,10 +124,13 @@ function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: 
   writeFileSync(join(root, "_shared", "context.md"), contextMarkdown(cwd), "utf8");
   writeFileSync(join(root, "human", "README.md"), "# Human\n\nUse this folder for approval, unblock, and override notes.\n", "utf8");
 
-  for (const agent of options.agents) {
-    addAgent(root, agent);
+  const profileByAgent = options.agents.map((agent) => ({ agent, profile: loadWorkspaceProfile(root, roleProfile(agent.role)) }));
+
+  for (const item of profileByAgent) {
+    addAgent(root, item.agent, item.profile.name);
   }
-  installDefaultSkills(join(root, "_shared", "skills"));
+  installSkills("shared", join(root, "_shared", "skills"), dedupeSkills(profileByAgent.flatMap((item) => skillSpecs(item.profile, "shared_skills"))));
+  for (const item of profileByAgent) installSkills(`${item.agent.name}`, join(root, item.agent.name, "skills"), skillSpecs(item.profile, "agent_skills"));
 
   if (options.addProjectGitignore) {
     addGitignoreEntry(cwd, ".agent-rig/");
@@ -147,15 +155,16 @@ function writeJson(path: string, value: unknown) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function installDefaultSkills(dir: string) {
+function installSkills(group: string, dir: string, skills: SkillSpec[]) {
   mkdirSync(dir, { recursive: true });
-  for (const skill of defaultSkills) {
+  if (skills.length) console.log(`Installing ${group} skills...`);
+  for (const skill of skills) {
     if (process.env.AGENT_RIG_SKIP_SKILLS === "1") {
       mkdirSync(join(dir, skillFolderName(skill)), { recursive: true });
       continue;
     }
     const result = spawnSync("npx", ["skills", "add", skill.source, ...(skill.args ?? []), "--yes"], { cwd: dir, stdio: "inherit" });
-    if (result.status) throw new Error(`Failed to install default skill: ${skill.name}`);
+    if (result.status) throw new Error(`Failed to install ${group} skill: ${skill.name}`);
     normalizeInstalledSkill(dir, skill);
   }
 }

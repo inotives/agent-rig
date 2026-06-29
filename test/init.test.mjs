@@ -32,8 +32,13 @@ test("init --yes creates solo Codex worker scaffold", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "agent-rig.json")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "profiles", "worker.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "tools", ".gitkeep")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "agent.toml")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "skills", "rust-best-practices")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "tools", ".gitkeep")));
   assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "agent.toml"), "utf8"), /tool = "codex"/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /# Worker Profile/);
   assert.match(readFileSync(join(cwd, ".gitignore"), "utf8"), /^\.agent-rig\/$/m);
   assert.equal(readFileSync(join(cwd, ".agent-rig", ".creds", ".gitignore"), "utf8"), "*\n!.gitignore\n!*.toml\n!*.env.example\n");
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "skills", "find-skills")));
@@ -174,6 +179,8 @@ test("add creates a valid new agent and rejects duplicates", () => {
   const added = run(["add", "reviewer", "--role", "reviewer", "--tool", "claude"], cwd);
   assert.equal(added.status, 0, added.stderr);
   assert.ok(existsSync(join(cwd, ".agent-rig", "reviewer", "agent.toml")));
+  assert.match(readFileSync(join(cwd, ".agent-rig", "reviewer", "instructions.md"), "utf8"), /# Reviewer Profile/);
+  assert.ok(existsSync(join(cwd, ".agent-rig", "reviewer", "skills", "security-review")));
   assert.equal(run(["validate"], cwd).status, 0);
 
   const duplicate = run(["add", "reviewer", "--role", "reviewer", "--tool", "claude"], cwd);
@@ -183,6 +190,61 @@ test("add creates a valid new agent and rejects duplicates", () => {
   const invalid = run(["add", "BadName", "--role", "worker", "--tool", "codex"], cwd);
   assert.equal(invalid.status, 1);
   assert.match(invalid.stderr, /lowercase slug/);
+});
+
+test("version, help, profiles, and doctor commands work", () => {
+  const cwd = tempProject();
+  const version = run(["--version"], cwd);
+  assert.equal(version.status, 0, version.stderr);
+  assert.match(version.stdout.trim(), /^\d+\.\d+\.\d+$/);
+
+  const help = run(["help"], cwd);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /@inotives\/agent-rig/);
+  assert.match(help.stdout, /agent-rig add api-worker --role worker --tool codex --profile worker/);
+
+  const builtin = run(["profiles", "--json"], cwd);
+  assert.equal(builtin.status, 0, builtin.stderr);
+  assert.equal(JSON.parse(builtin.stdout).profiles.find((profile) => profile.name === "worker").source, "builtin");
+
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  const profiles = run(["profiles", "--json"], cwd);
+  assert.equal(profiles.status, 0, profiles.stderr);
+  const profileJson = JSON.parse(profiles.stdout);
+  assert.equal(profileJson.profiles.find((profile) => profile.name === "worker").source, "workspace");
+
+  const show = run(["profiles", "show", "worker"], cwd);
+  assert.equal(show.status, 0, show.stderr);
+  assert.match(show.stdout, /^---\nname: worker/);
+
+  const doctor = run(["doctor", "--json"], cwd);
+  assert.equal(doctor.status, 0, doctor.stderr);
+  assert.equal(JSON.parse(doctor.stdout).ok, true);
+});
+
+test("add --profile copies custom profile instructions", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  const profile = join(cwd, ".agent-rig", "_shared", "profiles", "researcher.md");
+  writeFileSync(profile, `---
+name: researcher
+role: custom
+summary: Research profile.
+created_on: 2026-06-29
+updated_on: 2026-06-29
+shared_skills: []
+agent_skills: []
+---
+
+# Researcher Profile
+
+Hello <agent>.
+`, "utf8");
+
+  const added = run(["add", "researcher", "--role", "custom", "--tool", "claude", "--profile", "researcher"], cwd);
+
+  assert.equal(added.status, 0, added.stderr);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "researcher", "instructions.md"), "utf8"), /Hello researcher\./);
 });
 
 test("agents lists configured agents as text and json", () => {

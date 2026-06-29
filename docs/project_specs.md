@@ -49,6 +49,10 @@ Built-in role templates and their default responsibilities:
 | `tester` | Runs or writes tests and reports objective pass/fail signals |
 | `custom` | User-defined — any behaviour described in `instructions.md` |
 
+AgentRig also ships editable agent profiles. Profiles are Markdown templates with YAML frontmatter, copied into each new agent's `instructions.md` at creation time. Built-in profiles are `planner`, `worker`, and `reviewer`; `verifier` and `tester` use `reviewer` by default. Workspace copies live in `.agent-rig/_shared/profiles/`, and humans can add custom profile Markdown files there without registering them anywhere else.
+
+Profile frontmatter can declare `shared_skills` and `agent_skills`. Shared skills install into `.agent-rig/_shared/skills/`; agent skills install into `.agent-rig/<agent>/skills/`. AgentRig uses `skills.sh` sources for these installs and does not maintain its own skill library.
+
 Any AI subscription tool can be assigned to any role. The same tool can run multiple roles simultaneously (each in its own terminal with a different `instructions.md`):
 
 | Example setup | Agents | Tools |
@@ -122,8 +126,12 @@ The AI tools themselves decide how to read context, which files to edit, and whe
     │   │   ├── email.ts                # Driver: send email via SMTP
     │   │   ├── github.ts               # Driver: GitHub operations (PR, comment, read diff)
     │   │   └── webhook.ts              # Driver: generic HTTP webhook
-    │   └── memory/                     # Persistent cross-session memory — one file per agent per session
-    │       └── YYYY-MM-DD-hhmm__<session-id>__<agent-name>__<tool>.md
+    │   ├── memory/                     # Persistent cross-session memory — one file per agent per session
+    │   │   └── YYYY-MM-DD-hhmm__<session-id>__<agent-name>__<tool>.md
+    │   └── profiles/                   # Editable instruction templates for future agents
+    │       ├── planner.md
+    │       ├── worker.md
+    │       └── reviewer.md
     │
     ├── planner/                        # Built-in role: Planner (tool assigned at init)
     │   ├── agent.toml                  # Agent descriptor (role, tool, execution, permissions, creds)
