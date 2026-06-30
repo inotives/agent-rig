@@ -20,6 +20,8 @@
   ·
   <a href="docs/profiles.md">Profiles</a>
   ·
+  <a href="docs/tasks.md">Tasks</a>
+  ·
   <a href="docs/phases/README.md">Implementation Phases</a>
   ·
   <a href="LICENSE">License</a>
@@ -31,7 +33,7 @@
 
 AgentRig is a TypeScript CLI tool for scaffolding a filesystem-first agent workspace into any project.
 
-It creates a `.agent-rig/` directory where agents, shared context, task queues, handoff logs, credentials, and launch instructions live as ordinary files. AgentRig does not orchestrate AI APIs; users run subscription tools such as Claude, Codex, OpenCode, or custom tools directly.
+It creates a `.agent-rig/` directory where agents, shared context, Markdown task files, handoff logs, credentials, and launch instructions live as ordinary files. AgentRig does not orchestrate AI APIs; users run subscription tools such as Claude, Codex, OpenCode, or custom tools directly.
 
 The first filesystem-only MVP is implemented. AgentRig can scaffold a workspace, manage agents and credentials, install profile-declared skills, create Markdown-backed tasks, run the MVP watch loop, and report live status.
 
@@ -41,15 +43,15 @@ AgentRig workspaces are ordinary project files:
 
 ```text
 .agent-rig/
-├── _shared/        # context, task queue, decisions, session state, handoff logs
+├── _shared/        # context, task files, session state, profiles, handoff logs
 ├── .creds/         # gitignored local secrets
-├── <agent>/        # agent.toml, instructions.md, context, queues, tasks, runs
+├── <agent>/        # agent.toml, instructions.md, context, skills, tools, runs
 └── human/          # human approval, unblock, and override helpers
 ```
 
 The default `agent-rig init --yes` workspace is a solo `worker` agent using `codex`. Interactive setup can scaffold solo, coder-reviewer, trinity, supervisor-worker, swarm, testing-reviewer, or custom patterns.
 
-Agent instructions start from editable profiles in `.agent-rig/_shared/profiles/`. Built-in profiles are `planner`, `worker`, and `reviewer`; custom profiles are plain Markdown files with YAML frontmatter.
+Agent instructions start from editable profiles in `.agent-rig/_shared/profiles/`. Built-in profiles are `planner`, `worker`, `reviewer`, `researcher`, and `writer`; custom profiles are plain Markdown files with YAML frontmatter.
 
 ## Dependencies
 
@@ -123,8 +125,9 @@ AGENT_RIG_SKIP_SKILLS=1 agent-rig init --yes
 Filesystem-only MVP flow:
 
 ```bash
-agent-rig task add --agent worker --title "Implement X" --body "Detailed task instructions"
-agent-rig watch --once
+agent-rig tasks create "Implement X" --assigned-to worker --status ready
+agent-rig tasks
+agent-rig tasks show task-0001
 agent-rig status
 ```
 
@@ -143,9 +146,12 @@ agent-rig status
 | `agent-rig validate` | Validate workspace files without mutating them. |
 | `agent-rig creds` | Create credential placeholders and `.env.example` files. |
 | `agent-rig skills` | Install and list shared or agent-local skills. |
-| `agent-rig status` | Show live session state, queue counts, and recent handoffs. |
+| `agent-rig status` | Show live session state, task counts, and recent handoffs. |
 | `agent-rig start --agent <agent-name>` | Print neutral launch guidance for a configured agent. |
-| `agent-rig task add --agent <agent-name>` | Create a Markdown-backed task and append it to the agent queue. |
+| `agent-rig tasks create "<title>"` | Create a shared Markdown task file. |
+| `agent-rig tasks` | List shared task files. |
+| `agent-rig tasks show <task-id>` | Print the canonical task Markdown. |
+| `agent-rig task add --agent <agent-name>` | Create a legacy per-agent watch-loop task. |
 | `agent-rig watch --once` | Process currently ready tasks and exit. |
 | `agent-rig watch` | Run the filesystem watch loop continuously. |
 

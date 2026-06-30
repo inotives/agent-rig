@@ -102,12 +102,13 @@ function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: 
   mkdirSync(join(root, "_shared"), { recursive: true });
   mkdirSync(join(root, "_shared", "tools"), { recursive: true });
   mkdirSync(join(root, "_shared", "handoff_logs"), { recursive: true });
+  mkdirSync(join(root, "_shared", "tasks"), { recursive: true });
   mkdirSync(join(root, "human"), { recursive: true });
   writeFileSync(join(root, "_shared", "tools", ".gitkeep"), "", "utf8");
+  writeFileSync(join(root, "_shared", "tasks", ".gitkeep"), "", "utf8");
   seedProfiles(root);
 
   repairCredsGitignore(root);
-  writeFileSync(join(root, "_shared", "task_queue.json"), "[]\n", "utf8");
   writeJson(join(root, "_shared", "agent-rig.json"), {
     workspace_version: 1,
     scaffold_version: SCAFFOLD_VERSION,

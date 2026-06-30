@@ -13,8 +13,10 @@ Built-in profiles:
 - `planner`
 - `worker`
 - `reviewer`
+- `researcher`
+- `writer`
 
-`verifier` and `tester` use the `reviewer` profile by default. `supervisor` uses the `planner` profile. Unknown custom roles use the `worker` profile unless `--profile` is provided.
+`verifier` and `tester` use the `reviewer` profile by default. `supervisor` uses the `planner` profile. `researcher` and `writer` use their matching profiles by default. Unknown custom roles use the `worker` profile unless `--profile` is provided.
 
 ## Commands
 
@@ -23,6 +25,8 @@ agent-rig profiles
 agent-rig profiles --json
 agent-rig profiles show worker
 agent-rig add api-worker --role worker --tool codex --profile worker
+agent-rig add research --role researcher --tool claude
+agent-rig add docs-writer --role writer --tool claude
 ```
 
 Outside a workspace, `agent-rig profiles` lists packaged built-ins. Inside a workspace, it lists editable files from `.agent-rig/_shared/profiles/`.
@@ -74,3 +78,20 @@ agent_skills:
 Profiles are copy-only templates. When an agent is created, AgentRig copies the selected profile into `.agent-rig/<agent>/instructions.md` and replaces `<agent>` with the agent name.
 
 AgentRig does not store the source profile in `agent.toml`, and editing a shared profile does not rewrite existing agents.
+
+## Built-In Agent Skills
+
+Profile-declared `agent_skills` install into the created agent's local `skills/` folder.
+
+Researcher:
+
+```bash
+npx skills add https://github.com/affaan-m/everything-claude-code --skill research-ops
+```
+
+Writer:
+
+```bash
+npx skills add https://github.com/blader/humanizer --skill humanizer
+npx skills add https://github.com/getsentry/skills --skill blog-writing-guide
+```

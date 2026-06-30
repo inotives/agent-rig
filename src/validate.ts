@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, resolve, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "@iarna/toml";
+import { parse as parseYaml } from "yaml";
 import { credsGitignore, roles, tools } from "./workspace.js";
 import { listWorkspaceProfiles } from "./profiles.js";
 
@@ -14,6 +15,9 @@ const agentKeys = new Set(flatKeys);
 const permissionKeys = new Set(["writable_paths"]);
 const handoffName = /^\d{4}-\d{2}-\d{2}-\d{4}_.+_[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
 const taskStates = new Set(["ready", "running", "done", "blocked"]);
+const sharedTaskStatuses = new Set(["todo", "ready", "in_progress", "blocked", "review", "done"]);
+const taskPriorities = new Set(["low", "normal", "high"]);
+const taskKeys = new Set(["id", "title", "status", "assigned_to", "created_by", "created_on", "updated_on", "priority", "parent", "depends_on"]);
 const queueKeys = new Set(["id", "agent", "status", "title", "task_file", "simulate", "run_id", "started_at", "finished_at", "message"]);
 
 export function runValidate(args: string[], cwd: string) {
@@ -63,7 +67,8 @@ function validateShared(root: string, result: Result) {
     }
   });
   jsonObject(join(root, "_shared", "session.json"), result, ["version", "created_at", "updated_at", "agents", "current_task_id", "blockers"]);
-  validateQueue(join(root, "_shared", "task_queue.json"), root, result, true);
+  warnMissingDir(join(root, "_shared", "tasks"), result);
+  validateSharedTasks(root, result);
   nonEmptyMarkdown(join(root, "_shared", "context.md"), result);
 }
 
@@ -196,6 +201,82 @@ function validateHandoffLogs(root: string, result: Result) {
     if (entry.isFile() && entry.name.endsWith(".md") && !handoffName.test(entry.name)) {
       warn(result, rel(join(dir, entry.name)), "Handoff log filename should use <date-YYYY-MM-DD-hhmm>_<run_id>_<tool>_<role>.md.");
     }
+  }
+}
+
+function validateSharedTasks(root: string, result: Result) {
+  const dir = join(root, "_shared", "tasks");
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) return;
+
+  const agents = new Set(agentNames(root));
+  const tasks = new Map<string, { file: string; meta: Record<string, unknown>; body: string }>();
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    const file = join(dir, entry.name);
+    const parsed = parseSharedTask(file, result);
+    if (!parsed) continue;
+    tasks.set(typeof parsed.meta.id === "string" ? parsed.meta.id : entry.name.replace(/\.md$/, ""), parsed);
+  }
+
+  for (const [id, task] of tasks) {
+    warnUnknown(task.meta, taskKeys, rel(task.file), result);
+    for (const key of ["id", "title", "status", "assigned_to", "created_by", "created_on", "updated_on", "priority", "depends_on"]) {
+      if (typeof task.meta[key] === "undefined") warn(result, rel(task.file), `Task frontmatter ${key} is required.`);
+    }
+    if (typeof task.meta.id === "string" && task.meta.id !== id) warn(result, rel(task.file), "Task frontmatter id should match the task record id.");
+    if (typeof task.meta.status === "string" && !sharedTaskStatuses.has(task.meta.status)) warn(result, rel(task.file), `Invalid task status "${task.meta.status}".`);
+    if (typeof task.meta.priority === "string" && !taskPriorities.has(task.meta.priority)) warn(result, rel(task.file), `Invalid task priority "${task.meta.priority}".`);
+    if (typeof task.meta.assigned_to === "string" && task.meta.assigned_to && !agents.has(task.meta.assigned_to)) warn(result, rel(task.file), `Unknown assigned_to agent "${task.meta.assigned_to}".`);
+    if (typeof task.meta.parent === "string" && task.meta.parent && !tasks.has(task.meta.parent)) warn(result, rel(task.file), `Missing parent task "${task.meta.parent}".`);
+    if (typeof task.meta.depends_on !== "undefined" && !Array.isArray(task.meta.depends_on)) warn(result, rel(task.file), "Task frontmatter depends_on must be an array.");
+    if (Array.isArray(task.meta.depends_on)) {
+      for (const dep of task.meta.depends_on) {
+        if (typeof dep !== "string") {
+          warn(result, rel(task.file), "Task dependency IDs must be strings.");
+          continue;
+        }
+        const dependency = tasks.get(dep);
+        if (!dependency) warn(result, rel(task.file), `Missing dependency task "${dep}".`);
+        else if (dependency.meta.status !== "done") warn(result, rel(task.file), `Dependency task "${dep}" is not done.`);
+      }
+    }
+    if (!/^## Acceptance Criteria\b/m.test(task.body) || !/^- \[[ xX]\] /m.test(task.body)) {
+      warn(result, rel(task.file), "Task acceptance criteria should use Markdown checklist items.");
+    }
+  }
+}
+
+function agentNames(root: string) {
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && !["_shared", "human", "skills", "tools", "channels"].includes(entry.name))
+    .filter((entry) => existsSync(join(root, entry.name, "agent.toml")))
+    .map((entry) => entry.name);
+}
+
+function parseSharedTask(file: string, result: Result) {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (cause) {
+    error(result, rel(file), `Unable to read task file: ${cause instanceof Error ? cause.message : String(cause)}`);
+    return undefined;
+  }
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!match) {
+    error(result, rel(file), "Task Markdown must contain YAML frontmatter.");
+    return undefined;
+  }
+  try {
+    const meta = parseYaml(match[1]);
+    if (!isRecord(meta)) {
+      error(result, rel(file), "Task frontmatter must be an object.");
+      return undefined;
+    }
+    return { file, meta, body: text.slice(match[0].length) };
+  } catch (cause) {
+    error(result, rel(file), `Invalid task frontmatter: ${cause instanceof Error ? cause.message : String(cause)}`);
+    return undefined;
   }
 }
 

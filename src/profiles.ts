@@ -31,7 +31,9 @@ export function roleProfile(role: string) {
     worker: "worker",
     reviewer: "reviewer",
     verifier: "reviewer",
-    tester: "reviewer"
+    tester: "reviewer",
+    researcher: "researcher",
+    writer: "writer"
   };
   return map[role] ?? "worker";
 }

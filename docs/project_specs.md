@@ -46,10 +46,12 @@ Built-in role templates and their default responsibilities:
 | `worker` | Reads task docs, implements steps, writes code |
 | `verifier` | Checks acceptance criteria, runs tests, issues pass/fail verdicts |
 | `reviewer` | Reviews implementation quality without owning decomposition |
+| `researcher` | Investigates questions, gathers evidence, and prepares research notes |
+| `writer` | Turns plans, research, and implementation notes into written artifacts |
 | `tester` | Runs or writes tests and reports objective pass/fail signals |
 | `custom` | User-defined — any behaviour described in `instructions.md` |
 
-AgentRig also ships editable agent profiles. Profiles are Markdown templates with YAML frontmatter, copied into each new agent's `instructions.md` at creation time. Built-in profiles are `planner`, `worker`, and `reviewer`; `verifier` and `tester` use `reviewer` by default. Workspace copies live in `.agent-rig/_shared/profiles/`, and humans can add custom profile Markdown files there without registering them anywhere else.
+AgentRig also ships editable agent profiles. Profiles are Markdown templates with YAML frontmatter, copied into each new agent's `instructions.md` at creation time. Built-in profiles are `planner`, `worker`, `reviewer`, `researcher`, and `writer`; `verifier` and `tester` use `reviewer` by default. Workspace copies live in `.agent-rig/_shared/profiles/`, and humans can add custom profile Markdown files there without registering them anywhere else.
 
 Profile frontmatter can declare `shared_skills` and `agent_skills`. Shared skills install into `.agent-rig/_shared/skills/`; agent skills install into `.agent-rig/<agent>/skills/`. AgentRig uses `skills.sh` sources for these installs and does not maintain its own skill library.
 
@@ -102,11 +104,10 @@ The AI tools themselves decide how to read context, which files to edit, and whe
 └── .agent-rig/
     ├── _shared/                        # Cross-agent context bus + global capabilities
     │   ├── context.md                  # Living project context (goals, stack, constraints)
-    │   ├── task_queue.json             # Ordered list of pending tasks (with doc_path refs)
     │   ├── decisions.md                # Architectural decisions log (ADR-style)
     │   ├── session.json                # Current session state (active task, blockers, status)
-    │   ├── docs/                       # Implementation task documents
-    │   │   └── <task-id>_<slug>.md     # One doc per task — plan + criteria
+    │   ├── tasks/                      # Canonical Markdown task files
+    │   │   └── task-0001_<slug>.md     # One task — frontmatter state + Markdown brief
     │   ├── handoff_logs/               # Timestamped per-agent handoff records
     │   │   └── <YYYY-MM-DD-hhmm>_<sessionID>_agent-<name>.md
     │   ├── skills/                     # Global skills available to ALL agents
@@ -131,7 +132,9 @@ The AI tools themselves decide how to read context, which files to edit, and whe
     │   └── profiles/                   # Editable instruction templates for future agents
     │       ├── planner.md
     │       ├── worker.md
-    │       └── reviewer.md
+    │       ├── reviewer.md
+    │       ├── researcher.md
+    │       └── writer.md
     │
     ├── planner/                        # Built-in role: Planner (tool assigned at init)
     │   ├── agent.toml                  # Agent descriptor (role, tool, execution, permissions, creds)
@@ -144,8 +147,8 @@ The AI tools themselves decide how to read context, which files to edit, and whe
     │   │   └── write_task_doc.md       # How to author a task doc with acceptance criteria
     │   ├── tools/                      # Planner-specific tools (supplements _shared/tools/)
     │   │   ├── read_codebase.ts        # Tool: scan project files for context
-    │   │   ├── write_plan.ts           # Tool: write structured plan to task_queue.json
-    │   │   └── write_task_doc.ts       # Tool: create/update a task doc in _shared/docs/
+    │   │   ├── write_plan.ts           # Tool: write structured plan to .agent-rig/_shared/tasks/
+    │   │   └── write_task_doc.ts       # Tool: create/update a task doc in _shared/tasks/
     │   ├── channels/                   # Planner's channel configs — credentials + routing only, no code
     │   │   ├── slack.toml              # Which Slack channel + which cred key (PLANNER_SLACK_BOT_TOKEN)
     │   │   └── github.toml             # Which GitHub account + which cred key (PLANNER_GITHUB_TOKEN)
@@ -159,13 +162,13 @@ The AI tools themselves decide how to read context, which files to edit, and whe
     │   ├── agent.toml
     │   ├── instructions.md
     │   ├── skills/                     # Worker-specific skills
-    │   │   ├── read_plan.md            # How to parse task_queue.json and task docs
+    │   │   ├── read_plan.md            # How to parse .agent-rig/_shared/tasks/ and task docs
     │   │   ├── write_code.md           # Project coding conventions
     │   │   └── use_tools.md            # How to invoke available tools
     │   ├── tools/                      # Worker-specific tools
     │   │   ├── run_shell.ts            # Tool: execute shell commands
     │   │   ├── edit_file.ts            # Tool: apply diffs / write files
-    │   │   └── mark_done.ts            # Tool: mark a task step done in task_queue.json
+    │   │   └── mark_done.ts            # Tool: mark a task step done in .agent-rig/_shared/tasks/
     │   ├── channels/                   # Worker's channel configs — credentials + routing only, no code
     │   │   ├── github.toml             # Worker's GitHub bot account + cred key (WORKER_GITHUB_TOKEN)
     │   │   ├── slack.toml              # Worker's Slack bot + channel (WORKER_SLACK_BOT_TOKEN)
@@ -368,48 +371,43 @@ Example `.creds/_shared.env`:
 PROJECT_API_KEY=pk_live_xxxxxxxxxxxxxxxxxxxx
 ```
 
-### `_shared/task_queue.json`
-A JSON array of task objects. The Planner appends; the Worker pops and executes; the Verifier validates completion. Each entry carries a `doc_path` pointing to its full task document in `_shared/docs/` — the queue is an index, not the source of truth.
-
-```json
-[
-  {
-    "id": "task-001",
-    "title": "Add JWT auth middleware",
-    "status": "in_progress",
-    "doc_path": "_shared/docs/task-001_jwt-auth.md",
-    "steps": [
-      { "id": "step-001-a", "description": "Install jsonwebtoken crate", "done": true },
-      { "id": "step-001-b", "description": "Write middleware function", "done": false }
-    ],
-    "assigned_to": "worker",
-    "created_by": "planner",
-    "verified_by": null
-  }
-]
-```
-
 ### `_shared/session.json`
 The real-time heartbeat of the current session: which task is active, which agent is busy, any blockers awaiting human input, and the last action taken by each agent.
 
-### `_shared/docs/`
-One Markdown file per task, named `<task-id>_<slug>.md` (e.g. `task-001_jwt-auth.md`). Created by the Planner — either autonomously or interactively with the human using a skill like `grill-me` to surface requirements through structured questioning before writing. Once created, the doc is the single source of truth for that task: implementation steps, context, constraints, and crucially the **acceptance criteria** the Verifier will use to determine pass or fail.
+### `_shared/tasks/`
+One Markdown file per task, named `<task-id>_<slug>.md` (e.g. `task-0001_jwt-auth.md`). Created by the human or Planner — often interactively with the human using `grill-with-docs` to surface requirements before work starts. Once created, the doc is the single source of truth for that task: frontmatter stores task state, while the Markdown body stores implementation context, constraints, plan, and acceptance criteria.
 
 Every task doc follows this template:
 
 ```markdown
-# Task: Add JWT auth middleware
-- **ID:** task-001
-- **Created by:** planner (+ human via grill-me)
-- **Status:** in_progress
+---
+id: task-0001
+title: Add JWT auth middleware
+status: ready
+assigned_to: worker
+created_by: planner
+created_on: 2026-06-30
+updated_on: 2026-06-30
+priority: normal
+parent:
+depends_on: []
+---
 
-## Background
+# Task
+
+## Context
 Why this task exists and what problem it solves.
+
+## Goal
+The outcome this task should produce.
 
 ## Scope
 What is explicitly in and out of scope for this task.
 
-## Implementation Steps
+## Planner Notes
+Human + planner working notes before the plan is finalized.
+
+## Implementation Plan
 1. Install the `jsonwebtoken` crate and add to `Cargo.toml`.
 2. Create `middleware/jwt.rs` with a `validate_token()` function.
 3. Wire the middleware into the router in `main.rs`.
@@ -467,7 +465,7 @@ Brief summary of actions taken this turn.
 - Deferred refresh token logic to task-002.
 
 ## State I'm Leaving
-- task_queue.json updated: step-001-a marked ready for worker.
+- .agent-rig/_shared/tasks/ updated: step-001-a marked ready for worker.
 - decisions.md updated with algorithm choice.
 
 ## What the Next Agent Needs to Know
@@ -649,8 +647,8 @@ instructions = ".agent-rig/planner/instructions.md"
 [permissions]
 # Filesystem paths this agent may read from and write to.
 # Enforced by convention and verified by `agent-rig validate` — not runtime-intercepted.
-read  = ["_shared/context.md", "_shared/task_queue.json", "_shared/decisions.md", "_shared/handoff_logs/", "_shared/docs/"]
-write = ["_shared/task_queue.json", "_shared/decisions.md", "_shared/context.md", "_shared/handoff_logs/", "_shared/docs/"]
+read  = ["_shared/context.md", "_shared/tasks/", "_shared/decisions.md", "_shared/handoff_logs/", "_shared/tasks/"]
+write = ["_shared/tasks/", "_shared/decisions.md", "_shared/context.md", "_shared/handoff_logs/", "_shared/tasks/"]
 ```
 
 **Same tool, multiple roles** — when a user assigns the same tool (e.g. Claude) to more than one agent, AgentRig generates a unique entry-context symlink per agent and prints the exact command to run in each terminal, including the flag or env var needed to point the tool to the right instructions file:
@@ -704,7 +702,7 @@ agent-rig start [--agent <name>]
 
 agent-rig status
     Print a human-readable summary of all configured agents, session.json, and
-    task_queue.json. Shows which agents are active and any open blockers.
+    .agent-rig/_shared/tasks/. Shows which agents are active and any open blockers.
 
 agent-rig agents
     List all agents configured in the current .agent-rig/ workspace — name,
@@ -817,7 +815,7 @@ Human writes intent into _shared/context.md
         ▼
 ┌──────────────────────────────┐
 │  researcher                  │  ← reads context.md
-│  tool: claude                │  → writes findings to _shared/docs/
+│  tool: claude                │  → writes findings to _shared/tasks/
 │  .agent-rig/researcher/    │  → writes handoff log
 └──────────────┬───────────────┘
                │
@@ -836,13 +834,13 @@ Human writes intent
         ▼
 ┌──────────────────────────────┐
 │  planner                     │  ← reads context.md + codebase
-│  tool: <any>                 │  → writes task doc to _shared/docs/
-│  .agent-rig/planner/       │  → writes task_queue.json
+│  tool: <any>                 │  → writes task doc to _shared/tasks/
+│  .agent-rig/planner/       │  → writes .agent-rig/_shared/tasks/
 └────────────┬─────────────────┘  → writes handoff log
              │ on_plan_complete hook fires
              ▼
 ┌──────────────────────────────┐
-│  worker                      │  ← reads task_queue.json + task doc
+│  worker                      │  ← reads .agent-rig/_shared/tasks/ + task doc
 │  tool: <any>                 │  → edits source files
 │  .agent-rig/worker/        │  → marks steps done
 └────────────┬─────────────────┘  → writes handoff log
@@ -907,7 +905,7 @@ agent-rig/
 │   │   └── writer.ts           # Safe fs writer — skips existing files, never overwrites
 │   ├── schema/
 │   │   ├── agentConfig.ts      # Zod schema for agent.toml
-│   │   ├── taskQueue.ts        # Zod schema + types for task_queue.json
+│   │   ├── taskFiles.ts        # Zod schema + types for .agent-rig/_shared/tasks/
 │   │   └── session.ts          # Zod schema + types for session.json
 │   ├── watcher/
 │   │   ├── index.ts            # chokidar-based file watcher
@@ -918,7 +916,7 @@ agent-rig/
 ├── templates/                  # Scaffold templates (bundled into npm package)
 │   ├── _shared/
 │   │   ├── context.md
-│   │   ├── task_queue.json
+│   │   ├── tasks/
 │   │   ├── decisions.md
 │   │   └── session.json
 │   ├── planner/
@@ -944,7 +942,7 @@ agent-rig/
 | Package | Purpose |
 |---|---|
 | `commander` | CLI argument and subcommand parsing |
-| `zod` | Runtime schema validation for agent.toml, task_queue.json, session.json |
+| `zod` | Runtime schema validation for agent.toml, .agent-rig/_shared/tasks/, session.json |
 | `handlebars` | Template rendering for scaffolded files |
 | `chokidar` | Cross-platform filesystem watcher for hooks |
 | `toml` | Parse agent.toml descriptor files |
@@ -965,7 +963,7 @@ Templates live in the `templates/` directory and are included in the npm package
 All shared state files are validated at read time using Zod schemas, giving clear error messages when a file is malformed:
 
 ```typescript
-// schema/taskQueue.ts
+// schema/taskFiles.ts
 import { z } from 'zod'
 
 const StepSchema = z.object({
@@ -1015,7 +1013,7 @@ When `agent-rig watch` triggers a headless invocation, it assembles the full pro
 
 ```
 [1] .agent-rig/<name>/instructions.md   ← role brief, filesystem map, workflow rules
-[2] _shared/docs/<task-id>_<slug>.md      ← the specific task doc for this invocation
+[2] _shared/tasks/<task-id>_<slug>.md      ← the specific task doc for this invocation
 [3] _shared/handoff_logs/<latest>.md      ← the most recent handoff from the preceding agent
 ```
 
@@ -1056,8 +1054,8 @@ Global (available to all agents):
 
 Your own (planner-specific):
 - `read_codebase`   — scan project files to build context
-- `write_plan`      — write a structured plan to `task_queue.json`
-- `write_task_doc`  — create or update a task doc in `_shared/docs/`
+- `write_plan`      — write a structured plan into a task Markdown file
+- `write_task_doc`  — create or update a task doc in `_shared/tasks/`
 
 ## Your Channels:
 Channel code lives in `_shared/channels/` — you never write channel logic yourself.
@@ -1068,7 +1066,7 @@ Your channel configs (your bot identities and target channels) are in `.agent-ri
 
 ## You READ these files on every startup (in this order):
 1. `.agent-rig/_shared/context.md`       — project goal, stack, constraints, conventions
-2. `.agent-rig/_shared/task_queue.json`  — current task list and statuses
+2. `.agent-rig/_shared/tasks/`        — current task files and statuses
 3. `.agent-rig/_shared/decisions.md`     — past architectural decisions (never contradict these)
 4. `.agent-rig/_shared/memory/`          — scan frontmatter of all files, load relevant bodies (see algorithm below)
 5. The task doc provided in this prompt    — if you are revising an existing task
@@ -1085,8 +1083,7 @@ On startup, before acting:
 5. If current task appears in any file's `tasks_blocked`, always load that file
 
 ## You WRITE to these files only:
-- `.agent-rig/_shared/docs/<task-id>_<slug>.md`  — create or revise task documents
-- `.agent-rig/_shared/task_queue.json`            — add new tasks or update task status
+- `.agent-rig/_shared/tasks/<task-id>_<slug>.md`  — create or revise task documents and update task status
 - `.agent-rig/_shared/decisions.md`               — append new architectural decisions
 - `.agent-rig/_shared/context.md`                 — update project context if scope changes
 - `.agent-rig/_shared/handoff_logs/<timestamp>_<sessionID>_agent-planner.md` — your handoff log
@@ -1107,7 +1104,7 @@ You have been invoked because one of the following is true:
 - The verifier rejected a task and it has been returned for revision (task status: "revision_needed")
 - A blocker has been resolved and the task was waiting on you
 
-Check `task_queue.json` on startup. Find the first task with status `needs_planning`
+Check `.agent-rig/_shared/tasks/` on startup. Find the first task with status `needs_planning`
 or `revision_needed`. That is your active task.
 
 ---
@@ -1117,14 +1114,14 @@ Follow these steps in order. Do not skip steps.
 
 1. Read `.agent-rig/_shared/context.md` fully.
 2. Read `.agent-rig/_shared/decisions.md` fully.
-3. Read `.agent-rig/_shared/task_queue.json` and identify your active task.
+3. Read `.agent-rig/_shared/tasks/` and identify your active task.
 4. If the task has a `doc_path`, read that task doc. If this is a revision, read the
    handoff log provided — it contains the verifier's rejection reason.
 5. If the task is ambiguous or contradicts a past decision, go to **Blocker Signal**.
-6. Write the task document to `_shared/docs/<task-id>_<slug>.md` using the task doc
+6. Write the task document to `_shared/tasks/<task-id>_<slug>.md` using the task doc
    template (Identity, Background, Scope, Implementation Steps, Acceptance Criteria,
    Open Questions). Every acceptance criterion must be binary and verifiable.
-7. Update `task_queue.json`: set `doc_path` to the new doc, set `status` to `"ready_for_work"`.
+7. Update `.agent-rig/_shared/tasks/`: set `doc_path` to the new doc, set `status` to `"ready_for_work"`.
 8. If a new architectural decision was made, append it to `decisions.md`.
 9. Write your handoff log to `_shared/handoff_logs/`.
 10. Go to **Completion Signal**.
@@ -1142,9 +1139,9 @@ Follow these steps in order. Do not skip steps.
 ---
 
 # Completion Signal
-When your work is done, update `task_queue.json`:
+When your work is done, update `.agent-rig/_shared/tasks/`:
 ```json
-{ "status": "ready_for_work", "doc_path": "_shared/docs/<task-id>_<slug>.md" }
+{ "status": "ready_for_work", "doc_path": "_shared/tasks/<task-id>_<slug>.md" }
 ```
 The daemon watches for this status change and will invoke the worker automatically.
 Your final action is always writing the handoff log. Do not exit before writing it.
@@ -1154,7 +1151,7 @@ Your final action is always writing the handoff log. Do not exit before writing 
 # Blocker Signal
 If you cannot proceed (ambiguous requirements, contradicts a decision, missing context):
 
-1. Set the task status in `task_queue.json` to `"blocked"`.
+1. Set the task status in `.agent-rig/_shared/tasks/` to `"blocked"`.
 2. Update `session.json`:
 ```json
 {
@@ -1189,7 +1186,7 @@ Global (available to all agents):
 - `.agent-rig/_shared/skills/git_conventions.md`  — branch naming, commit format, PR conventions
 
 Your own (worker-specific):
-- `.agent-rig/worker/skills/read_plan.md`         — how to parse task docs and task_queue.json
+- `.agent-rig/worker/skills/read_plan.md`         — how to parse task docs and .agent-rig/_shared/tasks/
 - `.agent-rig/worker/skills/write_code.md`        — project coding conventions
 - `.agent-rig/worker/skills/use_tools.md`         — how to invoke your available tools
 
@@ -1203,7 +1200,7 @@ Global (available to all agents):
 Your own (worker-specific):
 - `run_shell`       — execute shell commands (build, install, run scripts)
 - `edit_file`       — apply diffs or write files in the project
-- `mark_done`       — mark a task step as done in `task_queue.json`
+- `mark_done`       — mark a task step as done in `.agent-rig/_shared/tasks/`
 
 ## Your Channels:
 Channel code lives in `_shared/channels/` — you never write channel logic yourself.
@@ -1215,7 +1212,7 @@ Your channel configs (your bot identities and target channels) are in `.agent-ri
 
 ## You READ these files on every startup (in this order):
 1. `.agent-rig/_shared/context.md`      — project conventions, stack, constraints
-2. `.agent-rig/_shared/task_queue.json` — find your active task
+2. `.agent-rig/_shared/tasks/` — find your active task
 3. `.agent-rig/_shared/memory/`         — scan frontmatter of all files, load relevant bodies (see algorithm below)
 4. The task doc provided in this prompt   — your complete implementation brief
 5. The handoff log provided in this prompt — what the planner left for you
@@ -1232,12 +1229,12 @@ On startup, before acting:
 
 ## You WRITE to these files and locations:
 - Project source files as specified in the task doc's Implementation Steps
-- `.agent-rig/_shared/task_queue.json`  — mark steps done, update task status
+- `.agent-rig/_shared/tasks/`  — mark steps done, update task status
 - `.agent-rig/_shared/handoff_logs/<timestamp>_<sessionID>_agent-worker.md`
 - `.agent-rig/_shared/memory/YYYY-MM-DD-hhmm__<session-id>__worker__<tool>.md` — your session memory
 
 ## You must NEVER write to:
-- `.agent-rig/_shared/docs/`        — task docs are planner territory
+- `.agent-rig/_shared/tasks/`        — task docs are planner territory
 - `.agent-rig/_shared/decisions.md` — architectural decisions are planner territory
 - `.agent-rig/_shared/context.md`   — project context is planner territory
 - `.agent-rig/_shared/session.json` — daemon-managed
@@ -1248,7 +1245,7 @@ On startup, before acting:
 ---
 
 # Trigger
-You have been invoked because a task has status `"ready_for_work"` in `task_queue.json`.
+You have been invoked because a task has status `"ready_for_work"` in `.agent-rig/_shared/tasks/`.
 The task doc has been provided in this prompt.
 Read the task doc. Find the first incomplete step. Begin there.
 
@@ -1262,9 +1259,9 @@ Follow these steps in order. Do not skip steps.
 3. Read the handoff log provided in this prompt — note anything the planner flagged.
 4. Identify the first step in "Implementation Steps" where `done: false`.
 5. Implement that step exactly as described.
-6. After completing the step, update `task_queue.json`: mark that step `done: true`.
+6. After completing the step, update `.agent-rig/_shared/tasks/`: mark that step `done: true`.
 7. Repeat steps 5–6 for each remaining step in order.
-8. When all steps are done, update the task status in `task_queue.json` to `"ready_for_review"`.
+8. When all steps are done, update the task status in `.agent-rig/_shared/tasks/` to `"ready_for_review"`.
 9. Write your handoff log to `_shared/handoff_logs/`.
 10. Go to **Completion Signal**.
 
@@ -1283,7 +1280,7 @@ Follow these steps in order. Do not skip steps.
 
 # Completion Signal
 When all implementation steps are done:
-Update `task_queue.json`:
+Update `.agent-rig/_shared/tasks/`:
 ```json
 { "status": "ready_for_review" }
 ```
@@ -1296,7 +1293,7 @@ Your final action is always writing the handoff log. Do not exit before writing 
 If a step cannot be completed (missing dependency, contradictory requirement,
 environment issue, ambiguity in the task doc):
 
-1. Set task status in `task_queue.json` to `"blocked"`.
+1. Set task status in `.agent-rig/_shared/tasks/` to `"blocked"`.
 2. Update `session.json`:
 ```json
 {
@@ -1378,13 +1375,13 @@ On startup, before acting:
 
 ## You WRITE to these files only:
 - `.agent-rig/_shared/session.json`     — write your verdict (PASS or FAIL)
-- `.agent-rig/_shared/task_queue.json`  — update task status after verdict
+- `.agent-rig/_shared/tasks/`  — update task status after verdict
 - `.agent-rig/_shared/handoff_logs/<timestamp>_<sessionID>_agent-verifier.md`
 - `.agent-rig/_shared/memory/YYYY-MM-DD-hhmm__<session-id>__verifier__<tool>.md` — your session memory
 
 ## You must NEVER write to:
 - Any project source code file
-- `.agent-rig/_shared/docs/`        — task docs are planner territory
+- `.agent-rig/_shared/tasks/`        — task docs are planner territory
 - `.agent-rig/_shared/decisions.md` — read only for you
 - `.agent-rig/_shared/context.md`   — read only for you
 - Another agent's memory file
@@ -1394,7 +1391,7 @@ On startup, before acting:
 ---
 
 # Trigger
-You have been invoked because a task has status `"ready_for_review"` in `task_queue.json`.
+You have been invoked because a task has status `"ready_for_review"` in `.agent-rig/_shared/tasks/`.
 The task doc has been provided in this prompt.
 Your job is to verify the Acceptance Criteria section of that task doc.
 
@@ -1430,7 +1427,7 @@ Follow these steps in order. Do not skip steps.
 ---
 
 # Completion Signal (PASS)
-All criteria verified with evidence. Update `task_queue.json`:
+All criteria verified with evidence. Update `.agent-rig/_shared/tasks/`:
 ```json
 { "status": "done", "verified_by": "verifier" }
 ```
@@ -1445,7 +1442,7 @@ Update `session.json`:
 Write your handoff log with evidence for each criterion. The daemon will move to the next task.
 
 # Completion Signal (FAIL)
-One or more criteria failed. Update `task_queue.json`:
+One or more criteria failed. Update `.agent-rig/_shared/tasks/`:
 ```json
 { "status": "revision_needed", "verified_by": "verifier" }
 ```
