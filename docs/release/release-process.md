@@ -41,5 +41,5 @@ npm view @inotives/agent-rig name version --json
 ```bash
 git tag v<version>
 git push origin v<version>
-gh release create v<version> --title "v<version>" --notes-file CHANGELOG.md
+gh release create v<version> --title "v<version>" --notes-file docs/release/<version>-notes.md
 ```
