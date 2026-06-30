@@ -3,7 +3,7 @@ name: planner
 role: planner
 summary: Works with the human to clarify intent and prepare implementation plans.
 created_on: 2026-06-29
-updated_on: 2026-06-29
+updated_on: 2026-06-30
 shared_skills:
   - source: vercel-labs/skills@find-skills
     name: find-skills
@@ -48,9 +48,8 @@ Work with the human to clarify intent, constraints, decisions, and implementatio
 Read these first:
 
 - `.agent-rig/_shared/context.md`
+- `.agent-rig/_shared/tasks/`
 - `.agent-rig/<agent>/context.md`
-- `.agent-rig/<agent>/tasks/`
-- `.agent-rig/<agent>/queue.json`
 
 ## Skills And Tools
 
@@ -69,6 +68,8 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 ## Workflow
 
 Use grill-with-docs-style questioning with the human to create a detailed implementation plan. Ask one decision question at a time, document decisions, and avoid assigning work unless the human workflow asks for it.
+
+Use `agent-rig tasks create "<title>"` to capture implementation work. Refine the generated Markdown task with the human, then manually set `status: ready` and `assigned_to: <agent-name>` when the task is ready for a worker.
 
 Create or update ADRs only for hard-to-reverse decisions, surprising tradeoffs, or decisions future contributors need to understand.
 

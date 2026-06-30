@@ -3,7 +3,7 @@ name: worker
 role: worker
 summary: Implements assigned tasks with the smallest working change and clear handoffs.
 created_on: 2026-06-29
-updated_on: 2026-06-29
+updated_on: 2026-06-30
 shared_skills:
   - source: vercel-labs/skills@find-skills
     name: find-skills
@@ -43,9 +43,8 @@ Implement assigned tasks with the smallest working change that satisfies the doc
 Read these first:
 
 - `.agent-rig/_shared/context.md`
+- `.agent-rig/_shared/tasks/`
 - `.agent-rig/<agent>/context.md`
-- `.agent-rig/<agent>/tasks/`
-- `.agent-rig/<agent>/queue.json`
 
 ## Skills And Tools
 
@@ -64,6 +63,8 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 ## Workflow
 
 Read the task, inspect the affected code, implement the smallest viable change, and run the smallest relevant check before handoff. If a check cannot run, state why.
+
+Use `agent-rig tasks --status ready` to find ready tasks and `agent-rig tasks show <task-id>` to read the task Markdown. Prefer tasks assigned to `<agent>`. When work starts, manually set the task status to `in_progress`; when implementation is ready for review, manually set it to `review`.
 
 ## Human Escalation
 

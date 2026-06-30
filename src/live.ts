@@ -65,7 +65,7 @@ function statusModel(cwd: string) {
       blockers: Array.isArray(session?.blockers) ? session.blockers : []
     },
     queues: {
-      shared: queueState(cwd, join(root, "_shared", "task_queue.json"))
+      shared: tasksState(cwd, join(root, "_shared", "tasks"))
     },
     agents: readAgents(root).map((agent) => {
       const live = isRecord(sessionAgents[agent.name]) ? sessionAgents[agent.name] : {};
@@ -97,6 +97,27 @@ function queueState(cwd: string, file: string) {
   } catch {
     return { path: relative(cwd, file), status: "error", pending: null, running: null, blocked: null, done: null };
   }
+}
+
+function tasksState(cwd: string, dir: string) {
+  try {
+    const tasks = existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".md")).map((entry) => readTaskStatus(join(dir, entry.name))) : [];
+    return {
+      path: relative(cwd, dir),
+      status: "ok",
+      pending: tasks.filter((status) => status === "todo" || status === "ready").length,
+      running: tasks.filter((status) => status === "in_progress").length,
+      blocked: tasks.filter((status) => status === "blocked").length,
+      done: tasks.filter((status) => status === "done").length
+    };
+  } catch {
+    return { path: relative(cwd, dir), status: "error", pending: null, running: null, blocked: null, done: null };
+  }
+}
+
+function readTaskStatus(file: string) {
+  const text = readFileSync(file, "utf8");
+  return text.match(/^---\r?\n[\s\S]*?\bstatus:\s*([^\r\n]+)[\s\S]*?\r?\n---\r?\n?/)?.[1]?.trim() ?? "";
 }
 
 function handoffs(cwd: string, dir: string) {
@@ -133,7 +154,7 @@ function readJson(file: string) {
 function printStatus(model: ReturnType<typeof statusModel>) {
   console.log(`Workspace: ${model.workspace}`);
   console.log(`Session: ${model.session.path}`);
-  console.log(`Shared queue: ${formatQueue(model.queues.shared)}`);
+  console.log(`Shared tasks: ${formatQueue(model.queues.shared)}`);
   console.log("Agents:");
   for (const agent of model.agents) {
     console.log(`  ${agent.name}\trole=${agent.role}\ttool=${agent.tool}\tstatus=${agent.status}\tqueue=${formatQueue(agent.queue)}`);

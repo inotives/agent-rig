@@ -15,7 +15,7 @@ export type SkillSpec = {
   args?: string[];
 };
 
-export const roles = new Set(["supervisor", "planner", "worker", "verifier", "reviewer", "tester", "custom"]);
+export const roles = new Set(["supervisor", "planner", "worker", "verifier", "reviewer", "tester", "researcher", "writer", "custom"]);
 export const tools = new Set(["claude", "codex", "opencode", "custom"]);
 export const defaultSkills: SkillSpec[] = [
   { source: "vercel-labs/skills@find-skills", name: "find-skills" },

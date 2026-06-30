@@ -6,7 +6,7 @@ import { runInit } from "./init.js";
 import { runValidate } from "./validate.js";
 import { runAdd, runAgents, runCreds, runProfiles, runSkills } from "./manage.js";
 import { runStart, runStatus } from "./live.js";
-import { runTask, runWatch } from "./tasks.js";
+import { runTask, runTasks, runWatch } from "./tasks.js";
 import { runDoctor } from "./doctor.js";
 
 export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
@@ -39,6 +39,7 @@ export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   if (command === "status") return runStatus(args, cwd);
   if (command === "start") return runStart(args, cwd);
   if (command === "task") return runTask(args, cwd);
+  if (command === "tasks") return runTasks(args, cwd);
   if (command === "watch") return runWatch(args, cwd);
 
   console.error(`Unknown command: ${command}`);
@@ -61,7 +62,8 @@ Commands:
   skills     Install or list skills
   status     Show live workspace state
   start      Print launch context for an agent
-  task       Manage filesystem tasks
+  task       Add legacy per-agent watch-loop tasks
+  tasks      Create, list, and show shared task files
   watch      Run a filesystem watch loop
   version    Print package version
 

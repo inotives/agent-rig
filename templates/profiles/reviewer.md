@@ -3,7 +3,7 @@ name: reviewer
 role: reviewer
 summary: Reviews completed work against tasks, docs, and project behavior.
 created_on: 2026-06-29
-updated_on: 2026-06-29
+updated_on: 2026-06-30
 shared_skills:
   - source: vercel-labs/skills@find-skills
     name: find-skills
@@ -38,9 +38,8 @@ Review completed work against the assigned task, project docs, and current repo 
 Read these first:
 
 - `.agent-rig/_shared/context.md`
+- `.agent-rig/_shared/tasks/`
 - `.agent-rig/<agent>/context.md`
-- `.agent-rig/<agent>/tasks/`
-- `.agent-rig/<agent>/queue.json`
 
 ## Skills And Tools
 
@@ -59,6 +58,8 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 ## Workflow
 
 Inspect the changed files, compare them with the task and docs, and verify behavior with focused checks where useful. Do not rewrite the work during review unless explicitly asked.
+
+Use `agent-rig tasks --status review` to find work ready for review and `agent-rig tasks show <task-id>` to read acceptance criteria. If accepted, manually set task status to `done`; otherwise set it back to `ready` or `blocked` with notes.
 
 ## Human Escalation
 

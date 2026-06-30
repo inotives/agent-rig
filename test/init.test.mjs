@@ -32,7 +32,11 @@ test("init --yes creates solo Codex worker scaffold", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "agent-rig.json")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "tasks")));
+  assert.equal(existsSync(join(cwd, ".agent-rig", "_shared", "task_queue.json")), false);
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "profiles", "worker.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "profiles", "researcher.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "profiles", "writer.md")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "tools", ".gitkeep")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "agent.toml")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "skills", "rust-best-practices")));
@@ -205,13 +209,17 @@ test("version, help, profiles, and doctor commands work", () => {
 
   const builtin = run(["profiles", "--json"], cwd);
   assert.equal(builtin.status, 0, builtin.stderr);
-  assert.equal(JSON.parse(builtin.stdout).profiles.find((profile) => profile.name === "worker").source, "builtin");
+  const builtins = JSON.parse(builtin.stdout).profiles;
+  assert.equal(builtins.find((profile) => profile.name === "worker").source, "builtin");
+  assert.equal(builtins.some((profile) => profile.name === "researcher"), true);
+  assert.equal(builtins.some((profile) => profile.name === "writer"), true);
 
   assert.equal(run(["init", "--yes"], cwd).status, 0);
   const profiles = run(["profiles", "--json"], cwd);
   assert.equal(profiles.status, 0, profiles.stderr);
   const profileJson = JSON.parse(profiles.stdout);
   assert.equal(profileJson.profiles.find((profile) => profile.name === "worker").source, "workspace");
+  assert.equal(profileJson.profiles.find((profile) => profile.name === "writer").source, "workspace");
 
   const show = run(["profiles", "show", "worker"], cwd);
   assert.equal(show.status, 0, show.stderr);
@@ -245,6 +253,22 @@ Hello <agent>.
 
   assert.equal(added.status, 0, added.stderr);
   assert.match(readFileSync(join(cwd, ".agent-rig", "researcher", "instructions.md"), "utf8"), /Hello researcher\./);
+});
+
+test("researcher and writer roles use matching built-in profiles", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+
+  const researcher = run(["add", "research", "--role", "researcher", "--tool", "claude"], cwd);
+  assert.equal(researcher.status, 0, researcher.stderr);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "research", "instructions.md"), "utf8"), /# Researcher Profile/);
+  assert.ok(existsSync(join(cwd, ".agent-rig", "research", "skills", "research-ops")));
+
+  const writer = run(["add", "docs-writer", "--role", "writer", "--tool", "claude"], cwd);
+  assert.equal(writer.status, 0, writer.stderr);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "docs-writer", "instructions.md"), "utf8"), /# Writer Profile/);
+  assert.ok(existsSync(join(cwd, ".agent-rig", "docs-writer", "skills", "humanizer")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "docs-writer", "skills", "blog-writing-guide")));
 });
 
 test("agents lists configured agents as text and json", () => {
@@ -322,7 +346,7 @@ test("status lists agents, queues, and handoffs as text and json", () => {
   const text = run(["status"], cwd);
   assert.equal(text.status, 0, text.stderr);
   assert.match(text.stdout, /worker/);
-  assert.match(text.stdout, /Shared queue: 0 pending/);
+  assert.match(text.stdout, /Shared tasks: 0 pending/);
   assert.match(text.stdout, /2026-06-27-1406_s6_codex_worker\.md/);
   assert.doesNotMatch(text.stdout, /notes\.md/);
 
@@ -414,6 +438,51 @@ test("task add writes a markdown task file and queue index", () => {
   assert.match(task, /status: ready/);
   assert.match(task, /## Objective\n\nDo the work/);
   assert.equal(run(["validate"], cwd).status, 0);
+});
+
+test("tasks create lists, filters, shows, and emits json", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+
+  const created = run(["tasks", "create", "Fix login timeout", "--assigned-to", "worker", "--status", "ready", "--priority", "high", "--depends-on", "task-0000,task-0002"], cwd);
+  assert.equal(created.status, 0, created.stderr);
+  assert.match(created.stdout, /Created task-0001/);
+
+  const file = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_fix-login-timeout.md");
+  assert.ok(existsSync(file));
+  const text = readFileSync(file, "utf8");
+  assert.match(text, /id: task-0001/);
+  assert.match(text, /assigned_to: worker/);
+  assert.match(text, /priority: high/);
+  assert.match(text, /depends_on:\n  - task-0000\n  - task-0002/);
+
+  const list = run(["tasks", "--status", "ready"], cwd);
+  assert.equal(list.status, 0, list.stderr);
+  assert.match(list.stdout, /task-0001\s+ready\s+worker\s+high\s+2\s+Fix login timeout/);
+
+  const json = run(["tasks", "--json"], cwd);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout)[0].id, "task-0001");
+
+  const show = run(["tasks", "show", "task-0001"], cwd);
+  assert.equal(show.status, 0, show.stderr);
+  assert.match(show.stdout, /^---\nid: task-0001/);
+});
+
+test("validate warns for shared task metadata problems without failing", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Bad task", "--assigned-to", "missing", "--depends-on", "task-9999"], cwd).status, 0);
+  const file = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_bad-task.md");
+  writeFileSync(file, readFileSync(file, "utf8").replace("status: todo", "status: bad").replace("- [ ] First verifiable criterion.", "No checklist."), "utf8");
+
+  const result = run(["validate"], cwd);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Invalid task status/);
+  assert.match(result.stderr, /Unknown assigned_to agent/);
+  assert.match(result.stderr, /Missing dependency task/);
+  assert.match(result.stderr, /acceptance criteria/);
 });
 
 test("task add accepts body-file", () => {
