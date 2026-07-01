@@ -6,7 +6,7 @@ import { runInit } from "./init.js";
 import { runValidate } from "./validate.js";
 import { runAdd, runAgents, runCreds, runProfiles, runSkills } from "./manage.js";
 import { runStart, runStatus } from "./live.js";
-import { runTask, runTasks, runWatch } from "./tasks.js";
+import { runTasks, runWatch } from "./tasks.js";
 import { runDoctor } from "./doctor.js";
 
 export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
@@ -38,7 +38,6 @@ export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   if (command === "skills") return runSkills(args, cwd);
   if (command === "status") return runStatus(args, cwd);
   if (command === "start") return runStart(args, cwd);
-  if (command === "task") return runTask(args, cwd);
   if (command === "tasks") return runTasks(args, cwd);
   if (command === "watch") return runWatch(args, cwd);
 
@@ -62,9 +61,8 @@ Commands:
   skills     Install or list skills
   status     Show live workspace state
   start      Print launch context for an agent
-  task       Add legacy per-agent watch-loop tasks
-  tasks      Create, list, and show shared task files
-  watch      Run a filesystem watch loop
+  tasks      Create, update, list, and show shared task files
+  watch      Process one ready shared task with --once
   version    Print package version
 
 Examples:

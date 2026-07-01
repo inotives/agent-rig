@@ -164,7 +164,6 @@ role = "worker"
 tool = "codex"
 instructions = "instructions.md"
 context = "context.md"
-queue = "queue.json"
 
 [permissions]
 writable_paths = ["logs"]
@@ -206,6 +205,12 @@ test("version, help, profiles, and doctor commands work", () => {
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /@inotives\/agent-rig/);
   assert.match(help.stdout, /agent-rig add api-worker --role worker --tool codex --profile worker/);
+  assert.match(help.stdout, /watch\s+Process one ready shared task with --once/);
+
+  const tasksHelp = run(["tasks", "--help"], cwd);
+  assert.equal(tasksHelp.status, 0, tasksHelp.stderr);
+  assert.match(tasksHelp.stdout, /set-status <task-id> <status>/);
+  assert.match(tasksHelp.stdout, /next \[--agent <agent-name>\] \[--json\] \[--claim\]/);
 
   const builtin = run(["profiles", "--json"], cwd);
   assert.equal(builtin.status, 0, builtin.stderr);
@@ -335,7 +340,7 @@ test("skills list and add dry-run handle shared and agent destinations", () => {
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "skills", "repo-skill")));
 });
 
-test("status lists agents, queues, and handoffs as text and json", () => {
+test("status lists agents, shared task counts, and handoffs as text and json", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
   const logDir = join(cwd, ".agent-rig", "_shared", "handoff_logs");
@@ -346,7 +351,7 @@ test("status lists agents, queues, and handoffs as text and json", () => {
   const text = run(["status"], cwd);
   assert.equal(text.status, 0, text.stderr);
   assert.match(text.stdout, /worker/);
-  assert.match(text.stdout, /Shared tasks: 0 pending/);
+  assert.match(text.stdout, /Shared tasks: 0 todo, 0 ready, 0 in_progress, 0 blocked, 0 review, 0 done/);
   assert.match(text.stdout, /2026-06-27-1406_s6_codex_worker\.md/);
   assert.doesNotMatch(text.stdout, /notes\.md/);
 
@@ -354,8 +359,9 @@ test("status lists agents, queues, and handoffs as text and json", () => {
   assert.equal(json.status, 0, json.stderr);
   const data = JSON.parse(json.stdout);
   assert.equal(data.agents[0].name, "worker");
-  assert.equal(data.agents[0].queue.pending, 0);
-  assert.equal(data.queues.shared.pending, 0);
+  assert.equal(data.agents[0].queue, undefined);
+  assert.equal(data.queues.shared.todo, 0);
+  assert.equal(data.queues.shared.ready, 0);
   assert.deepEqual(data.handoffs.map((item) => item.file), [
     "2026-06-27-1406_s6_codex_worker.md",
     "2026-06-27-1405_s5_codex_worker.md",
@@ -363,16 +369,6 @@ test("status lists agents, queues, and handoffs as text and json", () => {
     "2026-06-27-1403_s3_codex_worker.md",
     "2026-06-27-1402_s2_codex_worker.md"
   ]);
-});
-
-test("status reports invalid queue json as an error", () => {
-  const cwd = tempProject();
-  assert.equal(run(["init", "--yes"], cwd).status, 0);
-  writeFileSync(join(cwd, ".agent-rig", "worker", "queue.json"), "{bad", "utf8");
-
-  const result = run(["status", "--json"], cwd);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).agents[0].queue.status, "error");
 });
 
 test("validate warns for off-format handoff log names", () => {
@@ -421,30 +417,11 @@ test("start rejects unknown agents and unknown tools", () => {
   assert.doesNotMatch(badTool.stdout, /Start badtool/);
 });
 
-test("task add writes a markdown task file and queue index", () => {
-  const cwd = tempProject();
-  assert.equal(run(["init", "--yes"], cwd).status, 0);
-
-  const result = run(["task", "add", "--agent", "worker", "--title", "Implement X", "--body", "Do the work"], cwd);
-
-  assert.equal(result.status, 0, result.stderr);
-  const queue = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "queue.json"), "utf8"));
-  assert.equal(queue.length, 1);
-  assert.equal(queue[0].status, "ready");
-  assert.equal(queue[0].title, "Implement X");
-  assert.match(queue[0].task_file, /^tasks\/task-/);
-  const task = readFileSync(join(cwd, ".agent-rig", "worker", queue[0].task_file), "utf8");
-  assert.match(task, /title: Implement X/);
-  assert.match(task, /status: ready/);
-  assert.match(task, /## Objective\n\nDo the work/);
-  assert.equal(run(["validate"], cwd).status, 0);
-});
-
 test("tasks create lists, filters, shows, and emits json", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
 
-  const created = run(["tasks", "create", "Fix login timeout", "--assigned-to", "worker", "--status", "ready", "--priority", "high", "--depends-on", "task-0000,task-0002"], cwd);
+  const created = run(["tasks", "create", "Fix login timeout", "--assigned-to", "worker", "--status", "ready", "--type", "bug", "--priority", "high", "--depends-on", "task-0000,task-0002"], cwd);
   assert.equal(created.status, 0, created.stderr);
   assert.match(created.stdout, /Created task-0001/);
 
@@ -452,21 +429,66 @@ test("tasks create lists, filters, shows, and emits json", () => {
   assert.ok(existsSync(file));
   const text = readFileSync(file, "utf8");
   assert.match(text, /id: task-0001/);
+  assert.match(text, /type: bug/);
   assert.match(text, /assigned_to: worker/);
   assert.match(text, /priority: high/);
   assert.match(text, /depends_on:\n  - task-0000\n  - task-0002/);
 
   const list = run(["tasks", "--status", "ready"], cwd);
   assert.equal(list.status, 0, list.stderr);
-  assert.match(list.stdout, /task-0001\s+ready\s+worker\s+high\s+2\s+Fix login timeout/);
+  assert.match(list.stdout, /task-0001\s+ready\s+bug\s+worker\s+high\s+2\s+no\s+Fix login timeout/);
 
   const json = run(["tasks", "--json"], cwd);
   assert.equal(json.status, 0, json.stderr);
   assert.equal(JSON.parse(json.stdout)[0].id, "task-0001");
+  assert.equal(JSON.parse(json.stdout)[0].type, "bug");
+  assert.equal(JSON.parse(json.stdout)[0].dependency_ready, false);
 
   const show = run(["tasks", "show", "task-0001"], cwd);
   assert.equal(show.status, 0, show.stderr);
   assert.match(show.stdout, /^---\nid: task-0001/);
+});
+
+test("tasks lifecycle commands mutate shared task frontmatter and preserve body", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Lifecycle", "--assigned-to", "worker"], cwd).status, 0);
+  const file = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_lifecycle.md");
+  writeFileSync(file, readFileSync(file, "utf8").replace("## Notes", "## Custom\n\nKeep me.\n\n## Notes"), "utf8");
+
+  assert.equal(run(["tasks", "set-type", "task-0001", "research"], cwd).status, 0);
+  assert.equal(run(["tasks", "set-status", "task-0001", "ready"], cwd).status, 0);
+  assert.equal(run(["tasks", "assign", "task-0001", "worker"], cwd).status, 0);
+  assert.equal(run(["tasks", "block", "task-0001", "--reason", "Need API key"], cwd).status, 0);
+  assert.equal(run(["tasks", "unblock", "task-0001", "--status", "ready"], cwd).status, 0);
+  assert.equal(run(["tasks", "done", "task-0001", "--message", "Verified locally."], cwd).status, 0);
+
+  const text = readFileSync(file, "utf8");
+  assert.match(text, /type: research/);
+  assert.match(text, /status: done/);
+  assert.match(text, /message: Verified locally\./);
+  assert.doesNotMatch(text, /blocked_reason:/);
+  assert.doesNotMatch(text, /blocked_on:/);
+  assert.match(text, /## Blockers\n\n- \d{4}-\d{2}-\d{2}: Need API key/);
+  assert.match(text, /## Custom\n\nKeep me\./);
+});
+
+test("tasks next is dependency-aware and claims only with --claim", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Foundation", "--assigned-to", "worker", "--status", "done"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Ready work", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-0001"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Blocked by dependency", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-9999"], cwd).status, 0);
+
+  const next = run(["tasks", "next", "--agent", "worker", "--json"], cwd);
+  assert.equal(next.status, 0, next.stderr);
+  assert.equal(JSON.parse(next.stdout).id, "task-0002");
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: ready/);
+
+  const claimed = run(["tasks", "next", "--agent", "worker", "--claim"], cwd);
+  assert.equal(claimed.status, 0, claimed.stderr);
+  assert.match(claimed.stdout, /task-0002\s+in_progress/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: in_progress/);
 });
 
 test("validate warns for shared task metadata problems without failing", () => {
@@ -474,49 +496,35 @@ test("validate warns for shared task metadata problems without failing", () => {
   assert.equal(run(["init", "--yes"], cwd).status, 0);
   assert.equal(run(["tasks", "create", "Bad task", "--assigned-to", "missing", "--depends-on", "task-9999"], cwd).status, 0);
   const file = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_bad-task.md");
-  writeFileSync(file, readFileSync(file, "utf8").replace("status: todo", "status: bad").replace("- [ ] First verifiable criterion.", "No checklist."), "utf8");
+  writeFileSync(file, readFileSync(file, "utf8").replace("type: task", "type: bad").replace("status: todo", "status: bad").replace("- [ ] First verifiable criterion.", "No checklist."), "utf8");
 
   const result = run(["validate"], cwd);
 
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /Invalid task type/);
   assert.match(result.stderr, /Invalid task status/);
   assert.match(result.stderr, /Unknown assigned_to agent/);
   assert.match(result.stderr, /Missing dependency task/);
   assert.match(result.stderr, /acceptance criteria/);
 });
 
-test("task add accepts body-file", () => {
-  const cwd = tempProject();
-  assert.equal(run(["init", "--yes"], cwd).status, 0);
-  writeFileSync(join(cwd, "task.md"), "Line one\nLine two\n", "utf8");
-
-  const result = run(["task", "add", "--agent", "worker", "--title", "From file", "--body-file", "task.md"], cwd);
-
-  assert.equal(result.status, 0, result.stderr);
-  const queue = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "queue.json"), "utf8"));
-  const task = readFileSync(join(cwd, ".agent-rig", "worker", queue[0].task_file), "utf8");
-  assert.match(task, /Line one\nLine two/);
-});
-
 test("watch --once completes ready tasks and writes run and handoff records", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
-  assert.equal(run(["task", "add", "--agent", "worker", "--title", "Implement X", "--body", "Do the work"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Implement X", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
 
   const result = run(["watch", "--once"], cwd);
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Processed 1 task/);
-  const queue = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "queue.json"), "utf8"));
-  assert.equal(queue[0].status, "done");
-  assert.match(queue[0].run_id, /^202/);
-  assert.equal(queue[0].message, `Fake adapter completed ${queue[0].id}.`);
-  const task = readFileSync(join(cwd, ".agent-rig", "worker", queue[0].task_file), "utf8");
+  const task = readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_implement-x.md"), "utf8");
   assert.match(task, /status: done/);
-  assert.match(task, new RegExp(`run_id: ${queue[0].run_id}`));
-  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", queue[0].run_id, "prompt.md")));
-  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", queue[0].run_id, "result.json")));
-  assert.equal(JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", queue[0].run_id, "result.json"), "utf8")).status, "done");
+  const runId = task.match(/run_id: (.+)/)[1].trim();
+  assert.match(runId, /^202/);
+  assert.match(task, /message: Fake adapter completed task-0001\./);
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", runId, "prompt.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json")));
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json"), "utf8")).status, "done");
   assert.equal(readdirSync(join(cwd, ".agent-rig", "_shared", "handoff_logs")).length, 1);
   const session = JSON.parse(readFileSync(join(cwd, ".agent-rig", "_shared", "session.json"), "utf8"));
   assert.equal(session.agents.worker.status, "idle");
@@ -525,38 +533,35 @@ test("watch --once completes ready tasks and writes run and handoff records", ()
 test("watch --once blocks simulated blocked tasks and updates status counts", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
-  assert.equal(run(["task", "add", "--agent", "worker", "--title", "Blocked X", "--body", "Try it"], cwd).status, 0);
-  const queuePath = join(cwd, ".agent-rig", "worker", "queue.json");
-  const queue = JSON.parse(readFileSync(queuePath, "utf8"));
-  queue[0].simulate = "blocked";
-  writeFileSync(queuePath, `${JSON.stringify(queue, null, 2)}\n`, "utf8");
+  assert.equal(run(["tasks", "create", "Blocked X", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  const taskPath = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_blocked-x.md");
+  writeFileSync(taskPath, readFileSync(taskPath, "utf8").replace("depends_on: []", "depends_on: []\nsimulate: blocked"), "utf8");
 
   assert.equal(run(["watch", "--once"], cwd).status, 0);
 
-  const updated = JSON.parse(readFileSync(queuePath, "utf8"));
-  assert.equal(updated[0].status, "blocked");
-  assert.equal(updated[0].message, `Fake adapter blocked ${updated[0].id}.`);
+  const updated = readFileSync(taskPath, "utf8");
+  assert.match(updated, /status: blocked/);
+  assert.match(updated, /message: Fake adapter blocked task-0001\./);
   const session = JSON.parse(readFileSync(join(cwd, ".agent-rig", "_shared", "session.json"), "utf8"));
   assert.equal(session.agents.worker.status, "blocked");
   assert.equal(session.blockers.length, 1);
   const status = JSON.parse(run(["status", "--json"], cwd).stdout);
-  assert.equal(status.agents[0].queue.pending, 0);
-  assert.equal(status.agents[0].queue.blocked, 1);
-  assert.equal(status.agents[0].queue.done, 0);
+  assert.equal(status.queues.shared.ready, 0);
+  assert.equal(status.queues.shared.blocked, 1);
+  assert.equal(status.queues.shared.done, 0);
 });
 
-test("validate fails queue and task markdown drift", () => {
+test("watch skips ready shared tasks without an assignee", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
-  assert.equal(run(["task", "add", "--agent", "worker", "--title", "Drift", "--body", "No drift"], cwd).status, 0);
-  const queue = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "queue.json"), "utf8"));
-  const taskPath = join(cwd, ".agent-rig", "worker", queue[0].task_file);
-  writeFileSync(taskPath, readFileSync(taskPath, "utf8").replace("status: ready", "status: done"), "utf8");
+  assert.equal(run(["tasks", "create", "Unassigned", "--status", "ready"], cwd).status, 0);
 
-  const result = run(["validate"], cwd);
+  const result = run(["watch", "--once"], cwd);
 
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /frontmatter status must match/);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /ready but has no assigned_to/);
+  assert.match(result.stdout, /Processed 0 tasks/);
+  assert.match(run(["validate"], cwd).stderr, /missing assigned_to/);
 });
 
 test("watch refuses an existing lock", () => {

@@ -74,29 +74,11 @@ function statusModel(cwd: string) {
         role: agent.role,
         tool: agent.tool,
         status: typeof live.status === "string" ? live.status : "unknown",
-        last_seen_at: live.last_seen_at ?? null,
-        queue: queueState(cwd, join(root, agent.name, "queue.json"))
+        last_seen_at: live.last_seen_at ?? null
       };
     }),
     handoffs: handoffs(cwd, join(root, "_shared", "handoff_logs"))
   };
-}
-
-function queueState(cwd: string, file: string) {
-  try {
-    const data = JSON.parse(readFileSync(file, "utf8"));
-    if (!Array.isArray(data)) throw new Error("not an array");
-    return {
-      path: relative(cwd, file),
-      status: "ok",
-      pending: data.filter((item) => isRecord(item) && item.status === "ready").length,
-      running: data.filter((item) => isRecord(item) && item.status === "running").length,
-      blocked: data.filter((item) => isRecord(item) && item.status === "blocked").length,
-      done: data.filter((item) => isRecord(item) && item.status === "done").length
-    };
-  } catch {
-    return { path: relative(cwd, file), status: "error", pending: null, running: null, blocked: null, done: null };
-  }
 }
 
 function tasksState(cwd: string, dir: string) {
@@ -105,13 +87,15 @@ function tasksState(cwd: string, dir: string) {
     return {
       path: relative(cwd, dir),
       status: "ok",
-      pending: tasks.filter((status) => status === "todo" || status === "ready").length,
-      running: tasks.filter((status) => status === "in_progress").length,
+      todo: tasks.filter((status) => status === "todo").length,
+      ready: tasks.filter((status) => status === "ready").length,
+      in_progress: tasks.filter((status) => status === "in_progress").length,
       blocked: tasks.filter((status) => status === "blocked").length,
+      review: tasks.filter((status) => status === "review").length,
       done: tasks.filter((status) => status === "done").length
     };
   } catch {
-    return { path: relative(cwd, dir), status: "error", pending: null, running: null, blocked: null, done: null };
+    return { path: relative(cwd, dir), status: "error", todo: null, ready: null, in_progress: null, blocked: null, review: null, done: null };
   }
 }
 
@@ -157,7 +141,7 @@ function printStatus(model: ReturnType<typeof statusModel>) {
   console.log(`Shared tasks: ${formatQueue(model.queues.shared)}`);
   console.log("Agents:");
   for (const agent of model.agents) {
-    console.log(`  ${agent.name}\trole=${agent.role}\ttool=${agent.tool}\tstatus=${agent.status}\tqueue=${formatQueue(agent.queue)}`);
+    console.log(`  ${agent.name}\trole=${agent.role}\ttool=${agent.tool}\tstatus=${agent.status}`);
   }
   console.log("Handoffs:");
   if (!model.handoffs.length) console.log("  none");
@@ -169,8 +153,8 @@ function printCredScope(cwd: string, name: string, scope: { env: string; keys: s
   console.log(`  ${name} keys: ${scope.keys.length ? scope.keys.join(", ") : "(none declared)"}`);
 }
 
-function formatQueue(queue: { status: string; pending: number | null; running: number | null; blocked: number | null; done: number | null }) {
-  return queue.status === "ok" ? `${queue.pending} pending, ${queue.running} running, ${queue.blocked} blocked, ${queue.done} done` : "error";
+function formatQueue(queue: { status: string; todo: number | null; ready: number | null; in_progress: number | null; blocked: number | null; review: number | null; done: number | null }) {
+  return queue.status === "ok" ? `${queue.todo} todo, ${queue.ready} ready, ${queue.in_progress} in_progress, ${queue.blocked} blocked, ${queue.review} review, ${queue.done} done` : "error";
 }
 
 function flag(args: string[], name: string) {
