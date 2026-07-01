@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.2 - 2026-07-01
+
+- Added shared task lifecycle commands: `tasks set-status`, `tasks assign`, `tasks set-type`, `tasks block`, `tasks unblock`, `tasks done`, and `tasks next`.
+- Added dependency-aware task selection with optional claiming through `tasks next --claim`.
+- Updated `watch --once` to process the shared Markdown task queue.
+- Added GitHub Issues backlog import with `agent-rig tasks sync github`.
+- Added GitHub sync support for `--label`, `--limit`, `--dry-run`, and `--json`.
+- Imported GitHub Issues now preserve source metadata and remain unassigned `todo` tasks for planner review.
+- Added real-`gh` dry-run verification for GitHub issue sync.
+
 ## 0.1.1 - 2026-06-30
 
 - Added editable agent profiles with built-in `planner`, `worker`, and `reviewer` templates.
