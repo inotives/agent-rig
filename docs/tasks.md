@@ -137,6 +137,47 @@ agent-rig tasks next --json
 
 `tasks next --claim` sets the selected task to `in_progress`. It does not add separate claim metadata; `assigned_to` remains the ownership field.
 
+## GitHub Issue Import
+
+GitHub issue import is optional. It requires the GitHub CLI only when sync is invoked:
+
+```bash
+gh auth login
+agent-rig tasks sync github
+agent-rig tasks sync github --label agent-rig
+agent-rig tasks sync github --limit 20
+agent-rig tasks sync github --dry-run
+agent-rig tasks sync github --json
+```
+
+Imported GitHub issues become unassigned `todo` tasks. They are backlog seeds, not ready implementation briefs:
+
+```yaml
+type: task
+status: todo
+assigned_to:
+source:
+  provider: github
+  repo: owner/repo
+  issue: 123
+  url: https://github.com/owner/repo/issues/123
+  state_at_import: open
+  imported_at: 2026-07-01
+  labels:
+    - bug
+```
+
+Issue body content is stored under `## Source Issue`. `## Context` should contain a short import note and can be rewritten by a planner later.
+
+Repeat sync skips issues that already exist locally by matching `source.provider`, `source.repo`, and `source.issue`. Local task files are not overwritten after import.
+
+If a complex imported issue is split into multiple local tasks, keep the GitHub `source` metadata only on the imported parent task. Child implementation tasks should reference it with `parent`:
+
+```yaml
+parent: task-0001
+depends_on: []
+```
+
 ## Watch
 
 ```bash

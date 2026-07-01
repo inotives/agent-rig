@@ -444,6 +444,37 @@ status: todo | ready | in_progress | blocked | review | done
 
 `todo` is backlog: captured, but not ready for agent work. `ready` is actionable only when the task has a target `assigned_to` agent and all `depends_on` tasks are `done`.
 
+GitHub Issues can be imported into `_shared/tasks/` as optional backlog seeds with:
+
+```bash
+agent-rig tasks sync github
+agent-rig tasks sync github --label agent-rig
+agent-rig tasks sync github --limit 20
+agent-rig tasks sync github --dry-run
+```
+
+GitHub sync is optional and uses the local `gh` CLI only when invoked. Normal AgentRig local task workflows do not require GitHub or `gh`.
+
+Imported issues are unassigned `todo` tasks. Their source identity is stored in frontmatter:
+
+```yaml
+source:
+  provider: github
+  repo: owner/repo
+  issue: 123
+  url: https://github.com/owner/repo/issues/123
+  state_at_import: open
+  imported_at: 2026-07-01
+  labels:
+    - bug
+```
+
+Repeat sync detects duplicates by `source.provider`, `source.repo`, and `source.issue`, not by filename. Existing local task files are never overwritten by GitHub sync.
+
+Imported issue bodies are written under `## Source Issue`. Comments are not imported; the source URL points humans and agents to the full discussion.
+
+If an imported issue is split into multiple local implementation tasks, the imported issue task keeps the GitHub `source` metadata and child tasks reference it through `parent`.
+
 The Verifier treats the **Acceptance Criteria** checklist as its test spec — it ticks off each item with evidence (test output, diff inspection, lint results) and will not issue a PASS until all items are resolved.
 
 ### `_shared/handoff_logs/`
