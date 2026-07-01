@@ -13,7 +13,7 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 7. [Phase 7: CLI Polish and Agent Profiles](../_archived/phase-7-cli-polish-agent-model.md) — completed
 8. [Phase 8: Task Management Improvements](../_archived/phase-8-task-management.md) — completed
 9. [Phase 9: Patch Release 0.1.1 Preparation](../_archived/phase-9-patch-release-0.1.1.md) — completed
-10. [Phase 10: Task Lifecycle and Shared Queue Flow](./phase-10-task-lifecycle-shared-queue.md)
+10. [Phase 10: Task Lifecycle and Shared Queue Flow](../_archived/phase-10-task-lifecycle-shared-queue.md) — completed
 11. [Phase 11: GitHub Issues Backlog Sync](./phase-11-github-issues-backlog-sync.md)
 
 ## Workflow
