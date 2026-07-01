@@ -14,7 +14,7 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 8. [Phase 8: Task Management Improvements](../_archived/phase-8-task-management.md) — completed
 9. [Phase 9: Patch Release 0.1.1 Preparation](../_archived/phase-9-patch-release-0.1.1.md) — completed
 10. [Phase 10: Task Lifecycle and Shared Queue Flow](../_archived/phase-10-task-lifecycle-shared-queue.md) — completed
-11. [Phase 11: GitHub Issues Backlog Sync](./phase-11-github-issues-backlog-sync.md)
+11. [Phase 11: GitHub Issues Backlog Sync](../_archived/phase-11-github-issues-backlog-sync.md) — completed
 
 ## Workflow
 
