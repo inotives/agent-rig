@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync, readdirSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync, readdirSync, symlinkSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -11,8 +11,35 @@ function tempProject() {
   return mkdtempSync(join(tmpdir(), "agent-rig-"));
 }
 
-function run(args, cwd, input = "") {
-  return spawnSync(process.execPath, [cli, ...args], { cwd, input, encoding: "utf8", env: { ...process.env, AGENT_RIG_SKIP_SKILLS: "1" } });
+function run(args, cwd, input = "", env = {}) {
+  return spawnSync(process.execPath, [cli, ...args], { cwd, input, encoding: "utf8", env: { ...process.env, ...env, AGENT_RIG_SKIP_SKILLS: "1" } });
+}
+
+function fakeGh(cwd, issues) {
+  const bin = join(cwd, "fake-bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "issues.json"), JSON.stringify(issues), "utf8");
+  writeFileSync(join(bin, "gh"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args[0] === "repo" && args[1] === "view") {
+  console.log(JSON.stringify({ nameWithOwner: "owner/repo" }));
+  process.exit(0);
+}
+if (args[0] === "issue" && args[1] === "list") {
+  let issues = JSON.parse(fs.readFileSync(path.join(__dirname, "issues.json"), "utf8"));
+  const labelIndex = args.indexOf("--label");
+  if (labelIndex !== -1) issues = issues.filter((issue) => issue.labels.some((label) => label.name === args[labelIndex + 1]));
+  const limitIndex = args.indexOf("--limit");
+  if (limitIndex !== -1) issues = issues.slice(0, Number(args[limitIndex + 1]));
+  console.log(JSON.stringify(issues));
+  process.exit(0);
+}
+process.exit(1);
+`, "utf8");
+  chmodSync(join(bin, "gh"), 0o755);
+  return { PATH: `${bin}:${process.env.PATH ?? ""}` };
 }
 
 test("npm-style symlink bin runs the CLI", () => {
@@ -211,6 +238,7 @@ test("version, help, profiles, and doctor commands work", () => {
   assert.equal(tasksHelp.status, 0, tasksHelp.stderr);
   assert.match(tasksHelp.stdout, /set-status <task-id> <status>/);
   assert.match(tasksHelp.stdout, /next \[--agent <agent-name>\] \[--json\] \[--claim\]/);
+  assert.match(tasksHelp.stdout, /sync github \[--label <label>\] \[--limit <number>\] \[--dry-run\] \[--json\]/);
 
   const builtin = run(["profiles", "--json"], cwd);
   assert.equal(builtin.status, 0, builtin.stderr);
@@ -489,6 +517,91 @@ test("tasks next is dependency-aware and claims only with --claim", () => {
   assert.equal(claimed.status, 0, claimed.stderr);
   assert.match(claimed.stdout, /task-0002\s+in_progress/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: in_progress/);
+});
+
+test("tasks sync github fails clearly when gh is unavailable", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+
+  const result = run(["tasks", "sync", "github"], cwd, "", { PATH: join(cwd, "empty-bin") });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /GitHub sync requires the GitHub CLI/);
+});
+
+test("tasks sync github imports issues and skips existing source metadata", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  const env = fakeGh(cwd, [
+    {
+      number: 123,
+      title: "Fix login timeout",
+      body: "Request timed out after 30s.",
+      url: "https://github.com/owner/repo/issues/123",
+      labels: [{ name: "bug" }, { name: "agent-rig" }]
+    },
+    {
+      number: 124,
+      title: "Improve docs",
+      body: "",
+      url: "https://github.com/owner/repo/issues/124",
+      labels: [{ name: "documentation" }]
+    }
+  ]);
+
+  const result = run(["tasks", "sync", "github", "--label", "agent-rig"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Created task-0001 from issue #123: Fix login timeout/);
+  const file = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_fix-login-timeout.md");
+  const text = readFileSync(file, "utf8");
+  assert.match(text, /type: bug/);
+  assert.match(text, /status: todo/);
+  assert.match(text, /assigned_to: ""/);
+  assert.match(text, /source:\n  provider: github\n  repo: owner\/repo\n  issue: 123/);
+  assert.match(text, /labels:\n    - bug\n    - agent-rig/);
+  assert.match(text, /## Context\n\nImported from GitHub Issue #123\. Needs planner review before moving to ready\./);
+  assert.match(text, /## Source Issue\n\nRequest timed out after 30s\./);
+
+  writeFileSync(file, text.replace("Request timed out after 30s.", "Local edit stays."), "utf8");
+  const repeat = run(["tasks", "sync", "github", "--json"], cwd, "", env);
+  const data = JSON.parse(repeat.stdout);
+  assert.equal(repeat.status, 0, repeat.stderr);
+  assert.deepEqual(data.skipped_existing, [{ issue: 123, task: "task-0001" }]);
+  assert.equal(data.imported[0].issue, 124);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_improve-docs.md"), "utf8"), /type: doc/);
+  assert.match(readFileSync(file, "utf8"), /Local edit stays/);
+});
+
+test("tasks sync github supports dry-run, limit, and json output", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  const env = fakeGh(cwd, [
+    {
+      number: 50,
+      title: "Research queue behavior",
+      body: "Look into the queue.",
+      url: "https://github.com/owner/repo/issues/50",
+      labels: [{ name: "research" }]
+    },
+    {
+      number: 51,
+      title: "Later issue",
+      body: "Do later.",
+      url: "https://github.com/owner/repo/issues/51",
+      labels: [{ name: "chore" }]
+    }
+  ]);
+
+  const result = run(["tasks", "sync", "github", "--limit", "1", "--dry-run", "--json"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const data = JSON.parse(result.stdout);
+  assert.equal(data.repo, "owner/repo");
+  assert.equal(data.dry_run, true);
+  assert.equal(data.limit, 1);
+  assert.deepEqual(data.imported, [{ issue: 50, task: "task-0001", path: ".agent-rig/_shared/tasks/task-0001_research-queue-behavior.md" }]);
+  assert.deepEqual(readdirSync(join(cwd, ".agent-rig", "_shared", "tasks")).filter((file) => file.endsWith(".md")), []);
 });
 
 test("validate warns for shared task metadata problems without failing", () => {

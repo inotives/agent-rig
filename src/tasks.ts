@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, relative } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { Agent, readAgents, requireWorkspace, validSlug } from "./workspace.js";
@@ -25,6 +26,15 @@ const taskStatuses = new Set(["todo", "ready", "in_progress", "blocked", "review
 const taskTypes = new Set(["task", "bug", "story", "epic", "chore", "research", "doc"]);
 const priorities = new Set(["low", "normal", "high"]);
 const unblockStatuses = new Set(["todo", "ready", "in_progress"]);
+const githubTypeLabels = new Map([
+  ["bug", "bug"],
+  ["documentation", "doc"],
+  ["docs", "doc"],
+  ["research", "research"],
+  ["chore", "chore"],
+  ["epic", "epic"],
+  ["story", "story"]
+]);
 
 export function runTasks(args: string[], cwd: string) {
   const [command, ...rest] = args;
@@ -38,6 +48,7 @@ export function runTasks(args: string[], cwd: string) {
   if (command === "unblock") return tasksUnblock(rest, cwd);
   if (command === "done") return tasksDone(rest, cwd);
   if (command === "next") return tasksNext(rest, cwd);
+  if (command === "sync") return tasksSync(rest, cwd);
   return tasksList(args, cwd);
 }
 
@@ -54,6 +65,7 @@ Commands:
   unblock <task-id> --status <todo|ready|in_progress>
   done <task-id> [--message <message>]
   next [--agent <agent-name>] [--json] [--claim]
+  sync github [--label <label>] [--limit <number>] [--dry-run] [--json]
 
 List options:
   --status <status>           Filter listed tasks
@@ -271,6 +283,81 @@ function tasksNext(args: string[], cwd: string) {
   }
 }
 
+function tasksSync(args: string[], cwd: string) {
+  try {
+    const [provider, ...rest] = args;
+    if (provider !== "github") return fail("Usage: agent-rig tasks sync github [--label <label>] [--limit <number>] [--dry-run] [--json]");
+    const options = parseOptions(rest, new Set(["--label", "--limit", "--dry-run", "--json"]), new Set(["--dry-run", "--json"]));
+    const limitText = option(options, "--limit") ?? "100";
+    const limit = Number(limitText);
+    if (!Number.isInteger(limit) || limit < 1) return fail(`Invalid limit: ${limitText}`);
+
+    const root = requireWorkspace(cwd);
+    const dir = sharedTasksDir(root);
+    mkdirSync(dir, { recursive: true });
+
+    const repo = githubRepo(cwd);
+    const issues = githubIssues(cwd, limit, option(options, "--label"));
+    const existing = readSharedTasks(root, cwd);
+    const dryRun = options.has("--dry-run");
+    const json = options.has("--json");
+    const today = dateStamp(new Date());
+    const imported: Record<string, unknown>[] = [];
+    const skipped: Record<string, unknown>[] = [];
+    let nextNumber = nextSharedTaskNumber(dir);
+
+    for (const issue of issues) {
+      const duplicate = existing.find((task) => githubSourceMatches(task.meta.source, repo, issue.number));
+      if (duplicate) {
+        skipped.push({ issue: issue.number, task: duplicate.id });
+        continue;
+      }
+
+      const id = `task-${String(nextNumber++).padStart(4, "0")}`;
+      const file = join(dir, `${id}_${slug(issue.title)}.md`);
+      const labels = issue.labels.map((label) => label.name);
+      const meta = {
+        id,
+        title: issue.title,
+        type: githubIssueType(labels),
+        status: "todo",
+        assigned_to: "",
+        created_by: "github-sync",
+        created_on: today,
+        updated_on: today,
+        priority: "normal",
+        parent: "",
+        depends_on: [],
+        source: {
+          provider: "github",
+          repo,
+          issue: issue.number,
+          url: issue.url,
+          state_at_import: "open",
+          imported_at: today,
+          labels
+        }
+      };
+      if (!dryRun) writeFileSync(file, sharedTaskMarkdown(meta, githubIssueTaskBody(issue)), "utf8");
+      imported.push({ issue: issue.number, task: id, path: relative(cwd, file) });
+    }
+
+    if (json) console.log(JSON.stringify({ repo, imported, skipped_existing: skipped, dry_run: dryRun, limit }, null, 2));
+    else {
+      console.log(`GitHub repo: ${repo}`);
+      console.log(`Dry run: ${dryRun}`);
+      for (const item of imported) console.log(`${dryRun ? "Would create" : "Created"} ${item.task} from issue #${item.issue}: ${issues.find((issue) => issue.number === item.issue)?.title ?? ""}`);
+      for (const item of skipped) console.log(`Skipped existing issue #${item.issue}: ${item.task}`);
+      console.log(`Imported: ${imported.length}`);
+      console.log(`Skipped existing: ${skipped.length}`);
+      console.log(`Limit: ${limit}`);
+    }
+    return 0;
+  } catch (cause) {
+    return fail(message(cause));
+  }
+}
+
 export async function runWatch(args: string[], cwd: string) {
   try {
     if (args.length !== 1 || args[0] !== "--once") return fail("Usage: agent-rig watch --once");
@@ -472,6 +559,97 @@ function nextActionableTask(tasks: SharedTask[], agentName: string | undefined, 
   return undefined;
 }
 
+type GithubIssue = {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  labels: { name: string }[];
+};
+
+function githubRepo(cwd: string) {
+  const data = ghJson(cwd, ["repo", "view", "--json", "nameWithOwner"]);
+  if (!data || typeof data.nameWithOwner !== "string" || !data.nameWithOwner) throw new Error(githubSetupMessage());
+  return data.nameWithOwner;
+}
+
+function githubIssues(cwd: string, limit: number, label?: string) {
+  const args = ["issue", "list", "--state", "open", "--limit", String(limit), "--json", "number,title,body,url,labels"];
+  if (label) args.push("--label", label);
+  const data = ghJson(cwd, args);
+  if (!Array.isArray(data)) throw new Error("GitHub issue list returned unexpected data.");
+  return data.map((item): GithubIssue => {
+    if (!item || typeof item !== "object") throw new Error("GitHub issue list returned unexpected data.");
+    const record = item as Record<string, unknown>;
+    const labels = Array.isArray(record.labels) ? record.labels.map((raw) => {
+      if (raw && typeof raw === "object" && typeof (raw as Record<string, unknown>).name === "string") return { name: String((raw as Record<string, unknown>).name) };
+      return { name: String(raw ?? "") };
+    }).filter((raw) => raw.name) : [];
+    return {
+      number: Number(record.number),
+      title: String(record.title ?? ""),
+      body: String(record.body ?? ""),
+      url: String(record.url ?? ""),
+      labels
+    };
+  }).filter((issue) => Number.isInteger(issue.number) && issue.title && issue.url);
+}
+
+function ghJson(cwd: string, args: string[]) {
+  const result = spawnSync("gh", args, { cwd, encoding: "utf8" });
+  if (result.error || result.status !== 0) throw new Error(githubSetupMessage());
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error("GitHub CLI returned invalid JSON.");
+  }
+}
+
+function githubSetupMessage() {
+  return "GitHub sync requires the GitHub CLI. Install gh and run `gh auth login`.";
+}
+
+function githubSourceMatches(source: unknown, repo: string, issue: number) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return false;
+  const record = source as Record<string, unknown>;
+  return record.provider === "github" && record.repo === repo && Number(record.issue) === issue;
+}
+
+function githubIssueType(labels: string[]) {
+  for (const label of labels) {
+    const mapped = githubTypeLabels.get(label.toLowerCase());
+    if (mapped) return mapped;
+  }
+  return "task";
+}
+
+function githubIssueTaskBody(issue: GithubIssue) {
+  const body = issue.body.trim() || "(No issue body.)";
+  return `# Task
+
+## Context
+
+Imported from GitHub Issue #${issue.number}. Needs planner review before moving to ready.
+
+## Source Issue
+
+${body}
+
+## Planner Notes
+
+
+## Implementation Plan
+
+
+## Acceptance Criteria
+
+- [ ] Planner has converted the source issue into verifiable criteria.
+
+## Notes
+
+`;
+}
+
 function updateSharedTask(task: SharedTask, updates: Record<string, unknown>, body = task.body) {
   const meta = { ...task.meta };
   for (const [key, value] of Object.entries(updates)) {
@@ -527,13 +705,17 @@ function nextHeadingIndex(body: string, from: number) {
 }
 
 function nextSharedTaskId(dir: string) {
+  return `task-${String(nextSharedTaskNumber(dir)).padStart(4, "0")}`;
+}
+
+function nextSharedTaskNumber(dir: string) {
   let max = 0;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isFile()) continue;
     const match = entry.name.match(/^task-(\d{4})[_-]/);
     if (match) max = Math.max(max, Number(match[1]));
   }
-  return `task-${String(max + 1).padStart(4, "0")}`;
+  return max + 1;
 }
 
 function slug(value: string) {
