@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, resolve, join, relative } from "node:path";
+import { resolve, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "@iarna/toml";
 import { parse as parseYaml } from "yaml";
@@ -9,16 +9,15 @@ import { listWorkspaceProfiles } from "./profiles.js";
 export type Problem = { path: string; message: string };
 export type Result = { errors: Problem[]; warnings: Problem[] };
 
-const flatKeys = new Set(["name", "role", "tool", "instructions", "context", "queue", "handoff_log", "shared_context", "shared_queue"]);
+const flatKeys = new Set(["name", "role", "tool", "instructions", "context", "handoff_log", "shared_context"]);
 const topKeys = new Set([...flatKeys, "agent", "permissions"]);
 const agentKeys = new Set(flatKeys);
 const permissionKeys = new Set(["writable_paths"]);
 const handoffName = /^\d{4}-\d{2}-\d{2}-\d{4}_.+_[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
-const taskStates = new Set(["ready", "running", "done", "blocked"]);
 const sharedTaskStatuses = new Set(["todo", "ready", "in_progress", "blocked", "review", "done"]);
+const sharedTaskTypes = new Set(["task", "bug", "story", "epic", "chore", "research", "doc"]);
 const taskPriorities = new Set(["low", "normal", "high"]);
-const taskKeys = new Set(["id", "title", "status", "assigned_to", "created_by", "created_on", "updated_on", "priority", "parent", "depends_on"]);
-const queueKeys = new Set(["id", "agent", "status", "title", "task_file", "simulate", "run_id", "started_at", "finished_at", "message"]);
+const taskKeys = new Set(["id", "title", "type", "status", "assigned_to", "created_by", "created_on", "updated_on", "priority", "parent", "depends_on", "blocked_reason", "blocked_on", "message", "run_id", "started_at", "finished_at", "source", "simulate"]);
 
 export function runValidate(args: string[], cwd: string) {
   const json = args.includes("--json");
@@ -107,19 +106,14 @@ function validateAgent(name: string, dir: string, tomlPath: string, result: Resu
   if (!tool) error(result, rel(tomlPath), "tool is required.");
   else if (!tools.has(tool)) error(result, rel(tomlPath), `Unknown tool "${tool}".`);
 
-  for (const key of ["instructions", "context", "queue"]) {
+  for (const key of ["instructions", "context"]) {
     if (!stringField(agentTable, key)) error(result, rel(tomlPath), `${key} is required.`);
   }
 
   validateLocalRef(agentTable, "instructions", dir, result, true);
   validateLocalRef(agentTable, "context", dir, result, true);
-  validateLocalRef(agentTable, "queue", dir, result, false);
   validateLocalRef(agentTable, "handoff_log", dir, result, false);
   validateSharedRef(agentTable, "shared_context", dir, result, true);
-  validateSharedRef(agentTable, "shared_queue", dir, result, false);
-
-  const queue = stringField(agentTable, "queue");
-  if (queue) validateQueue(resolve(dir, queue), resolve(dir, ".."), result, false, name);
 
   if (isRecord(data.permissions) && Array.isArray(data.permissions.writable_paths)) {
     for (const path of data.permissions.writable_paths) {
@@ -221,13 +215,15 @@ function validateSharedTasks(root: string, result: Result) {
 
   for (const [id, task] of tasks) {
     warnUnknown(task.meta, taskKeys, rel(task.file), result);
-    for (const key of ["id", "title", "status", "assigned_to", "created_by", "created_on", "updated_on", "priority", "depends_on"]) {
+    for (const key of ["id", "title", "type", "status", "assigned_to", "created_by", "created_on", "updated_on", "priority", "depends_on"]) {
       if (typeof task.meta[key] === "undefined") warn(result, rel(task.file), `Task frontmatter ${key} is required.`);
     }
     if (typeof task.meta.id === "string" && task.meta.id !== id) warn(result, rel(task.file), "Task frontmatter id should match the task record id.");
+    if (typeof task.meta.type === "string" && !sharedTaskTypes.has(task.meta.type)) warn(result, rel(task.file), `Invalid task type "${task.meta.type}".`);
     if (typeof task.meta.status === "string" && !sharedTaskStatuses.has(task.meta.status)) warn(result, rel(task.file), `Invalid task status "${task.meta.status}".`);
     if (typeof task.meta.priority === "string" && !taskPriorities.has(task.meta.priority)) warn(result, rel(task.file), `Invalid task priority "${task.meta.priority}".`);
     if (typeof task.meta.assigned_to === "string" && task.meta.assigned_to && !agents.has(task.meta.assigned_to)) warn(result, rel(task.file), `Unknown assigned_to agent "${task.meta.assigned_to}".`);
+    if (task.meta.status === "ready" && !task.meta.assigned_to) warn(result, rel(task.file), "Ready task is missing assigned_to and will be skipped by watch.");
     if (typeof task.meta.parent === "string" && task.meta.parent && !tasks.has(task.meta.parent)) warn(result, rel(task.file), `Missing parent task "${task.meta.parent}".`);
     if (typeof task.meta.depends_on !== "undefined" && !Array.isArray(task.meta.depends_on)) warn(result, rel(task.file), "Task frontmatter depends_on must be an array.");
     if (Array.isArray(task.meta.depends_on)) {
@@ -278,59 +274,6 @@ function parseSharedTask(file: string, result: Result) {
     error(result, rel(file), `Invalid task frontmatter: ${cause instanceof Error ? cause.message : String(cause)}`);
     return undefined;
   }
-}
-
-function validateQueue(path: string, root: string, result: Result, shared: boolean, localAgent?: string) {
-  const data = readJson(path, result);
-  if (data === undefined) return;
-  if (!Array.isArray(data)) {
-    error(result, rel(path), "Expected a JSON array.");
-    return;
-  }
-
-  for (const item of data) {
-    if (!isRecord(item)) {
-      error(result, rel(path), "Queue task must be an object.");
-      continue;
-    }
-    warnUnknown(item, queueKeys, rel(path), result);
-    for (const key of ["id", "status", "title", "task_file"]) {
-      if (typeof item[key] !== "string") error(result, rel(path), `Queue task ${key} is required.`);
-    }
-    if (typeof item.status === "string" && !taskStates.has(item.status)) error(result, rel(path), `Invalid task status "${item.status}".`);
-
-    const agent = shared ? stringField(item, "agent") : localAgent;
-    if (shared && !agent) error(result, rel(path), "Shared queue task agent is required.");
-    if (agent && (!/^[a-z][a-z0-9-]{0,39}$/.test(agent) || !existsSync(join(root, agent, "agent.toml")))) error(result, rel(path), `Unknown task agent "${agent}".`);
-    if (typeof item.task_file === "string") validateTaskFile(resolve(dirname(path), item.task_file), item, agent, result);
-  }
-}
-
-function validateTaskFile(path: string, task: Record<string, unknown>, agent: string | undefined, result: Result) {
-  if (!requireFile(path, result)) return;
-  const text = readFileSync(path, "utf8");
-  const match = text.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!match) {
-    error(result, rel(path), "Task Markdown must contain YAML frontmatter.");
-    return;
-  }
-  const meta = frontmatter(match[1]);
-  for (const key of ["id", "title", "status", "agent"]) {
-    if (!meta[key]) error(result, rel(path), `Task frontmatter ${key} is required.`);
-  }
-  if (meta.id && meta.id !== task.id) error(result, rel(path), "Task frontmatter id must match queue item id.");
-  if (meta.title && meta.title !== task.title) error(result, rel(path), "Task frontmatter title must match queue item title.");
-  if (meta.status && meta.status !== task.status) error(result, rel(path), "Task frontmatter status must match queue item status.");
-  if (agent && meta.agent && meta.agent !== agent) error(result, rel(path), "Task frontmatter agent must match queue owner.");
-}
-
-function frontmatter(text: string) {
-  const data: Record<string, string> = {};
-  for (const line of text.split(/\r?\n/)) {
-    const index = line.indexOf(":");
-    if (index >= 0) data[line.slice(0, index).trim()] = line.slice(index + 1).trim();
-  }
-  return data;
 }
 
 function jsonObject(path: string, result: Result, keys: string[], extra?: (data: Record<string, unknown>) => void) {

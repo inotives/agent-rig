@@ -344,7 +344,7 @@ Credentials are stored as `.env` files, one per scope:
 | `_shared.env` | Credentials available to all agents |
 | `<agent-name>.env` | Credentials scoped to that agent only |
 
-At invocation time, `agent-rig watch` injects the relevant env files into the headless tool's environment — `_shared.env` always, plus the agent-specific `.env` for that agent. An agent never sees another agent's credentials.
+In a future real tool-invocation phase, `agent-rig watch` should inject the relevant env files into the headless tool's environment — `_shared.env` always, plus the agent-specific `.env` for that agent. An agent never sees another agent's credentials.
 
 Credential keys are declared by name in `agent.toml` under `[credentials]` — AgentRig validates that every declared key is present in the appropriate `.env` file before invoking the agent. A missing credential is a hard stop with a clear error, not a silent runtime failure.
 
@@ -742,12 +742,9 @@ agent-rig logs [--session <id>] [--agent <name>] [--tail <n>]
     List or print handoff logs. Defaults to the last 10 logs across all agents.
     Filter by session ID or agent name. --tail streams the most recent log live.
 
-agent-rig watch
-    Start the coordination daemon. Watches _shared/ for state changes and invokes
-    agents headlessly when their trigger condition fires. Assembles the prompt from
-    instructions.md + task doc + latest handoff log for each invocation.
-    Runs until killed. Logs all invocations and outcomes to stderr.
-    Use this for fully automated multi-agent workflows.
+agent-rig watch --once
+    Process one dependency-ready shared task from .agent-rig/_shared/tasks/ and
+    exit. Phase 10 keeps continuous watch mode out of scope.
 ```
 
 ### 5.2 Init Behaviour — Interactive Wizard
@@ -1024,7 +1021,7 @@ Every `instructions.md` — regardless of role — must contain all seven sectio
 
 ### 8.2 How AgentRig Assembles the Prompt
 
-When `agent-rig watch` triggers a headless invocation, it assembles the full prompt from three sources in order:
+When a future real tool-invocation phase lets `agent-rig watch` trigger a headless invocation, it should assemble the full prompt from three sources in order:
 
 ```
 [1] .agent-rig/<name>/instructions.md   ← role brief, filesystem map, workflow rules
@@ -1547,7 +1544,7 @@ Human actions are expressed through the scripts in `.agent-rig/human/scripts/` �
 ### Phase 2 — Live Session Management
 - `agent-rig status` reading live `session.json` and listing all agents
 - `agent-rig start` — symlink resolution per tool, print launch commands, optional tmux/terminal opening
-- `agent-rig watch` daemon — file watcher, headless invocation, prompt assembly, blocker notifications
+- Future `agent-rig watch` daemon — file watcher, headless invocation, prompt assembly, blocker notifications
 - Execution mode support in `agent.toml` (`watch` vs `manual`)
 
 ### Phase 3 — Human Dashboard
