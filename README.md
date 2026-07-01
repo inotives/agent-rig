@@ -125,8 +125,10 @@ AGENT_RIG_SKIP_SKILLS=1 agent-rig init --yes
 Filesystem-only MVP flow:
 
 ```bash
-agent-rig tasks create "Implement X" --assigned-to worker --status ready
+agent-rig tasks create "Implement X" --assigned-to worker --status ready --type task
 agent-rig tasks
+agent-rig tasks next --agent worker
+agent-rig tasks next --agent worker --claim
 agent-rig tasks show task-0001
 agent-rig status
 ```
@@ -151,9 +153,13 @@ agent-rig status
 | `agent-rig tasks create "<title>"` | Create a shared Markdown task file. |
 | `agent-rig tasks` | List shared task files. |
 | `agent-rig tasks show <task-id>` | Print the canonical task Markdown. |
-| `agent-rig task add --agent <agent-name>` | Create a legacy per-agent watch-loop task. |
-| `agent-rig watch --once` | Process currently ready tasks and exit. |
-| `agent-rig watch` | Run the filesystem watch loop continuously. |
+| `agent-rig tasks next --agent <agent-name>` | Print the next dependency-ready shared task for an agent. |
+| `agent-rig tasks next --agent <agent-name> --claim` | Mark the next dependency-ready shared task as `in_progress`. |
+| `agent-rig tasks set-status <task-id> <status>` | Update task lifecycle status. |
+| `agent-rig tasks assign <task-id> <agent-name>` | Assign a shared task to an agent. |
+| `agent-rig tasks block <task-id> --reason <reason>` | Mark a task blocked and record the blocker. |
+| `agent-rig tasks done <task-id>` | Mark a task done. |
+| `agent-rig watch --once` | Process one ready shared task and exit. |
 
 ## Implementation Phases
 

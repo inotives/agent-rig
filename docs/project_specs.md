@@ -383,6 +383,7 @@ Every task doc follows this template:
 ---
 id: task-0001
 title: Add JWT auth middleware
+type: task
 status: ready
 assigned_to: worker
 created_by: planner
@@ -428,6 +429,20 @@ These are the conditions the Verifier checks before issuing a PASS verdict.
 Questions the Planner or human must resolve before or during implementation.
 - [ ] Should token expiry be configurable via env var or hardcoded to 1h?
 ```
+
+Task `type` describes the work category:
+
+```yaml
+type: task | bug | story | epic | chore | research | doc
+```
+
+Task `status` describes lifecycle state:
+
+```yaml
+status: todo | ready | in_progress | blocked | review | done
+```
+
+`todo` is backlog: captured, but not ready for agent work. `ready` is actionable only when the task has a target `assigned_to` agent and all `depends_on` tasks are `done`.
 
 The Verifier treats the **Acceptance Criteria** checklist as its test spec — it ticks off each item with evidence (test output, diff inspection, lint results) and will not issue a PASS until all items are resolved.
 
