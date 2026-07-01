@@ -12,7 +12,7 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 6. [Phase 6: Pre-Release and npm Registry Preparation](../_archived/phase-6-pre-release-npm.md) — completed
 7. [Phase 7: CLI Polish and Agent Profiles](../_archived/phase-7-cli-polish-agent-model.md) — completed
 8. [Phase 8: Task Management Improvements](../_archived/phase-8-task-management.md) — completed
-9. [Phase 9: Patch Release 0.1.1 Preparation](./phase-9-patch-release-0.1.1.md)
+9. [Phase 9: Patch Release 0.1.1 Preparation](../_archived/phase-9-patch-release-0.1.1.md) — completed
 
 ## Workflow
 
