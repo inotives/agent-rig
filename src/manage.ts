@@ -12,10 +12,10 @@ export function runAdd(args: string[], cwd: string) {
     const root = requireWorkspace(cwd);
     const name = args[0];
     const role = flag(args, "--role");
-    const tool = flag(args, "--tool");
+    const tool = flag(args, "--tool") ?? "codex";
     const profileName = flag(args, "--profile") ?? roleProfile(role ?? "");
 
-    if (!name || !role || !tool) return fail("Usage: agent-rig add <name> --role <role> --tool <tool>");
+    if (!name || !role) return fail("Usage: agent-rig add <name> --role <role> [--tool <tool>]");
     if (!validSlug(name)) return fail("Agent name must be a lowercase slug: a-z, 0-9, -, starting with a letter.");
     if (!validSlug(role)) return fail("Role must be a lowercase slug: a-z, 0-9, -, starting with a letter.");
     if (!tools.has(tool)) return fail(`Unknown tool: ${tool}`);

@@ -304,6 +304,17 @@ test("researcher and writer roles use matching built-in profiles", () => {
   assert.ok(existsSync(join(cwd, ".agent-rig", "docs-writer", "skills", "blog-writing-guide")));
 });
 
+test("add defaults tool to codex when omitted", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+
+  const result = run(["add", "planner", "--role", "planner"], cwd);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "agent.toml"), "utf8"), /tool = "codex"/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "instructions.md"), "utf8"), /# Planner Profile/);
+});
+
 test("agents lists configured agents as text and json", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
