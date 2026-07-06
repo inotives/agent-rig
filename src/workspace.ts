@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { parse } from "@iarna/toml";
+import { fileURLToPath } from "node:url";
 import { loadWorkspaceProfile, profileInstructions, roleProfile } from "./profiles.js";
 
 export type Agent = {
@@ -14,6 +15,10 @@ export type SkillSpec = {
   name: string;
   args?: string[];
 };
+
+const here = dirname(fileURLToPath(import.meta.url));
+const packageRoot = join(here, "..");
+const builtinSkillsDir = join(packageRoot, "templates", "skills");
 
 export const roles = new Set(["supervisor", "planner", "worker", "verifier", "reviewer", "tester", "researcher", "writer", "custom"]);
 export const tools = new Set(["claude", "codex", "opencode", "custom"]);
@@ -85,6 +90,12 @@ export function normalizeInstalledSkill(dir: string, skill: string | SkillSpec) 
   if (!existsSync(direct) && existsSync(nested)) renameSync(nested, direct);
   const wrapper = join(dir, ".agents");
   if (existsSync(wrapper)) rmSync(wrapper, { recursive: true, force: true });
+}
+
+export function installSkill(dir: string, skill: SkillSpec) {
+  if (!skill.source.startsWith("builtin:")) return false;
+  cpSync(join(builtinSkillsDir, skill.source.slice("builtin:".length)), join(dir, skill.name), { recursive: true });
+  return true;
 }
 
 function agentToml(agent: Agent) {

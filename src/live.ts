@@ -4,6 +4,7 @@ import { parse } from "@iarna/toml";
 import { readAgents, requireWorkspace, tools } from "./workspace.js";
 
 const handoffName = /^\d{4}-\d{2}-\d{2}-\d{4}_.+_[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
+const noteName = /^\d{4}-\d{2}-\d{2}-\d{4}_[a-z][a-z0-9-]*_.+\.md$/;
 
 export function runStatus(args: string[], cwd: string) {
   try {
@@ -30,6 +31,7 @@ export function runStart(args: string[], cwd: string) {
     const entry = join(root, agent.name, "instructions.md");
     const sharedCreds = credScope(root, "_shared");
     const agentCreds = credScope(root, agent.name);
+    const resume = resumeContext(cwd, root, agent.role);
 
     console.log(`Agent: ${agent.name}`);
     console.log(`Role: ${agent.role}`);
@@ -43,6 +45,8 @@ export function runStart(args: string[], cwd: string) {
     console.log("Credentials:");
     printCredScope(cwd, "shared", sharedCreds);
     printCredScope(cwd, agent.name, agentCreds);
+    console.log("");
+    printResumeContext(resume);
     console.log("");
     console.log("Skill precedence: agent-local skills, then shared AgentRig skills, then global tool skills.");
     console.log("warning: subscription tools may also load global skills or config; AgentRig assumes local AgentRig skills take precedence when names overlap.");
@@ -105,12 +109,47 @@ function readTaskStatus(file: string) {
 }
 
 function handoffs(cwd: string, dir: string) {
+  return handoffEntries(cwd, dir).slice(0, 5);
+}
+
+function handoffEntries(cwd: string, dir: string) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && handoffName.test(entry.name))
     .map((entry) => ({ file: entry.name, path: relative(cwd, join(dir, entry.name)) }))
+    .sort((a, b) => b.file.localeCompare(a.file));
+}
+
+function recentNotes(cwd: string, dir: string, limit: number) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && noteName.test(entry.name))
+    .map((entry) => ({ file: entry.name, path: relative(cwd, join(dir, entry.name)) }))
     .sort((a, b) => b.file.localeCompare(a.file))
-    .slice(0, 5);
+    .slice(0, limit);
+}
+
+function resumeContext(cwd: string, root: string, role: string) {
+  const allHandoffs = handoffEntries(cwd, join(root, "_shared", "handoff_logs"));
+  const plannerHandoff = allHandoffs.find((entry) => entry.file.endsWith("_planner.md")) ?? null;
+  const latestHandoff = allHandoffs[0] ?? null;
+  const notes = recentNotes(cwd, join(root, "_shared", "notes"), 3);
+  const includeLatest = Boolean(latestHandoff && (!plannerHandoff || latestHandoff.file !== plannerHandoff.file) && (role === "planner" || role === "worker" || role === "reviewer"));
+  return { plannerHandoff, latestHandoff: includeLatest ? latestHandoff : null, notes };
+}
+
+function printResumeContext(model: { plannerHandoff: { path: string } | null; latestHandoff: { path: string } | null; notes: { path: string }[] }) {
+  console.log("Resume context:");
+  if (!model.plannerHandoff && !model.latestHandoff && !model.notes.length) {
+    console.log("  none");
+    return;
+  }
+  if (model.plannerHandoff) console.log(`  Planner handoff: ${model.plannerHandoff.path}`);
+  if (model.latestHandoff) console.log(`  Latest handoff: ${model.latestHandoff.path}`);
+  if (model.notes.length) {
+    console.log("  Shared findings notes:");
+    for (const note of model.notes) console.log(`    ${note.path}`);
+  }
 }
 
 function credScope(root: string, name: string) {

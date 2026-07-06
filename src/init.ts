@@ -3,7 +3,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { addAgent, Agent, normalizeInstalledSkill, repairCredsGitignore, SkillSpec, skillFolderName, workspaceRoot } from "./workspace.js";
+import { addAgent, Agent, installSkill, normalizeInstalledSkill, repairCredsGitignore, SkillSpec, skillFolderName, workspaceRoot } from "./workspace.js";
 import { dedupeSkills, loadWorkspaceProfile, roleProfile, seedProfiles, skillSpecs } from "./profiles.js";
 
 type Pattern = "solo" | "coder-reviewer" | "trinity" | "supervisor-worker" | "swarm" | "testing-reviewer" | "custom";
@@ -102,8 +102,10 @@ function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: 
   mkdirSync(join(root, "_shared"), { recursive: true });
   mkdirSync(join(root, "_shared", "tools"), { recursive: true });
   mkdirSync(join(root, "_shared", "handoff_logs"), { recursive: true });
+  mkdirSync(join(root, "_shared", "notes"), { recursive: true });
   mkdirSync(join(root, "_shared", "tasks"), { recursive: true });
   mkdirSync(join(root, "human"), { recursive: true });
+  writeFileSync(join(root, "_shared", "notes", ".gitkeep"), "", "utf8");
   writeFileSync(join(root, "_shared", "tools", ".gitkeep"), "", "utf8");
   writeFileSync(join(root, "_shared", "tasks", ".gitkeep"), "", "utf8");
   seedProfiles(root);
@@ -160,6 +162,7 @@ function installSkills(group: string, dir: string, skills: SkillSpec[]) {
   mkdirSync(dir, { recursive: true });
   if (skills.length) console.log(`Installing ${group} skills...`);
   for (const skill of skills) {
+    if (installSkill(dir, skill)) continue;
     if (process.env.AGENT_RIG_SKIP_SKILLS === "1") {
       mkdirSync(join(dir, skillFolderName(skill)), { recursive: true });
       continue;

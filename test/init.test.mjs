@@ -64,12 +64,14 @@ test("init --yes creates solo Codex worker scaffold", () => {
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "profiles", "worker.md")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "profiles", "researcher.md")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "profiles", "writer.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "notes", ".gitkeep")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "tools", ".gitkeep")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "agent.toml")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "skills", "rust-best-practices")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "tools", ".gitkeep")));
   assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "agent.toml"), "utf8"), /tool = "codex"/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /# Worker Profile/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /write a short note under `.agent-rig\/_shared\/notes\/`/);
   assert.match(readFileSync(join(cwd, ".gitignore"), "utf8"), /^\.agent-rig\/$/m);
   assert.equal(readFileSync(join(cwd, ".agent-rig", ".creds", ".gitignore"), "utf8"), "*\n!.gitignore\n!*.toml\n!*.env.example\n");
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "skills", "find-skills")));
@@ -313,6 +315,9 @@ test("add defaults tool to codex when omitted", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "agent.toml"), "utf8"), /tool = "codex"/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "instructions.md"), "utf8"), /# Planner Profile/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "instructions.md"), "utf8"), /Use the local `plan-tasks` skill/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "instructions.md"), "utf8"), /cross-session resume notes, not per-task paperwork/);
+  assert.ok(existsSync(join(cwd, ".agent-rig", "planner", "skills", "plan-tasks", "SKILL.md")));
 });
 
 test("agents lists configured agents as text and json", () => {
@@ -424,9 +429,16 @@ test("validate warns for off-format handoff log names", () => {
 test("start prints launch context, credential keys, and skill precedence", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "planner", "--role", "planner"], cwd).status, 0);
   assert.equal(run(["creds", "init", "--shared", "AGENTRIG_GITHUB_SHARED_APIKEY"], cwd).status, 0);
   assert.equal(run(["creds", "init", "--agent", "worker", "AGENTRIG_GITHUB_WORKER_APIKEY"], cwd).status, 0);
   writeFileSync(join(cwd, ".agent-rig", ".creds", "worker.env"), "AGENTRIG_GITHUB_WORKER_APIKEY=secret\n", "utf8");
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "handoff_logs", "2026-07-06-1010_s1_claude_planner.md"), "# planner\n", "utf8");
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "handoff_logs", "2026-07-06-1030_s2_codex_worker.md"), "# worker\n", "utf8");
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "notes", "2026-07-06-0900_worker_repo-quirk.md"), "# note 1\n", "utf8");
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "notes", "2026-07-06-0915_reviewer_contract-gap.md"), "# note 2\n", "utf8");
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "notes", "2026-07-06-0930_worker_retry-pattern.md"), "# note 3\n", "utf8");
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "notes", "2026-07-06-0945_worker_later-note.md"), "# note 4\n", "utf8");
 
   const result = run(["start", "--agent", "worker"], cwd);
   assert.equal(result.status, 0, result.stderr);
@@ -436,6 +448,14 @@ test("start prints launch context, credential keys, and skill precedence", () =>
   assert.match(result.stdout, /\.agent-rig\/\.creds\/_shared\.env/);
   assert.match(result.stdout, /AGENTRIG_GITHUB_SHARED_APIKEY/);
   assert.match(result.stdout, /AGENTRIG_GITHUB_WORKER_APIKEY/);
+  assert.match(result.stdout, /Resume context:/);
+  assert.match(result.stdout, /\.agent-rig\/_shared\/handoff_logs\/2026-07-06-1010_s1_claude_planner\.md/);
+  assert.match(result.stdout, /\.agent-rig\/_shared\/handoff_logs\/2026-07-06-1030_s2_codex_worker\.md/);
+  assert.match(result.stdout, /Shared findings notes:/);
+  assert.match(result.stdout, /\.agent-rig\/_shared\/notes\/2026-07-06-0945_worker_later-note\.md/);
+  assert.match(result.stdout, /\.agent-rig\/_shared\/notes\/2026-07-06-0930_worker_retry-pattern\.md/);
+  assert.match(result.stdout, /\.agent-rig\/_shared\/notes\/2026-07-06-0915_reviewer_contract-gap\.md/);
+  assert.doesNotMatch(result.stdout, /2026-07-06-0900_worker_repo-quirk\.md/);
   assert.match(result.stdout, /Skill precedence/);
   assert.doesNotMatch(result.stdout, /secret/);
 });

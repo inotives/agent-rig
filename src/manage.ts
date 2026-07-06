@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "@iarna/toml";
-import { addAgent, defaultSkills, normalizeInstalledSkill, readAgents, repairCredsGitignore, requireWorkspace, roles, SkillSpec, skillFolderName, tools, validSlug } from "./workspace.js";
+import { addAgent, defaultSkills, installSkill, normalizeInstalledSkill, readAgents, repairCredsGitignore, requireWorkspace, roles, SkillSpec, skillFolderName, tools, validSlug } from "./workspace.js";
 import { listBuiltinProfiles, listWorkspaceProfiles, loadWorkspaceProfile, roleProfile, skillSpecs } from "./profiles.js";
 
 type CredScope = { name: string; file: string; env: string; example: string; scope: string };
@@ -246,6 +246,7 @@ function skillsDir(root: string, shared: boolean, agent?: string) {
 }
 
 function runNpxSkills(skill: SkillSpec, cwd: string, dryRun: boolean) {
+  if (installSkill(cwd, skill)) return 0;
   if (dryRun || process.env.AGENT_RIG_SKIP_SKILLS === "1") {
     mkdirSync(join(cwd, skill.name), { recursive: true });
     console.log(`Skipped npx skills add ${skill.source}.`);

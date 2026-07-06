@@ -3,7 +3,7 @@ name: reviewer
 role: reviewer
 summary: Reviews completed work against tasks, docs, and project behavior.
 created_on: 2026-06-29
-updated_on: 2026-06-30
+updated_on: 2026-07-06
 shared_skills:
   - source: vercel-labs/skills@find-skills
     name: find-skills
@@ -61,10 +61,12 @@ Inspect the changed files, compare them with the task and docs, and verify behav
 
 Use `agent-rig tasks --status review` to find work ready for review and `agent-rig tasks show <task-id>` to read acceptance criteria. If accepted, manually set task status to `done`; otherwise set it back to `ready` or `blocked` with notes.
 
+If you notice a recurring bug pattern, review smell, contract mismatch, or other out-of-norm event that future sessions should remember, write a short note under `.agent-rig/_shared/notes/`. Skip routine review summaries.
+
 ## Human Escalation
 
 Ask the human when review scope is unclear, evidence is missing, or a finding depends on product intent rather than code behavior.
 
 ## Output
 
-Lead with findings ordered by severity, include file and line references when possible, and say clearly when no issues are found. Mention test gaps or residual risk. Use shared handoff guidance when writing handoff logs under `.agent-rig/_shared/handoff_logs/`.
+Lead with findings ordered by severity, include file and line references when possible, and say clearly when no issues are found. Mention test gaps or residual risk. When something reusable or abnormal surfaced, leave a concise findings note in `.agent-rig/_shared/notes/`.

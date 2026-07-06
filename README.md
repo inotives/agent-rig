@@ -33,7 +33,9 @@
 
 AgentRig is a TypeScript CLI tool for scaffolding a filesystem-first agent workspace into any project.
 
-It creates a `.agent-rig/` directory where agents, shared context, Markdown task files, handoff logs, credentials, and launch instructions live as ordinary files. AgentRig does not orchestrate AI APIs; users run subscription tools such as Claude, Codex, OpenCode, or custom tools directly.
+It creates a `.agent-rig/` directory where agents, shared context, Markdown task files, findings notes, handoff logs, credentials, and launch instructions live as ordinary files. AgentRig does not orchestrate AI APIs; users run subscription tools such as Claude, Codex, OpenCode, or custom tools directly.
+
+Handoff logs are intended for cross-session resume notes when work stops midstream or a session closes after a meaningful milestone. They are not meant to duplicate normal planner, worker, or reviewer task flow, which should already live in phase docs, task files, code review notes, and task status changes.
 
 The first filesystem-only MVP is implemented. AgentRig can scaffold a workspace, manage agents and credentials, install profile-declared skills, create Markdown-backed tasks, run the MVP watch loop, and report live status.
 
@@ -43,7 +45,7 @@ AgentRig workspaces are ordinary project files:
 
 ```text
 .agent-rig/
-├── _shared/        # context, task files, session state, profiles, handoff logs
+├── _shared/        # context, task files, session state, profiles, notes, handoff logs
 ├── .creds/         # gitignored local secrets
 ├── <agent>/        # agent.toml, instructions.md, context, skills, tools, runs
 └── human/          # human approval, unblock, and override helpers
@@ -52,6 +54,10 @@ AgentRig workspaces are ordinary project files:
 The default `agent-rig init --yes` workspace is a solo `worker` agent using `codex`. Interactive setup can scaffold solo, coder-reviewer, trinity, supervisor-worker, swarm, testing-reviewer, or custom patterns.
 
 Agent instructions start from editable profiles in `.agent-rig/_shared/profiles/`. Built-in profiles are `planner`, `worker`, `reviewer`, `researcher`, and `writer`; custom profiles are plain Markdown files with YAML frontmatter.
+
+In practice, use `_shared/handoff_logs/` for session-end operational context such as current branch, active task or phase, unresolved blockers, and the exact next step. Do not add a handoff after every worker or reviewer task unless the task flow itself failed to capture something important.
+
+Use `_shared/notes/` for short worker or reviewer findings that are worth carrying forward across sessions: reusable implementation patterns, repo quirks, recurring review findings, or out-of-norm events. Do not use it for routine progress logs.
 
 ## Dependencies
 
@@ -149,7 +155,7 @@ agent-rig status
 | `agent-rig creds` | Create credential placeholders and `.env.example` files. |
 | `agent-rig skills` | Install and list shared or agent-local skills. |
 | `agent-rig status` | Show live session state, task counts, and recent handoffs. |
-| `agent-rig start --agent <agent-name>` | Print neutral launch guidance for a configured agent. |
+| `agent-rig start --agent <agent-name>` | Print launch guidance plus relevant resume context for a configured agent. |
 | `agent-rig tasks create "<title>"` | Create a shared Markdown task file. |
 | `agent-rig tasks` | List shared task files. |
 | `agent-rig tasks show <task-id>` | Print the canonical task Markdown. |
