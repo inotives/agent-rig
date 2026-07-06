@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Tasks"
+  short_description: "Plan phases and generate AgentRig tasks"
+  default_prompt: "Use $plan-tasks to plan the next project phase, write phase docs, and generate AgentRig worker tasks."

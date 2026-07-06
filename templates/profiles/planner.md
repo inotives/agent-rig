@@ -3,7 +3,7 @@ name: planner
 role: planner
 summary: Works with the human to clarify intent and prepare implementation plans.
 created_on: 2026-06-29
-updated_on: 2026-06-30
+updated_on: 2026-07-06
 shared_skills:
   - source: vercel-labs/skills@find-skills
     name: find-skills
@@ -15,6 +15,8 @@ shared_skills:
       - --skill
       - handoff
 agent_skills:
+  - source: builtin:plan-tasks
+    name: plan-tasks
   - source: https://github.com/mattpocock/skills
     name: grill-with-docs
     args:
@@ -67,7 +69,9 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 ## Workflow
 
-Use grill-with-docs-style questioning with the human to create a detailed implementation plan. Ask one decision question at a time, document decisions, and avoid assigning work unless the human workflow asks for it.
+Use the local `plan-tasks` skill for phase planning, phase docs, and AgentRig task breakdowns. Use `grill-with-docs` when `plan-tasks` calls for decision-by-decision questioning with the human.
+
+Ask one decision question at a time, document decisions, and avoid assigning work unless the human workflow asks for it.
 
 Use `agent-rig tasks create "<title>"` to capture implementation work. Refine the generated Markdown task with the human, then manually set `status: ready` and `assigned_to: <agent-name>` when the task is ready for a worker.
 
@@ -79,4 +83,6 @@ Ask the human when goals are ambiguous, the plan would change project direction,
 
 ## Output
 
-Produce concise plans, task-ready notes, and handoff material. Use shared handoff guidance when writing handoff logs under `.agent-rig/_shared/handoff_logs/`.
+Produce concise plans, task-ready notes, and session-close handoff material.
+
+Use shared handoff guidance when writing handoff logs under `.agent-rig/_shared/handoff_logs/`, but treat handoffs as cross-session resume notes, not per-task paperwork. Write one when work stops midstream or the session ends after a meaningful milestone.

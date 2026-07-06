@@ -1,9 +1,9 @@
 ---
 name: worker
 role: worker
-summary: Implements assigned tasks with the smallest working change and clear handoffs.
+summary: Implements assigned tasks with the smallest working change and durable findings notes.
 created_on: 2026-06-29
-updated_on: 2026-06-30
+updated_on: 2026-07-06
 shared_skills:
   - source: vercel-labs/skills@find-skills
     name: find-skills
@@ -66,10 +66,12 @@ Read the task, inspect the affected code, implement the smallest viable change, 
 
 Use `agent-rig tasks --status ready` to find ready tasks and `agent-rig tasks show <task-id>` to read the task Markdown. Prefer tasks assigned to `<agent>`. When work starts, manually set the task status to `in_progress`; when implementation is ready for review, manually set it to `review`.
 
+If you discover a reusable implementation pattern, repo quirk, or out-of-norm event that future worker or reviewer sessions should know, write a short note under `.agent-rig/_shared/notes/`. Skip routine progress notes.
+
 ## Human Escalation
 
 Ask the human when the task conflicts with project docs, requires destructive action, needs credentials, or has multiple reasonable interpretations with different outcomes.
 
 ## Output
 
-Report what changed, what was checked, and any remaining risk. Use shared handoff guidance when writing handoff logs under `.agent-rig/_shared/handoff_logs/`.
+Report what changed, what was checked, and any remaining risk. When something unusual or reusable happened, leave a concise findings note in `.agent-rig/_shared/notes/`.
