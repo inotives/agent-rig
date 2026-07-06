@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.3 - 2026-07-06
+
+- Added an AgentRig-local `plan-tasks` skill to the built-in planner profile.
+- Updated planner instructions to use `plan-tasks` for phase planning and task breakdowns.
+- Narrowed handoff guidance to planner-owned cross-session resume notes.
+- Added shared findings notes under `.agent-rig/_shared/notes/` for durable worker and reviewer observations.
+- Updated `agent-rig start --agent <name>` to print resume-context pointers for recent handoffs and shared findings notes.
+- Added the ad hoc Phase 12 doc for resume-context and findings-notes workflow hardening.
+
 ## 0.1.2 - 2026-07-01
 
 - Added shared task lifecycle commands: `tasks set-status`, `tasks assign`, `tasks set-type`, `tasks block`, `tasks unblock`, `tasks done`, and `tasks next`.
