@@ -15,7 +15,8 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 9. [Phase 9: Patch Release 0.1.1 Preparation](../_archived/phase-9-patch-release-0.1.1.md) — completed
 10. [Phase 10: Task Lifecycle and Shared Queue Flow](../_archived/phase-10-task-lifecycle-shared-queue.md) — completed
 11. [Phase 11: GitHub Issues Backlog Sync](../_archived/phase-11-github-issues-backlog-sync.md) — completed
-12. [Phase 12: Ad Hoc Resume Context and Findings Notes](phase-12-adhoc-resume-context-and-findings-notes.md) — ad hoc follow-up
+12. [Phase 12: Ad Hoc Resume Context and Findings Notes](../_archived/phase-12-adhoc-resume-context-and-findings-notes.md) — completed
+13. [Phase 13: Worker-Reviewer Loop](phase-13-worker-reviewer-loop.md) — planned
 
 ## Workflow
 
