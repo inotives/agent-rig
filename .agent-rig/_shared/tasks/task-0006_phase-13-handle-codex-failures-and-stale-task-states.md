@@ -2,16 +2,22 @@
 id: task-0006
 title: "Phase 13: handle Codex failures and stale task states"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-15
-updated_on: 2026-07-15
+updated_on: 2026-07-16
 priority: normal
 parent: ""
 depends_on:
   - task-0005
+message: "Accepted: loop now blocks non-zero codex exits and stale
+  in_progress/review states using the existing blocker pattern; result.json is
+  rewritten with final_task_status and blocked failure_summary after post-run
+  reconciliation; accepted reviewer done/ready and worker review transitions are
+  covered; npm test passed (54)."
 ---
+
 
 # Task
 
@@ -63,3 +69,21 @@ Add failure handling for non-zero Codex exits and stale task statuses after work
 - [ ] `npm test` passes.
 
 ## Notes
+
+- Updated `src/tasks.ts` so `runLoop` now post-processes every Codex run before returning:
+  non-zero exits become `blocked`, worker runs that remain `in_progress` become
+  `blocked`, and reviewer runs that remain `review` become `blocked`.
+- Added shared helpers to reuse the existing blocker semantics: reload the task
+  from disk after Codex exits, apply `blocked_reason` / `blocked_on`, append a
+  `## Blockers` entry, and then rewrite the run artifact with the final
+  post-handling task status.
+- Extended `result.json` handling so loop run records now reflect the final task
+  status after stale-state repair or non-zero failure handling, not just the
+  immediate pre-repair state.
+- Extended the fake Codex test harness so tests can drive explicit task status
+  transitions and reviewer note appends by mutating the task file named in the
+  loop prompt.
+- Updated loop coverage to verify accepted reviewer `done`, accepted reviewer
+  `ready` with notes, accepted worker `review`, non-zero reviewer failure,
+  missing-Codex failure, stale worker blocking, and stale reviewer blocking.
+- Ran `npm test` successfully: 54 passed, 0 failed.

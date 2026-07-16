@@ -2,7 +2,7 @@
 id: task-0002
 title: "Phase 13: add loop command shell and locking"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-15
@@ -11,7 +11,11 @@ priority: normal
 parent: ""
 depends_on:
   - task-0001
+message: "Accepted: loop command wired and guarded as scoped for task 0002;
+  help, lock behavior, unknown/non-Codex agent failures, and watch regression
+  checks verified; npm test and git diff --check clean."
 ---
+
 
 # Task
 
@@ -74,3 +78,11 @@ Add the `agent-rig loop` CLI shell with option parsing, help text, and `.agent-r
 - [ ] `npm test` passes.
 
 ## Notes
+
+- Added `agent-rig loop` command routing in `src/index.ts` and placeholder loop shell behavior in `src/tasks.ts`.
+- Added `--once`, `--worker`, `--reviewer`, and `--interval` parsing plus `agent-rig loop --help` text.
+- Validated selected worker/reviewer agents exist and require `tool = "codex"` with a Phase 13 Codex-only error.
+- Added `.agent-rig/_shared/loop.lock` acquire/release behavior without changing `watch.lock`.
+- Left Codex execution, task selection, and continuous polling for later Phase 13 tasks.
+- Updated README command table for `agent-rig loop --once`.
+- Ran `npm test` successfully: 40 passed, 0 failed.

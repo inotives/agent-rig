@@ -37,7 +37,7 @@ It creates a `.agent-rig/` directory where agents, shared context, Markdown task
 
 Handoff logs are intended for cross-session resume notes when work stops midstream or a session closes after a meaningful milestone. They are not meant to duplicate normal planner, worker, or reviewer task flow, which should already live in phase docs, task files, code review notes, and task status changes.
 
-The first filesystem-only MVP is implemented. AgentRig can scaffold a workspace, manage agents and credentials, install profile-declared skills, create Markdown-backed tasks, run the MVP watch loop, and report live status.
+The current MVP can scaffold a workspace, manage agents and credentials, install profile-declared skills, create Markdown-backed tasks, run a Codex-backed worker-reviewer loop, and report live status.
 
 ## Core Model
 
@@ -128,7 +128,7 @@ AgentRig installs default shared skills during setup. To skip network skill inst
 AGENT_RIG_SKIP_SKILLS=1 agent-rig init --yes
 ```
 
-Filesystem-only MVP flow:
+Basic task flow:
 
 ```bash
 agent-rig tasks create "Implement X" --assigned-to worker --status ready --type task
@@ -138,6 +138,24 @@ agent-rig tasks next --agent worker --claim
 agent-rig tasks show task-0001
 agent-rig status
 ```
+
+Phase 13 worker-reviewer flow:
+
+```bash
+# planner or human prepares ready tasks first
+git switch -c feat/my-phase-work
+agent-rig loop
+```
+
+`agent-rig loop` is Phase 13's standard execution path. It is Codex-only in this phase, runs continuously by default, keeps branch creation manual and outside the loop, and uses the existing task lifecycle:
+
+```text
+ready -> in_progress -> review -> done
+                        \-> ready
+                        \-> blocked
+```
+
+Use `agent-rig loop --once` for a deterministic single tick in tests or scripts. `agent-rig watch --once` still exists for the older filesystem-only single-task adapter and is unchanged by the Phase 13 loop work.
 
 ## Common Commands
 
@@ -165,11 +183,13 @@ agent-rig status
 | `agent-rig tasks assign <task-id> <agent-name>` | Assign a shared task to an agent. |
 | `agent-rig tasks block <task-id> --reason <reason>` | Mark a task blocked and record the blocker. |
 | `agent-rig tasks done <task-id>` | Mark a task done. |
+| `agent-rig loop` | Run the Codex-only worker-reviewer loop continuously. |
+| `agent-rig loop --once` | Run one Codex-only worker-reviewer loop tick and exit. |
 | `agent-rig watch --once` | Process one ready shared task and exit. |
 
 ## Implementation Phases
 
-The first MVP is split into five completed implementation phases, followed by a pre-release preparation phase:
+The current implementation history is split into completed archived phases plus the active Phase 13 worker-reviewer loop:
 
 ```text
 1. CLI scaffold
@@ -178,6 +198,8 @@ The first MVP is split into five completed implementation phases, followed by a 
 4. Live state and launch
 5. First MVP watch loop
 6. Pre-release and npm registry preparation
+...
+13. Worker-reviewer loop
 ```
 
 See [docs/phases](docs/phases/).
