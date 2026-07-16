@@ -31,3 +31,4 @@ temp/
 .codegraph/
 .agent-rig/.creds/
 .agent-rig/*/logs/
+.agent-rig/*/runs/

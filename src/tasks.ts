@@ -361,10 +361,62 @@ function tasksSync(args: string[], cwd: string) {
 export async function runWatch(args: string[], cwd: string) {
   try {
     if (args.length !== 1 || args[0] !== "--once") return fail("Usage: agent-rig watch --once");
-    return withLock(cwd, () => processReady(cwd));
+    return withLock(cwd, "watch.lock", "watch.lock already exists. Stop the running watcher or remove the stale lock.", () => processReady(cwd));
   } catch (cause) {
     return fail(message(cause));
   }
+}
+
+export async function runLoop(args: string[], cwd: string) {
+  try {
+    if (args.includes("--help") || args.includes("-h") || args.includes("help")) return loopHelp();
+    const options = parseOptions(args, new Set(["--once", "--worker", "--reviewer", "--interval"]), new Set(["--once"]));
+    const root = requireWorkspace(cwd);
+    const workerName = option(options, "--worker") ?? "worker";
+    const reviewerName = option(options, "--reviewer") ?? "reviewer";
+    const intervalText = option(options, "--interval") ?? "60";
+    const interval = Number(intervalText);
+    if (!Number.isInteger(interval) || interval < 1) return fail(`Invalid interval: ${intervalText}`);
+    const once = options.has("--once");
+    const maxTicks = loopMaxTicks();
+    const intervalMs = loopIntervalMs(interval);
+
+    const workerAgent = requireCodexAgent(root, workerName, "worker");
+    const reviewerAgent = requireCodexAgent(root, reviewerName, "reviewer");
+
+    return await withLock(cwd, "loop.lock", "loop.lock already exists. Stop the running loop or remove the stale lock.", async () => {
+      let ticks = 0;
+      while (true) {
+        runLoopTick(root, cwd, workerName, reviewerName, workerAgent, reviewerAgent);
+        ticks += 1;
+        if (once || (maxTicks > 0 && ticks >= maxTicks)) return 0;
+        console.log(`Waiting ${interval} seconds before next poll.`);
+        await sleep(intervalMs);
+      }
+    });
+  } catch (cause) {
+    return fail(message(cause));
+  }
+}
+
+function runLoopTick(root: string, cwd: string, workerName: string, reviewerName: string, workerAgent: Agent, reviewerAgent: Agent) {
+  const selection = selectLoopTask(readSharedTasks(root, cwd), workerName);
+  if (selection.kind === "review") {
+    const result = runCodexLoop(root, cwd, reviewerAgent, selection.task);
+    handleLoopResult(cwd, result, reviewerAgent, selection.task.id);
+    if (result.exitStatus !== 0) throw new Error(codexFailureMessage(result.exitStatus, reviewerName, "reviewer", selection.task.id, result.stderr, result.error));
+    console.log(`Ran reviewer ${reviewerName} on ${selection.task.id}.`);
+    return;
+  }
+  if (selection.kind === "worker") {
+    updateSharedTask(selection.task, { status: "in_progress", updated_on: dateStamp(new Date()) });
+    const result = runCodexLoop(root, cwd, workerAgent, selection.task);
+    handleLoopResult(cwd, result, workerAgent, selection.task.id);
+    if (result.exitStatus !== 0) throw new Error(codexFailureMessage(result.exitStatus, workerName, "worker", selection.task.id, result.stderr, result.error));
+    console.log(`Ran worker ${workerName} on ${selection.task.id}.`);
+    return;
+  }
+  console.log("No actionable loop task.");
 }
 
 async function processReady(cwd: string) {
@@ -392,7 +444,7 @@ function runOne(cwd: string, root: string, agent: Agent, task: SharedTask) {
   try {
     const runDir = join(root, agent.name, "runs", runId);
     mkdirSync(runDir, { recursive: true });
-    writeFileSync(join(runDir, "prompt.md"), prompt(cwd, root, agent, task, task.body), "utf8");
+    writeFileSync(join(runDir, "prompt.md"), assemblePrompt(root, agent, task), "utf8");
     const blocked = task.meta.simulate === "blocked";
     const status = blocked ? "blocked" : "done";
     const msg = `Fake adapter ${blocked ? "blocked" : "completed"} ${task.id}.`;
@@ -414,21 +466,183 @@ function finish(root: string, agent: Agent, task: SharedTask, runDir: string, ru
   updateAgentSession(root, agent, status === "done" ? "idle" : "blocked");
 }
 
-function prompt(cwd: string, root: string, agent: Agent, task: SharedTask, taskBody: string) {
+function assemblePrompt(root: string, agent: Agent, task: SharedTask) {
+  const agentInstructionsPath = join(".agent-rig", agent.name, "instructions.md");
+  const agentContextPath = join(".agent-rig", agent.name, "context.md");
+  const sharedContextPath = join(".agent-rig", "_shared", "context.md");
+  const agentSkillsPath = join(".agent-rig", agent.name, "skills");
+  const sharedSkillsPath = join(".agent-rig", "_shared", "skills");
+  const agentToolsPath = join(".agent-rig", agent.name, "tools");
+  const sharedToolsPath = join(".agent-rig", "_shared", "tools");
+  const phaseDocPath = inferPhaseDocPath(task);
   return [
-    "# Shared Context",
+    "# AgentRig Loop Prompt",
+    `Agent: ${agent.name}`,
+    `Role: ${agent.role}`,
+    `Task ID: ${task.id}`,
+    `Task file: ${task.path}`,
+    phaseDocPath ? `Phase doc: ${phaseDocPath}` : "Phase doc: not inferred",
+    "",
+    "# Required Task Outcome",
+    lifecycleInstructions(agent.role),
+    "",
+    "# Skill And Tool Precedence",
+    `1. Read applicable skills from \`${agentSkillsPath}/\` first.`,
+    `2. Then read applicable shared skills from \`${sharedSkillsPath}/\`.`,
+    "3. Use global Codex skills only when no AgentRig-local skill applies.",
+    `4. Check \`${agentToolsPath}/\` before \`${sharedToolsPath}/\`.`,
+    "5. Do not assume a project-local tool exists unless an actual file or script exists there.",
+    "6. Do not treat AgentRig local tools as native Codex tools in this run.",
+    "",
+    "# Shared Context File",
+    sharedContextPath,
+    "",
     readFileSync(join(root, "_shared", "context.md"), "utf8").trim(),
-    "# Agent Instructions",
+    "",
+    "# Agent Instructions File",
+    agentInstructionsPath,
+    "",
     readFileSync(join(root, agent.name, "instructions.md"), "utf8").trim(),
-    "# Agent Context",
+    "",
+    "# Agent Context File",
+    agentContextPath,
+    "",
     readFileSync(join(root, agent.name, "context.md"), "utf8").trim(),
-    "# Task",
-    `Title: ${task.title}`,
     "",
-    taskBody.trim(),
+    "# Task Markdown",
+    task.path,
     "",
-    `Task file: ${task.path}`
-  ].join("\n\n") + "\n";
+    task.body.trim()
+  ].join("\n") + "\n";
+}
+
+export function buildLoopPrompt(cwd: string, agentName: string, taskId: string) {
+  const root = requireWorkspace(cwd);
+  const agent = requireAgent(root, agentName);
+  const task = requireSharedTask(cwd, taskId);
+  return assemblePrompt(root, agent, task);
+}
+
+function runCodexLoop(root: string, cwd: string, agent: Agent, task: SharedTask) {
+  const started = new Date();
+  const runId = nextRunId(join(root, agent.name, "runs"), task.id, started);
+  const runDir = join(root, agent.name, "runs", runId);
+  const prompt = assemblePrompt(root, agent, task);
+  const lastMessagePath = join(runDir, "last-message.md");
+  const baseArgs = ["exec", "-C", cwd, "--sandbox", "workspace-write", "--ask-for-approval", "never"];
+
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, "prompt.md"), prompt, "utf8");
+  if (!existsSync(lastMessagePath)) writeFileSync(lastMessagePath, "", "utf8");
+
+  const preferredArgs = [...baseArgs, "--output-last-message", lastMessagePath, "-"];
+  const fallbackArgs = [...baseArgs, "-"];
+  let args = preferredArgs;
+  let result = spawnSync("codex", args, { cwd, input: prompt, encoding: "utf8" });
+  if (codexDoesNotSupportLastMessage(result)) {
+    args = fallbackArgs;
+    result = spawnSync("codex", args, { cwd, input: prompt, encoding: "utf8" });
+  }
+  if (!existsSync(lastMessagePath)) writeFileSync(lastMessagePath, "", "utf8");
+
+  const finalTask = requireSharedTask(cwd, task.id);
+  const exitStatus = result.status ?? (result.error ? 1 : 0);
+  const stdout = spawnText(result.stdout);
+  const stderr = spawnText(result.stderr);
+  const error = result.error ? message(result.error) : "";
+  const failureSummary = exitStatus === 0 ? "" : codexFailureMessage(exitStatus, agent.name, agent.role, task.id, stderr, error);
+  writeJson(join(runDir, "result.json"), {
+    agent: agent.name,
+    role: agent.role,
+    tool: agent.tool,
+    task_id: task.id,
+    command_args: args,
+    exit_status: exitStatus,
+    started_at: started.toISOString(),
+    finished_at: new Date().toISOString(),
+    final_task_status: finalTask.status,
+    stdout,
+    stderr,
+    error,
+    failure_summary: failureSummary
+  });
+  return { exitStatus, stdout, stderr, error, failureSummary, runDir };
+}
+
+function handleLoopResult(cwd: string, result: ReturnType<typeof runCodexLoop>, agent: Agent, taskId: string) {
+  const task = requireSharedTask(cwd, taskId);
+  if (result.exitStatus !== 0) {
+    blockLoopTask(task, result.failureSummary || codexFailureMessage(result.exitStatus, agent.name, agent.role, taskId, result.stderr, result.error));
+  } else if (agent.role === "worker" && task.status === "in_progress") {
+    blockLoopTask(task, `worker ${agent.name} left ${taskId} in_progress after codex run`);
+  } else if (agent.role === "reviewer" && task.status === "review") {
+    blockLoopTask(task, `reviewer ${agent.name} left ${taskId} in review after codex run`);
+  }
+  const finalTask = requireSharedTask(cwd, taskId);
+  updateLoopResult(result.runDir, {
+    final_task_status: finalTask.status,
+    failure_summary: finalTask.status === "blocked"
+      ? String(finalTask.meta.blocked_reason ?? result.failureSummary ?? "")
+      : result.failureSummary
+  });
+}
+
+function blockLoopTask(task: SharedTask, reason: string) {
+  const today = dateStamp(new Date());
+  updateSharedTask(task, {
+    status: "blocked",
+    blocked_reason: reason,
+    blocked_on: today,
+    message: reason,
+    updated_on: today
+  }, appendBlocker(task.body, today, reason));
+}
+
+function updateLoopResult(runDir: string, updates: Record<string, unknown>) {
+  const file = join(runDir, "result.json");
+  const data = JSON.parse(readFileSync(file, "utf8"));
+  writeJson(file, { ...data, ...updates });
+}
+
+function codexDoesNotSupportLastMessage(result: ReturnType<typeof spawnSync>) {
+  if (result.status === 0 || !result.stderr) return false;
+  const stderr = spawnText(result.stderr);
+  return /output-last-message|unknown option|unsupported option/i.test(stderr);
+}
+
+function spawnText(value: string | NodeJS.ArrayBufferView | null | undefined) {
+  if (!value) return "";
+  return typeof value === "string" ? value : Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("utf8");
+}
+
+function codexFailureMessage(exitStatus: number, agentName: string, role: string, taskId: string, stderr: string, error: string) {
+  if (isCodexMissing(error)) {
+    return `codex executable not found for ${role} ${agentName} on ${taskId}. Install Codex or make \`codex\` available on PATH.`;
+  }
+  const detail = firstNonEmptyLine(stderr) || error;
+  return detail
+    ? `codex exited with status ${exitStatus} for ${role} ${agentName} on ${taskId}: ${detail}`
+    : `codex exited with status ${exitStatus} for ${role} ${agentName} on ${taskId}.`;
+}
+
+function firstNonEmptyLine(text: string) {
+  return text.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
+}
+
+function isCodexMissing(error: string) {
+  return /ENOENT/i.test(error);
+}
+
+function lifecycleInstructions(role: string) {
+  if (role === "reviewer") {
+    return "Review the task against the phase docs and current repo behavior. Before you finish, leave the task in exactly one terminal state for this run: `done` if accepted, `ready` if fixes are required, or `blocked` if progress is impossible.";
+  }
+  return "Implement only the assigned task. Before you finish, leave the task in exactly one terminal state for this run: `review` when the work is ready for review, or `blocked` when you cannot continue.";
+}
+
+function inferPhaseDocPath(task: SharedTask) {
+  const match = `${task.title}\n${task.body}`.match(/docs\/phases\/[a-z0-9._-]+\.md/i);
+  return match?.[0] ?? "";
 }
 
 function writeHandoff(root: string, agent: Agent, task: SharedTask, runId: string, status: string, msg: string) {
@@ -479,25 +693,73 @@ function handoffFileName(agent: Agent, runId: string, date: Date) {
   return `${timestamp(date).slice(0, -2)}_${runId}_${agent.tool}_${agent.role}.md`;
 }
 
-async function withLock(cwd: string, fn: () => Promise<number>) {
-  const cleanup = lock(cwd);
+function loopHelp() {
+  console.log(`Usage: agent-rig loop [--once] [--worker <agent>] [--reviewer <agent>] [--interval <seconds>]
+
+Options:
+  --once                Run one loop tick and exit
+  --worker <agent>      Worker agent name (default: worker)
+  --reviewer <agent>    Reviewer agent name (default: reviewer)
+  --interval <seconds>  Poll interval for continuous mode (default: 60)
+
+Examples:
+  agent-rig loop
+  agent-rig loop --once
+  agent-rig loop --worker worker
+  agent-rig loop --reviewer reviewer
+  agent-rig loop --interval 60`);
+  return 0;
+}
+
+async function withLock(cwd: string, lockName: string, lockError: string, fn: () => Promise<number>) {
+  const cleanup = lock(cwd, lockName, lockError);
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
+    const handler = () => {
+      cleanup();
+      process.exit(code);
+    };
+    handlers.set(signal, handler);
+    process.once(signal, handler);
+  }
   try {
     return await fn();
   } finally {
+    for (const [signal, handler] of handlers) process.removeListener(signal, handler);
     cleanup();
   }
 }
 
-function lock(cwd: string) {
-  const file = join(requireWorkspace(cwd), "_shared", "watch.lock");
+function loopMaxTicks() {
+  const value = Number(process.env.AGENT_RIG_LOOP_MAX_TICKS ?? "0");
+  return Number.isInteger(value) && value > 0 ? value : 0;
+}
+
+function loopIntervalMs(intervalSeconds: number) {
+  const override = Number(process.env.AGENT_RIG_LOOP_INTERVAL_MS ?? "");
+  return Number.isInteger(override) && override >= 0 ? override : intervalSeconds * 1000;
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function lock(cwd: string, lockName: string, lockError: string) {
+  const file = join(requireWorkspace(cwd), "_shared", lockName);
   try {
     writeFileSync(file, String(process.pid), { flag: "wx" });
   } catch {
-    throw new Error("watch.lock already exists. Stop the running watcher or remove the stale lock.");
+    throw new Error(lockError);
   }
   return () => {
     if (existsSync(file)) unlinkSync(file);
   };
+}
+
+function requireCodexAgent(root: string, name: string, label: string) {
+  const agent = requireAgent(root, name);
+  if (agent.tool !== "codex") throw new Error(`Phase 13 loop supports Codex only. ${label} agent "${name}" has tool "${agent.tool}".`);
+  return agent;
 }
 
 function sharedTasksDir(root: string) {
@@ -557,6 +819,14 @@ function nextActionableTask(tasks: SharedTask[], agentName: string | undefined, 
     return task;
   }
   return undefined;
+}
+
+function selectLoopTask(tasks: SharedTask[], workerName: string) {
+  const reviewTask = tasks.find((task) => task.status === "review");
+  if (reviewTask) return { kind: "review" as const, task: reviewTask };
+  const workerTask = nextActionableTask(tasks, workerName, []);
+  if (workerTask) return { kind: "worker" as const, task: workerTask };
+  return { kind: "none" as const };
 }
 
 type GithubIssue = {

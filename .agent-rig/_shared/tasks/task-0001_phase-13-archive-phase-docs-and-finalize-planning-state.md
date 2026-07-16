@@ -2,7 +2,7 @@
 id: task-0001
 title: "Phase 13: archive phase docs and finalize planning state"
 type: doc
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-15
@@ -10,7 +10,10 @@ updated_on: 2026-07-15
 priority: normal
 parent: ""
 depends_on: []
+message: "Accepted: phase docs state verified; Phase 12 archived, Phase 13
+  active in docs index, no runtime code changes, git diff --check clean."
 ---
+
 
 # Task
 
@@ -54,3 +57,10 @@ Make the phase docs/index reflect that Phase 12 is archived and Phase 13 is the 
 - [ ] `git diff --check` passes.
 
 ## Notes
+
+- Verified `docs/_archived/phase-12-adhoc-resume-context-and-findings-notes.md` exists.
+- Verified `docs/phases/phase-12-adhoc-resume-context-and-findings-notes.md` does not exist.
+- Verified `docs/phases/phase-13-worker-reviewer-loop.md` exists and captures the accepted Codex-backed worker-reviewer loop decisions.
+- Verified `docs/phases/README.md` links Phase 12 to `../_archived/phase-12-adhoc-resume-context-and-findings-notes.md` and Phase 13 to `phase-13-worker-reviewer-loop.md`.
+- Ran `git diff --check` with no findings.
+- No runtime code changed in this task.

@@ -2,7 +2,7 @@
 id: task-0004
 title: "Phase 13: assemble Codex worker and reviewer prompts"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-15
@@ -11,7 +11,12 @@ priority: normal
 parent: ""
 depends_on:
   - task-0003
+message: "Accepted: role-aware loop prompts verified for worker and reviewer;
+  required paths, lifecycle states, phase-doc inference, local skill/tool
+  precedence, and no-native-tool-mounting wording present; npm test and git diff
+  --check clean."
 ---
+
 
 # Task
 
@@ -73,3 +78,10 @@ Build worker and reviewer prompt assembly for headless Codex loop runs.
 - [ ] `npm test` passes.
 
 ## Notes
+
+- Replaced the generic run prompt in `src/tasks.ts` with a role-aware AgentRig loop prompt assembler.
+- Added `buildLoopPrompt(cwd, agentName, taskId)` for deterministic prompt assertions in tests.
+- Worker and reviewer prompts now include task id, task path, task Markdown body, shared context path/content, agent instructions path/content, agent context path/content, inferred phase doc path when present, and explicit role-specific terminal task states.
+- Prompts now explicitly enforce AgentRig-local skill precedence, AgentRig-local tool precedence, and the no-native-tool-mounting rule.
+- Left actual Codex execution and run-record command wiring for later Phase 13 tasks.
+- Ran `npm test` successfully: 46 passed, 0 failed.

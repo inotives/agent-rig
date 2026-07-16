@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { buildLoopPrompt } from "../dist/tasks.js";
 
 const cli = new URL("../dist/index.js", import.meta.url).pathname;
 
@@ -40,6 +41,63 @@ process.exit(1);
 `, "utf8");
   chmodSync(join(bin, "gh"), 0o755);
   return { PATH: `${bin}:${process.env.PATH ?? ""}` };
+}
+
+function fakeCodex(cwd) {
+  const bin = join(cwd, "fake-codex-bin");
+  const logDir = join(cwd, "fake-codex-log");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(logDir, { recursive: true });
+  writeFileSync(join(bin, "codex"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+const input = fs.readFileSync(0, "utf8");
+const logDir = process.env.AGENT_RIG_FAKE_CODEX_LOG_DIR;
+fs.writeFileSync(path.join(logDir, "args.json"), JSON.stringify(args, null, 2), "utf8");
+fs.writeFileSync(path.join(logDir, "stdin.txt"), input, "utf8");
+const counterFile = path.join(logDir, "call-count.txt");
+const callIndex = Number(fs.existsSync(counterFile) ? fs.readFileSync(counterFile, "utf8") : "0") + 1;
+fs.writeFileSync(counterFile, String(callIndex), "utf8");
+const taskFileMatch = input.match(/^Task file: (.+)$/m);
+const taskFile = taskFileMatch ? path.join(process.cwd(), taskFileMatch[1].trim()) : "";
+const taskIdMatch = input.match(/^Task ID: (.+)$/m);
+const roleMatch = input.match(/^Role: (.+)$/m);
+fs.appendFileSync(path.join(logDir, "calls.jsonl"), JSON.stringify({ callIndex, taskId: taskIdMatch ? taskIdMatch[1].trim() : "", role: roleMatch ? roleMatch[1].trim() : "", args }) + "\\n");
+const lastMessageIndex = args.indexOf("--output-last-message");
+if (process.env.AGENT_RIG_FAKE_CODEX_REJECT_LAST_MESSAGE === "1" && lastMessageIndex !== -1) {
+  process.stderr.write("error: unknown option '--output-last-message'\\n");
+  process.exit(2);
+}
+if (lastMessageIndex !== -1 && args[lastMessageIndex + 1]) {
+  fs.mkdirSync(path.dirname(args[lastMessageIndex + 1]), { recursive: true });
+  fs.writeFileSync(args[lastMessageIndex + 1], "Fake Codex final message.\\n", "utf8");
+}
+const statusSequence = (process.env.AGENT_RIG_FAKE_CODEX_SET_STATUS_SEQUENCE || "").split(",").map((item) => item.trim()).filter(Boolean);
+const nextStatus = statusSequence[callIndex - 1] || process.env.AGENT_RIG_FAKE_CODEX_SET_STATUS || "";
+if (taskFile && nextStatus) {
+  const task = fs.readFileSync(taskFile, "utf8");
+  fs.writeFileSync(taskFile, task.replace(/^status: .+$/m, \`status: \${nextStatus}\`), "utf8");
+}
+if (taskFile && process.env.AGENT_RIG_FAKE_CODEX_APPEND_NOTE) {
+  fs.appendFileSync(taskFile, process.env.AGENT_RIG_FAKE_CODEX_APPEND_NOTE);
+}
+if (process.env.AGENT_RIG_FAKE_CODEX_STDERR) {
+  process.stderr.write(process.env.AGENT_RIG_FAKE_CODEX_STDERR);
+}
+process.exit(Number(process.env.AGENT_RIG_FAKE_CODEX_EXIT_STATUS || "0"));
+`, "utf8");
+  chmodSync(join(bin, "codex"), 0o755);
+  return {
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    AGENT_RIG_FAKE_CODEX_LOG_DIR: logDir
+  };
+}
+
+function fakeCodexCalls(cwd) {
+  const file = join(cwd, "fake-codex-log", "calls.jsonl");
+  if (!existsSync(file)) return [];
+  return readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
 test("npm-style symlink bin runs the CLI", () => {
@@ -717,4 +775,470 @@ test("watch refuses an existing lock", () => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /watch\.lock already exists/);
+});
+
+test("help lists loop command and loop flags", () => {
+  const cwd = tempProject();
+
+  const help = run(["--help"], cwd);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /loop\s+Run the worker-reviewer loop shell/);
+
+  const loopHelp = run(["loop", "--help"], cwd);
+  assert.equal(loopHelp.status, 0, loopHelp.stderr);
+  assert.match(loopHelp.stdout, /Usage: agent-rig loop/);
+  assert.match(loopHelp.stdout, /--once/);
+  assert.match(loopHelp.stdout, /--worker <agent>.*default: worker/);
+  assert.match(loopHelp.stdout, /--reviewer <agent>.*default: reviewer/);
+  assert.match(loopHelp.stdout, /--interval <seconds>.*default: 60/);
+});
+
+test("loop --once exits zero with a no-action message and cleans loop lock", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /No actionable loop task\./);
+  assert.equal(existsSync(join(cwd, ".agent-rig", "_shared", "loop.lock")), false);
+});
+
+test("loop defaults to continuous polling with 60 second waits and no-action retries", () => {
+  const cwd = tempProject();
+  const env = { AGENT_RIG_LOOP_MAX_TICKS: "2", AGENT_RIG_LOOP_INTERVAL_MS: "1" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+
+  const result = run(["loop"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal((result.stdout.match(/No actionable loop task\./g) ?? []).length, 2);
+  assert.match(result.stdout, /Waiting 60 seconds before next poll\./);
+  assert.equal(existsSync(join(cwd, ".agent-rig", "_shared", "loop.lock")), false);
+});
+
+test("loop --interval overrides the continuous polling wait", () => {
+  const cwd = tempProject();
+  const env = { AGENT_RIG_LOOP_MAX_TICKS: "2", AGENT_RIG_LOOP_INTERVAL_MS: "1" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+
+  const result = run(["loop", "--interval", "3"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Waiting 3 seconds before next poll\./);
+  assert.doesNotMatch(result.stdout, /Waiting 60 seconds before next poll\./);
+});
+
+test("loop validates worker and reviewer existence", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+
+  const missingWorker = run(["loop", "--once", "--worker", "missing"], cwd);
+  assert.equal(missingWorker.status, 1);
+  assert.match(missingWorker.stderr, /Unknown agent: missing/);
+
+  const missingReviewer = run(["loop", "--once", "--reviewer", "missing"], cwd);
+  assert.equal(missingReviewer.status, 1);
+  assert.match(missingReviewer.stderr, /Unknown agent: missing/);
+});
+
+test("loop rejects non-codex agents with a codex-only message", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  writeFileSync(join(cwd, ".agent-rig", "reviewer", "agent.toml"), readFileSync(join(cwd, ".agent-rig", "reviewer", "agent.toml"), "utf8").replace('tool = "codex"', 'tool = "claude"'), "utf8");
+
+  const result = run(["loop", "--once"], cwd);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Phase 13 loop supports Codex only/);
+  assert.match(result.stderr, /reviewer agent "reviewer" has tool "claude"/);
+});
+
+test("loop refuses an existing loop lock", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "loop.lock"), "123", "utf8");
+
+  const result = run(["loop", "--once"], cwd);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /loop\.lock already exists/);
+});
+
+test("loop selects review tasks before ready worker tasks and does not mutate review", () => {
+  const cwd = tempProject();
+  const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "done" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Review me", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Ready work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  const reviewFile = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_review-me.md");
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Ran reviewer reviewer on task-0001\./);
+  assert.match(readFileSync(reviewFile, "utf8"), /status: done/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: ready/);
+});
+
+test("continuous loop processes review before worker work across ticks", () => {
+  const cwd = tempProject();
+  const env = {
+    ...fakeCodex(cwd),
+    AGENT_RIG_LOOP_MAX_TICKS: "2",
+    AGENT_RIG_LOOP_INTERVAL_MS: "1",
+    AGENT_RIG_FAKE_CODEX_SET_STATUS_SEQUENCE: "done,review"
+  };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Review me", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Ready work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+
+  const result = run(["loop"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(fakeCodexCalls(cwd).map((call) => `${call.role}:${call.taskId}`), ["reviewer:task-0001", "worker:task-0002"]);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_review-me.md"), "utf8"), /status: done/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: review/);
+  assert.equal(existsSync(join(cwd, ".agent-rig", "_shared", "loop.lock")), false);
+});
+
+test("loop can move worker output to review and then reviewer can accept it to done", () => {
+  const cwd = tempProject();
+  const workerEnv = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Implement feature", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  const taskFile = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_implement-feature.md");
+
+  const workerResult = run(["loop", "--once"], cwd, "", workerEnv);
+
+  assert.equal(workerResult.status, 0, workerResult.stderr);
+  assert.match(workerResult.stdout, /Ran worker worker on task-0001\./);
+  assert.match(readFileSync(taskFile, "utf8"), /status: review/);
+  const workerRuns = readdirSync(join(cwd, ".agent-rig", "worker", "runs"));
+  assert.equal(workerRuns.length, 1);
+  const workerRecord = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", workerRuns[0], "result.json"), "utf8"));
+  assert.equal(workerRecord.final_task_status, "review");
+
+  const reviewerEnv = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "done" };
+  const reviewerResult = run(["loop", "--once"], cwd, "", reviewerEnv);
+
+  assert.equal(reviewerResult.status, 0, reviewerResult.stderr);
+  assert.match(reviewerResult.stdout, /Ran reviewer reviewer on task-0001\./);
+  assert.match(readFileSync(taskFile, "utf8"), /status: done/);
+  const reviewerRuns = readdirSync(join(cwd, ".agent-rig", "reviewer", "runs"));
+  assert.equal(reviewerRuns.length, 1);
+  const reviewerRecord = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", reviewerRuns[0], "result.json"), "utf8"));
+  assert.equal(reviewerRecord.final_task_status, "done");
+});
+
+test("loop claims the next dependency-ready worker task when no review task exists", () => {
+  const cwd = tempProject();
+  const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Done foundation", "--assigned-to", "worker", "--status", "done"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Ready work", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-0001"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Ran worker worker on task-0002\./);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: review/);
+});
+
+test("loop ignores ready tasks assigned to other agents or blocked by dependencies", () => {
+  const cwd = tempProject();
+  const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["add", "other", "--role", "worker"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Other agent work", "--assigned-to", "other", "--status", "ready"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Blocked work", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-9999"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Actual work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Ran worker worker on task-0003\./);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_other-agent-work.md"), "utf8"), /status: ready/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_blocked-work.md"), "utf8"), /status: ready/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0003_actual-work.md"), "utf8"), /status: review/);
+});
+
+test("loop claims returned ready tasks with reviewer notes normally", () => {
+  const cwd = tempProject();
+  const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Retry work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  const taskFile = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_retry-work.md");
+  writeFileSync(taskFile, `${readFileSync(taskFile, "utf8")}## Notes\n\n- Reviewer asked for one more pass.\n`, "utf8");
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Ran worker worker on task-0001\./);
+  const updated = readFileSync(taskFile, "utf8");
+  assert.match(updated, /status: review/);
+  assert.match(updated, /Reviewer asked for one more pass\./);
+});
+
+test("loop reviewer action invokes codex exec and writes run records", () => {
+  const cwd = tempProject();
+  const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "done" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Review me", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const args = JSON.parse(readFileSync(join(cwd, "fake-codex-log", "args.json"), "utf8"));
+  assert.deepEqual(args.slice(0, 2), ["exec", "-C"]);
+  assert.match(args[2], /agent-rig-/);
+  assert.deepEqual(args.slice(3, 8), ["--sandbox", "workspace-write", "--ask-for-approval", "never", "--output-last-message"]);
+  assert.equal(args.at(-1), "-");
+  assert.equal(args.includes("--dangerously-bypass-approvals-and-sandbox"), false);
+  const stdin = readFileSync(join(cwd, "fake-codex-log", "stdin.txt"), "utf8");
+  assert.match(stdin, /Agent: reviewer/);
+  assert.match(stdin, /Task ID: task-0001/);
+  const runsDir = join(cwd, ".agent-rig", "reviewer", "runs");
+  const [runId] = readdirSync(runsDir);
+  assert.ok(existsSync(join(runsDir, runId, "prompt.md")));
+  assert.ok(existsSync(join(runsDir, runId, "last-message.md")));
+  assert.ok(existsSync(join(runsDir, runId, "result.json")));
+  assert.equal(readFileSync(join(runsDir, runId, "last-message.md"), "utf8"), "Fake Codex final message.\n");
+  const record = JSON.parse(readFileSync(join(runsDir, runId, "result.json"), "utf8"));
+  assert.equal(record.agent, "reviewer");
+  assert.equal(record.role, "reviewer");
+  assert.equal(record.tool, "codex");
+  assert.equal(record.task_id, "task-0001");
+  assert.equal(record.exit_status, 0);
+  assert.equal(record.final_task_status, "done");
+  assert.deepEqual(record.command_args, args);
+  assert.match(record.started_at, /^20/);
+  assert.match(record.finished_at, /^20/);
+});
+
+test("loop worker action invokes codex exec and writes run records", () => {
+  const cwd = tempProject();
+  const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Do work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const args = JSON.parse(readFileSync(join(cwd, "fake-codex-log", "args.json"), "utf8"));
+  assert.deepEqual(args.slice(0, 2), ["exec", "-C"]);
+  assert.match(args[2], /agent-rig-/);
+  assert.deepEqual(args.slice(3, 8), ["--sandbox", "workspace-write", "--ask-for-approval", "never", "--output-last-message"]);
+  assert.equal(args.at(-1), "-");
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "worker", "runs"));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", runId, "prompt.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", runId, "last-message.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json")));
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.agent, "worker");
+  assert.equal(record.role, "worker");
+  assert.equal(record.task_id, "task-0001");
+  assert.equal(record.final_task_status, "review");
+});
+
+test("loop falls back when codex does not support output-last-message", () => {
+  const cwd = tempProject();
+  const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_REJECT_LAST_MESSAGE: "1", AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Do fallback work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const args = JSON.parse(readFileSync(join(cwd, "fake-codex-log", "args.json"), "utf8"));
+  assert.deepEqual(args.slice(0, 7), ["exec", "-C", args[2], "--sandbox", "workspace-write", "--ask-for-approval", "never"]);
+  assert.equal(args.includes("--output-last-message"), false);
+  assert.equal(args.at(-1), "-");
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "worker", "runs"));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", runId, "last-message.md")));
+  assert.equal(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "last-message.md"), "utf8"), "");
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.command_args.includes("--output-last-message"), false);
+  assert.equal(record.exit_status, 0);
+  assert.equal(record.final_task_status, "review");
+});
+
+test("loop exits non-zero when codex exits non-zero but still writes run records", () => {
+  const cwd = tempProject();
+  const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_EXIT_STATUS: "7", AGENT_RIG_FAKE_CODEX_STDERR: "simulated codex failure\nmore detail\n" };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Broken review", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /codex exited with status 7 for reviewer reviewer on task-0001: simulated codex failure/);
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "reviewer", "runs"));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "prompt.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "last-message.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json")));
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.exit_status, 7);
+  assert.equal(record.final_task_status, "blocked");
+  assert.equal(record.stderr, "simulated codex failure\nmore detail\n");
+  assert.equal(record.stdout, "");
+  assert.equal(record.error, "");
+  assert.equal(record.failure_summary, "codex exited with status 7 for reviewer reviewer on task-0001: simulated codex failure");
+  const task = readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_broken-review.md"), "utf8");
+  assert.match(task, /status: blocked/);
+  assert.match(task, /blocked_reason: "codex exited with status 7 for reviewer reviewer on task-0001:\s+simulated codex failure"/);
+});
+
+test("loop fails clearly when codex is not on PATH and still writes run records", () => {
+  const cwd = tempProject();
+  const emptyBin = join(cwd, "empty-bin");
+  mkdirSync(emptyBin, { recursive: true });
+  const env = { PATH: emptyBin };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Missing codex review", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /codex executable not found for reviewer reviewer on task-0001/);
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "reviewer", "runs"));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "prompt.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json")));
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.exit_status, 1);
+  assert.match(record.error, /ENOENT/);
+  assert.equal(record.final_task_status, "blocked");
+  assert.equal(record.failure_summary, "codex executable not found for reviewer reviewer on task-0001. Install Codex or make `codex` available on PATH.");
+  assert.doesNotMatch(result.stderr, /file:\/\/|at runLoop|at async/);
+});
+
+test("loop blocks stale worker tasks that remain in_progress after codex exits zero", () => {
+  const cwd = tempProject();
+  const env = fakeCodex(cwd);
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Do work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const task = readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_do-work.md"), "utf8");
+  assert.match(task, /status: blocked/);
+  assert.match(task, /blocked_reason: worker worker left task-0001 in_progress after codex run/);
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "worker", "runs"));
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.exit_status, 0);
+  assert.equal(record.final_task_status, "blocked");
+  assert.equal(record.failure_summary, "worker worker left task-0001 in_progress after codex run");
+});
+
+test("loop blocks stale reviewer tasks that remain in review after codex exits zero", () => {
+  const cwd = tempProject();
+  const env = fakeCodex(cwd);
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Review me", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const task = readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_review-me.md"), "utf8");
+  assert.match(task, /status: blocked/);
+  assert.match(task, /blocked_reason: reviewer reviewer left task-0001 in review after codex run/);
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "reviewer", "runs"));
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.exit_status, 0);
+  assert.equal(record.final_task_status, "blocked");
+  assert.equal(record.failure_summary, "reviewer reviewer left task-0001 in review after codex run");
+});
+
+test("loop accepts reviewer returning a task to ready with notes", () => {
+  const cwd = tempProject();
+  const env = {
+    ...fakeCodex(cwd),
+    AGENT_RIG_FAKE_CODEX_SET_STATUS: "ready",
+    AGENT_RIG_FAKE_CODEX_APPEND_NOTE: "\n## Notes\n\n- Reviewer found one more issue.\n"
+  };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Review me", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const task = readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_review-me.md"), "utf8");
+  assert.match(task, /status: ready/);
+  assert.match(task, /Reviewer found one more issue\./);
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "reviewer", "runs"));
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.final_task_status, "ready");
+  assert.equal(record.failure_summary, "");
+});
+
+test("worker loop prompt includes task paths, contents, lifecycle, and local precedence", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Implement X", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  const taskFile = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_implement-x.md");
+  writeFileSync(taskFile, `${readFileSync(taskFile, "utf8")}## Context\n\nPhase 13 plan: docs/phases/phase-13-worker-reviewer-loop.md\n`, "utf8");
+
+  const prompt = buildLoopPrompt(cwd, "worker", "task-0001");
+
+  assert.match(prompt, /Agent: worker/);
+  assert.match(prompt, /Role: worker/);
+  assert.match(prompt, /Task ID: task-0001/);
+  assert.match(prompt, /Task file: \.agent-rig\/_shared\/tasks\/task-0001_implement-x\.md/);
+  assert.match(prompt, /Phase doc: docs\/phases\/phase-13-worker-reviewer-loop\.md/);
+  assert.match(prompt, /# Shared Context File\n\.agent-rig\/_shared\/context\.md/);
+  assert.match(prompt, /# Agent Instructions File\n\.agent-rig\/worker\/instructions\.md/);
+  assert.match(prompt, /# Agent Context File\n\.agent-rig\/worker\/context\.md/);
+  assert.match(prompt, /# Task Markdown\n\.agent-rig\/_shared\/tasks\/task-0001_implement-x\.md/);
+  assert.match(prompt, /Implement only the assigned task\./);
+  assert.match(prompt, /`review` when the work is ready for review, or `blocked`/);
+  assert.match(prompt, /Read applicable skills from `\.agent-rig\/worker\/skills\/` first\./);
+  assert.match(prompt, /Then read applicable shared skills from `\.agent-rig\/_shared\/skills\/`\./);
+  assert.match(prompt, /Use global Codex skills only when no AgentRig-local skill applies\./);
+  assert.match(prompt, /Check `\.agent-rig\/worker\/tools\/` before `\.agent-rig\/_shared\/tools\/`\./);
+  assert.match(prompt, /Do not assume a project-local tool exists unless an actual file or script exists there\./);
+  assert.match(prompt, /Do not treat AgentRig local tools as native Codex tools in this run\./);
+});
+
+test("reviewer loop prompt includes reviewer lifecycle instructions and local precedence", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Review X", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+  const taskFile = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_review-x.md");
+  writeFileSync(taskFile, `${readFileSync(taskFile, "utf8")}## Notes\n\nSee docs/phases/phase-13-worker-reviewer-loop.md before reviewing.\n`, "utf8");
+
+  const prompt = buildLoopPrompt(cwd, "reviewer", "task-0001");
+
+  assert.match(prompt, /Agent: reviewer/);
+  assert.match(prompt, /Role: reviewer/);
+  assert.match(prompt, /Task ID: task-0001/);
+  assert.match(prompt, /Task file: \.agent-rig\/_shared\/tasks\/task-0001_review-x\.md/);
+  assert.match(prompt, /Phase doc: docs\/phases\/phase-13-worker-reviewer-loop\.md/);
+  assert.match(prompt, /# Agent Instructions File\n\.agent-rig\/reviewer\/instructions\.md/);
+  assert.match(prompt, /# Agent Context File\n\.agent-rig\/reviewer\/context\.md/);
+  assert.match(prompt, /Review the task against the phase docs and current repo behavior\./);
+  assert.match(prompt, /`done` if accepted, `ready` if fixes are required, or `blocked`/);
+  assert.match(prompt, /Read applicable skills from `\.agent-rig\/reviewer\/skills\/` first\./);
+  assert.match(prompt, /Check `\.agent-rig\/reviewer\/tools\/` before `\.agent-rig\/_shared\/tools\/`\./);
 });

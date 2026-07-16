@@ -111,6 +111,22 @@ blocked -> todo | ready | in_progress
 
 AgentRig allows any valid status update so humans and agents can recover from mistakes or unusual workflows.
 
+Phase 13 standard execution flow is:
+
+```text
+planner or human prepares tasks -> create/switch feature branch manually -> agent-rig loop
+```
+
+In this phase, `agent-rig loop` is Codex-only. It runs the configured `worker` and `reviewer` through headless `codex exec` sessions, prefers `review` work before claiming new `ready` work, and keeps branch creation outside the loop.
+
+Typical loop-driven lifecycle:
+
+```text
+ready -> in_progress -> review -> done
+review -> ready
+review -> blocked
+```
+
 ## Lifecycle Commands
 
 ```bash
@@ -186,6 +202,6 @@ agent-rig watch --once
 
 `watch --once` processes canonical shared tasks from `.agent-rig/_shared/tasks/`. It skips ready tasks without `assigned_to` because watch needs a target agent.
 
-Continuous watch mode is not part of Phase 10.
+`watch --once` remains the older filesystem-only single-task adapter. It does not launch headless Codex sessions and is unchanged by the Phase 13 worker-reviewer loop.
 
 Run `agent-rig validate` to catch invalid status, missing metadata, missing dependency references, and unknown assignees.

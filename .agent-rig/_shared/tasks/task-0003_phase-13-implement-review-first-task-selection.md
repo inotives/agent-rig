@@ -2,7 +2,7 @@
 id: task-0003
 title: "Phase 13: implement review-first task selection"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-15
@@ -11,7 +11,12 @@ priority: normal
 parent: ""
 depends_on:
   - task-0002
+message: "Accepted: review-first loop selection verified; review tasks stay
+  unmodified, worker claims reuse dependency-ready selection, other-agent and
+  blocked tasks are skipped, no-action path works; npm test and git diff --check
+  clean."
 ---
+
 
 # Task
 
@@ -65,3 +70,11 @@ Implement one-shot loop task selection with review-first priority and worker tas
 - [ ] `npm test` passes.
 
 ## Notes
+
+- Implemented review-first loop selection in `src/tasks.ts`.
+- `agent-rig loop --once` now selects the first `review` task for the configured reviewer without mutating it.
+- When no review task exists, the loop reuses the existing dependency-ready worker selection path and claims the selected worker task by setting `status: in_progress`.
+- Ready tasks assigned to other agents and ready tasks with incomplete dependencies are ignored.
+- Returned worker tasks with `status: ready` remain claimable normally even when reviewer notes are present in the body.
+- No Codex execution or continuous polling was added in this task.
+- Ran `npm test` successfully: 44 passed, 0 failed.
