@@ -17,6 +17,7 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 11. [Phase 11: GitHub Issues Backlog Sync](../_archived/phase-11-github-issues-backlog-sync.md) — completed
 12. [Phase 12: Ad Hoc Resume Context and Findings Notes](../_archived/phase-12-adhoc-resume-context-and-findings-notes.md) — completed
 13. [Phase 13: Worker-Reviewer Loop](../_archived/phase-13-worker-reviewer-loop.md) — completed
+14. [Phase 14: OpenCode Loop Adapter](phase-14-opencode-loop-adapter.md) — draft
 
 ## Workflow
 
