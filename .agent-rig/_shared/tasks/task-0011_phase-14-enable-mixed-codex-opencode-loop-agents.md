@@ -2,7 +2,7 @@
 id: task-0011
 title: "Phase 14: enable mixed Codex and OpenCode loop agents"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-17
@@ -11,8 +11,15 @@ priority: normal
 parent: ""
 depends_on:
   - task-0010
-message: ""
+message: "Accepted: task 11 adds the missing mixed-tool acceptance coverage
+  rather than changing loop behavior; tests now prove Codex worker plus OpenCode
+  reviewer with review-first selection, OpenCode worker plus Codex reviewer,
+  unsupported-tool rejection, and existing Codex/OpenCode loop behavior through
+  the fake-tool PATH merge; node --test mixed-tool patterns passed (2), node
+  --test OpenCode failure/runner patterns passed (4), npm test --
+  --test-name-pattern='loop|opencode' passed (28), and git diff --check passed."
 ---
+
 
 # Task
 
@@ -59,3 +66,12 @@ Allow `agent-rig loop` to run mixed Codex/OpenCode worker and reviewer agents.
 
 ## Notes
 
+- The loop code already accepted `codex` and `opencode`; task 11 mainly needed acceptance coverage for mixed worker/reviewer combinations.
+- Added a shared fake-OpenCode test helper and a `mergeEnv(...)` helper that keeps fake tool bins ahead of the system PATH so mixed-tool tests do not accidentally hit a real local `opencode`.
+- Added coverage for:
+  - Codex worker plus OpenCode reviewer, with review-first selection preserved.
+  - OpenCode worker plus Codex reviewer.
+  - Unsupported tools still failing with the Phase 14 validator message.
+- Verification on July 17, 2026:
+  - `node --test --test-name-pattern='loop accepts a codex worker with an opencode reviewer|loop accepts an opencode worker with a codex reviewer'`
+  - `node --test --test-name-pattern='loop reviewer action invokes opencode run and writes run records|loop exits non-zero when opencode exits non-zero but still writes run records|loop fails clearly when opencode is not on PATH and still writes run records|loop rejects unsupported loop tools with a phase 14 message'`

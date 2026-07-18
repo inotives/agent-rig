@@ -2,7 +2,7 @@
 id: task-0010
 title: "Phase 14: add OpenCode loop runner"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-17
@@ -11,8 +11,14 @@ priority: normal
 parent: ""
 depends_on:
   - task-0009
-message: ""
+message: "Accepted: added the OpenCode loop runner path with automated
+  fake-OpenCode coverage for reviewer happy path, non-zero exit blocking, and
+  missing-executable blocking; tests now prove the exact opencode run --dir
+  --file --title command shape, no --model, no --auto, stdout-backed
+  last-message.md, and OpenCode-specific failure summaries; npm test --
+  --test-name-pattern='loop|opencode' passed (26) and git diff --check passed."
 ---
+
 
 # Task
 
@@ -66,3 +72,11 @@ opencode run --dir <repo-root> --file <runDir>/prompt.md --title "AgentRig <role
 
 ## Notes
 
+- Added `tool = "opencode"` dispatch in `runLoopAgent(...)` and kept the existing Codex runner path intact.
+- Added `runOpenCodeLoop(...)` using `opencode run --dir <repo-root> --file <prompt.md> --title \"AgentRig <role> <task-id>\" \"Read the attached AgentRig loop prompt and follow it exactly.\"`.
+- OpenCode runs now write captured stdout to `last-message.md` and persist stdout, stderr, spawn error, exit status, command args, and final task status to `result.json`.
+- Generalized loop failure messaging so missing executables and non-zero exits report the correct tool name for Codex and OpenCode.
+- Reviewer issue fixed: task 10 previously relied on manual smoke for OpenCode acceptance and had no automated proof of the actual OpenCode command shape or failure-path behavior.
+- Added fake-OpenCode tests for reviewer happy path, non-zero exit blocking, and missing-executable blocking.
+- Verification: `npm test -- --test-name-pattern='loop|opencode'` passed with 26 tests on July 17, 2026.
+- Verification: disposable fake-OpenCode smoke confirmed args `run --dir --file --title`, no `--model`, no `--auto`, `last-message.md` content from stdout, and final task status `done`.

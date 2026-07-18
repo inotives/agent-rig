@@ -2,17 +2,22 @@
 id: task-0013
 title: "Phase 14: update loop docs and help"
 type: doc
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-17
-updated_on: 2026-07-17
+updated_on: 2026-07-18
 priority: normal
 parent: ""
 depends_on:
   - task-0012
-message: ""
+message: "Accepted: README, docs/tasks, and loop help now describe
+  Codex/OpenCode loop support, OpenCode default-model behavior, no --model or
+  --auto, manual live-smoke verification, and continued Claude non-support; node
+  dist/index.js loop --help matched the documented contract; npm test previously
+  passed (64) and git diff --check passed."
 ---
+
 
 # Task
 
@@ -59,3 +64,12 @@ Document OpenCode support for `agent-rig loop`.
 
 ## Notes
 
+- Updated `README.md` to describe `agent-rig loop` as supporting Codex and OpenCode instead of Codex-only.
+- Documented that OpenCode loop runs use the user's configured default model and that AgentRig does not pass OpenCode `--model` or `--auto`.
+- Documented that Claude loop execution is still unsupported.
+- Documented that live OpenCode smoke testing is manual and not part of CI.
+- Updated `docs/tasks.md` to remove stale Codex-only loop wording and reflect the current Phase 14 loop contract.
+- Updated `agent-rig loop --help` text to mention Codex/OpenCode support plus the OpenCode `--model` / `--auto` behavior.
+- Verification on July 18, 2026:
+  - `npm test` passed with 64 tests.
+  - `git diff --check` passed.
