@@ -2,7 +2,7 @@
 id: task-0016
 title: "Phase 15: add compact loop status text"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-18
@@ -11,8 +11,18 @@ priority: normal
 parent: ""
 depends_on:
   - task-0015
-message: ""
+message: "Accepted: plain status now renders a compact Loop section from the
+  existing task-0015 loop model instead of adding a second source of truth,
+  covering lock state, next action, and latest default worker/reviewer run
+  summaries while keeping output metadata-only and path-based; text assertions
+  prove unlocked idle, locked review-first, worker fallback, reviewer
+  missing-run, and idle fallback behavior; npm test --
+  --test-name-pattern='status lists agents|status --json reports loop lock'
+  passed (2), npm test passed (65), node dist/index.js validate returned only
+  expected downstream dependency warnings for tasks 0017-0019, and git diff
+  --check passed."
 ---
+
 
 # Task
 
@@ -59,3 +69,17 @@ Add a compact loop section to text status output.
 
 ## Notes
 
+- Reused the existing `model.loop` data from task 15 and extended `printStatus(...)` in `src/live.ts`.
+- Plain `agent-rig status` now prints a compact `Loop:` section with:
+  - lock state and `.agent-rig/_shared/loop.lock` path,
+  - next loop action,
+  - latest worker run summary,
+  - latest reviewer run summary.
+- Idle and missing-run states render as `next: idle` and `<agent>: none`.
+- Latest run text stays metadata-only and includes the run path instead of inlining prompt, stdout/stderr, or `last-message.md` content.
+- Added text assertions in `test/init.test.mjs` for unlocked idle output, locked review-first output, worker fallback output, and idle fallback after no actionable task remains.
+- Verification:
+  - `npm test -- --test-name-pattern='status lists agents|status --json reports loop lock'`
+  - `npm test`
+  - `node dist/index.js validate`
+  - `git diff --check`

@@ -197,3 +197,62 @@ Do not claim or mutate tasks while calculating status.
 - Reuse existing task parsing and run-record conventions where practical.
 - Keep output compact. If a user needs full details, status should point them to run paths.
 - This is observability work, not release work. The actual `0.1.4` release should be a later phase.
+
+## Live Smoke Result
+
+Live disposable smoke completed on July 18, 2026 in:
+
+```text
+/private/tmp/agent-rig-phase15-smoke-T0GVdP/repo
+```
+
+Disposable setup:
+
+- `worker`: Codex
+- `reviewer`: OpenCode
+- disposable task: `task-0001`
+
+Observed live loop flow:
+
+- First worker tick moved `task-0001` from `ready` to `review` and appended `worker live smoke line` to `smoke.txt`.
+- Review-stage `agent-rig status` showed:
+  - `lock: unlocked path=.agent-rig/_shared/loop.lock`
+  - `next: review agent=reviewer task=task-0001 title=Phase 15 smoke task`
+  - latest worker run summary present
+  - reviewer latest run still `none`
+- Review-stage `agent-rig status --json` showed:
+  - top-level `loop`
+  - `loop.next_action.kind: "review"`
+  - `loop.latest_runs.worker.final_task_status: "review"`
+  - `loop.latest_runs.reviewer: null`
+- Second reviewer tick moved `task-0001` from `review` to `done`.
+- Final `agent-rig status` showed:
+  - `lock: unlocked path=.agent-rig/_shared/loop.lock`
+  - `next: idle`
+  - latest worker run summary present
+  - latest reviewer run summary present
+- Final `agent-rig status --json` showed:
+  - `loop.next_action.kind: "idle"`
+  - `loop.latest_runs.worker.path: ".agent-rig/worker/runs/2026-07-18-222158_task-0001"`
+  - `loop.latest_runs.reviewer.path: ".agent-rig/reviewer/runs/2026-07-18-222924_task-0001"`
+
+Disposable artifact paths:
+
+- worker run record:
+  `.agent-rig/worker/runs/2026-07-18-222158_task-0001/result.json`
+- reviewer run record:
+  `.agent-rig/reviewer/runs/2026-07-18-222924_task-0001/result.json`
+- smoke file:
+  `smoke.txt`
+
+Observed disposable file result:
+
+```text
+phase15 smoke workspace
+worker live smoke line
+```
+
+Local runtime caveat:
+
+- The managed sandbox on this machine still blocked live `codex` loop execution with `Operation not permitted` during app-server initialization.
+- The successful disposable smoke therefore ran `node dist/index.js loop --once` outside that sandbox for both live ticks.

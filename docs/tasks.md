@@ -123,6 +123,8 @@ Codex agents run through headless `codex exec` sessions. OpenCode agents run thr
 
 Claude loop execution is still unsupported. Live OpenCode smoke testing is still a manual verification step and is not part of CI.
 
+`agent-rig status` is read-only. It now includes compact loop observability for the default `worker` and `reviewer`: lock state, next loop action, and latest run summaries. `agent-rig status --json` exposes the same data under a top-level `loop` object. For full details, inspect the run paths reported there under `.agent-rig/worker/runs/` or `.agent-rig/reviewer/runs/`.
+
 Typical loop-driven lifecycle:
 
 ```text

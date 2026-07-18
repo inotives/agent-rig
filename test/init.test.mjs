@@ -509,6 +509,11 @@ test("status lists agents, shared task counts, and handoffs as text and json", (
   assert.equal(text.status, 0, text.stderr);
   assert.match(text.stdout, /worker/);
   assert.match(text.stdout, /Shared tasks: 0 todo, 0 ready, 0 in_progress, 0 blocked, 0 review, 0 done/);
+  assert.match(text.stdout, /Loop:/);
+  assert.match(text.stdout, /lock: unlocked path=\.agent-rig\/_shared\/loop\.lock/);
+  assert.match(text.stdout, /next: idle/);
+  assert.match(text.stdout, /worker: none/);
+  assert.match(text.stdout, /reviewer: none/);
   assert.match(text.stdout, /2026-06-27-1406_s6_codex_worker\.md/);
   assert.doesNotMatch(text.stdout, /notes\.md/);
 
@@ -519,6 +524,19 @@ test("status lists agents, shared task counts, and handoffs as text and json", (
   assert.equal(data.agents[0].queue, undefined);
   assert.equal(data.queues.shared.todo, 0);
   assert.equal(data.queues.shared.ready, 0);
+  assert.deepEqual(data.loop.lock, {
+    locked: false,
+    pid: null,
+    path: ".agent-rig/_shared/loop.lock"
+  });
+  assert.deepEqual(data.loop.next_action, {
+    kind: "idle",
+    task_id: null,
+    title: null,
+    agent: null
+  });
+  assert.equal(data.loop.latest_runs.worker, null);
+  assert.equal(data.loop.latest_runs.reviewer, null);
   assert.deepEqual(data.handoffs.map((item) => item.file), [
     "2026-06-27-1406_s6_codex_worker.md",
     "2026-06-27-1405_s5_codex_worker.md",
@@ -526,6 +544,128 @@ test("status lists agents, shared task counts, and handoffs as text and json", (
     "2026-06-27-1403_s3_codex_worker.md",
     "2026-06-27-1402_s2_codex_worker.md"
   ]);
+});
+
+test("status --json reports loop lock, next action priority, dependency-ready worker tasks, and latest runs", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Foundation", "--assigned-to", "worker", "--status", "done"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Ready work", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-0001"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Blocked by dependency", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-9999"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Needs review", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "loop.lock"), "4321\n", "utf8");
+  mkdirSync(join(cwd, ".agent-rig", "worker", "runs", "2026-07-18-200722_task-0002"), { recursive: true });
+  writeFileSync(join(cwd, ".agent-rig", "worker", "runs", "2026-07-18-200722_task-0002", "result.json"), JSON.stringify({
+    agent: "worker",
+    role: "worker",
+    tool: "codex",
+    task_id: "task-0002",
+    exit_status: 0,
+    final_task_status: "review",
+    failure_summary: ""
+  }, null, 2), "utf8");
+  mkdirSync(join(cwd, ".agent-rig", "reviewer", "runs", "2026-07-18-200847_task-0004"), { recursive: true });
+  writeFileSync(join(cwd, ".agent-rig", "reviewer", "runs", "2026-07-18-200847_task-0004", "result.json"), "{bad json", "utf8");
+
+  let text = run(["status"], cwd);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /lock: locked pid="4321\\n" path=\.agent-rig\/_shared\/loop\.lock/);
+  assert.match(text.stdout, /next: review agent=reviewer task=task-0004 title=Needs review/);
+  assert.match(text.stdout, /worker: tool=codex task=task-0002 exit=0 final=review path=\.agent-rig\/worker\/runs\/2026-07-18-200722_task-0002/);
+  assert.match(text.stdout, /reviewer: none/);
+
+  let status = JSON.parse(run(["status", "--json"], cwd).stdout);
+  assert.deepEqual(status.loop.lock, {
+    locked: true,
+    pid: "4321\n",
+    path: ".agent-rig/_shared/loop.lock"
+  });
+  assert.deepEqual(status.loop.next_action, {
+    kind: "review",
+    task_id: "task-0004",
+    title: "Needs review",
+    agent: "reviewer"
+  });
+  assert.deepEqual(status.loop.latest_runs.worker, {
+    agent: "worker",
+    role: "worker",
+    tool: "codex",
+    task_id: "task-0002",
+    exit_status: 0,
+    final_task_status: "review",
+    failure_summary: "",
+    path: ".agent-rig/worker/runs/2026-07-18-200722_task-0002"
+  });
+  assert.equal(status.loop.latest_runs.reviewer, null);
+
+  assert.equal(run(["tasks", "set-status", "task-0004", "done"], cwd).status, 0);
+  text = run(["status"], cwd);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /next: worker agent=worker task=task-0002 title=Ready work/);
+  status = JSON.parse(run(["status", "--json"], cwd).stdout);
+  assert.deepEqual(status.loop.next_action, {
+    kind: "worker",
+    task_id: "task-0002",
+    title: "Ready work",
+    agent: "worker"
+  });
+
+  assert.equal(run(["tasks", "set-status", "task-0002", "blocked"], cwd).status, 0);
+  text = run(["status"], cwd);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /next: idle/);
+  status = JSON.parse(run(["status", "--json"], cwd).stdout);
+  assert.deepEqual(status.loop.next_action, {
+    kind: "idle",
+    task_id: null,
+    title: null,
+    agent: null
+  });
+});
+
+test("status loop observability edge cases stay read-only and degrade gracefully", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Blocked by dependency", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-9999"], cwd).status, 0);
+  const taskFile = join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_blocked-by-dependency.md");
+  const before = readFileSync(taskFile, "utf8");
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-9999_broken.md"), "not frontmatter\n", "utf8");
+
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "loop.lock"), " 4321 \n", "utf8");
+  mkdirSync(join(cwd, ".agent-rig", "worker", "runs", "2026-07-18-200700_task-0001"), { recursive: true });
+  writeFileSync(join(cwd, ".agent-rig", "worker", "runs", "2026-07-18-200700_task-0001", "result.json"), JSON.stringify({
+    agent: "worker",
+    role: "worker",
+    tool: "codex",
+    task_id: "task-0001",
+    exit_status: 0,
+    final_task_status: "review",
+    failure_summary: ""
+  }, null, 2), "utf8");
+  mkdirSync(join(cwd, ".agent-rig", "worker", "runs", "2026-07-18-200900_task-0001"), { recursive: true });
+  writeFileSync(join(cwd, ".agent-rig", "worker", "runs", "2026-07-18-200900_task-0001", "result.json"), "{bad json", "utf8");
+
+  const text = run(["status"], cwd);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /lock: locked pid=" 4321 \\n" path=\.agent-rig\/_shared\/loop\.lock/);
+  assert.match(text.stdout, /next: idle/);
+  assert.match(text.stdout, /worker: none/);
+  assert.match(text.stdout, /reviewer: none/);
+
+  const json = run(["status", "--json"], cwd);
+  assert.equal(json.status, 0, json.stderr);
+  const data = JSON.parse(json.stdout);
+  assert.equal(data.loop.lock.pid, " 4321 \n");
+  assert.deepEqual(data.loop.next_action, {
+    kind: "idle",
+    task_id: null,
+    title: null,
+    agent: null
+  });
+  assert.equal(data.loop.latest_runs.worker, null);
+  assert.equal(data.loop.latest_runs.reviewer, null);
+  assert.equal(readFileSync(taskFile, "utf8"), before);
 });
 
 test("validate warns for off-format handoff log names", () => {

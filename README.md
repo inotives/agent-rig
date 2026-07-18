@@ -139,6 +139,8 @@ agent-rig tasks show task-0001
 agent-rig status
 ```
 
+`agent-rig status` is read-only. In Phase 15 it includes a compact `Loop:` section showing lock state, the next default `worker` or `reviewer` action, and the latest default worker/reviewer run summaries. Use `agent-rig status --json` for a top-level `loop` object with the same derived data. Detailed prompt and message artifacts stay in the local run paths under `.agent-rig/worker/runs/` and `.agent-rig/reviewer/runs/`.
+
 Phase 13 worker-reviewer flow:
 
 ```bash
@@ -176,7 +178,7 @@ Live OpenCode smoke testing remains a manual verification step and is not part o
 | `agent-rig validate` | Validate workspace files without mutating them. |
 | `agent-rig creds` | Create credential placeholders and `.env.example` files. |
 | `agent-rig skills` | Install and list shared or agent-local skills. |
-| `agent-rig status` | Show live session state, task counts, and recent handoffs. |
+| `agent-rig status` | Show live session state, task counts, loop observability, and recent handoffs. |
 | `agent-rig start --agent <agent-name>` | Print launch guidance plus relevant resume context for a configured agent. |
 | `agent-rig tasks create "<title>"` | Create a shared Markdown task file. |
 | `agent-rig tasks` | List shared task files. |
@@ -193,7 +195,7 @@ Live OpenCode smoke testing remains a manual verification step and is not part o
 
 ## Implementation Phases
 
-The current implementation history is split into completed archived phases plus the active Phase 14 OpenCode loop adapter work:
+The current implementation history is split into completed archived phases plus the active Phase 15 loop observability work:
 
 ```text
 1. CLI scaffold
@@ -205,6 +207,7 @@ The current implementation history is split into completed archived phases plus 
 ...
 13. Worker-reviewer loop
 14. OpenCode loop adapter
+15. Loop observability
 ```
 
 See [docs/phases](docs/phases/).

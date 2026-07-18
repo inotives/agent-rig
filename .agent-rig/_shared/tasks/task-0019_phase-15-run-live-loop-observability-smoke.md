@@ -2,7 +2,7 @@
 id: task-0019
 title: "Phase 15: run live loop observability smoke"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-18
@@ -11,8 +11,14 @@ priority: normal
 parent: ""
 depends_on:
   - task-0018
-message: ""
+message: "Accepted: Phase 15 now includes a recorded live disposable smoke in
+  the phase doc showing a Codex worker plus OpenCode reviewer on July 18, 2026,
+  with review-stage and final status/status --json observability, exact
+  worker/reviewer run record paths, and the real sandbox blocker plus
+  unsandboxed fallback needed on this machine; npm test passed (66), node
+  dist/index.js validate passed cleanly, and git diff --check passed."
 ---
+
 
 # Task
 
@@ -71,3 +77,35 @@ Run and record a live disposable smoke for loop observability.
 
 ## Notes
 
+- Live smoke completed on July 18, 2026 in `/private/tmp/agent-rig-phase15-smoke-T0GVdP/repo`.
+- Disposable workspace used default `worker` = Codex and added `reviewer` = OpenCode.
+- Disposable task `task-0001` was reset after an initial sandboxed Codex failure, then completed successfully with unsandboxed live loop ticks:
+  - worker tick moved `ready -> review`
+  - reviewer tick moved `review -> done`
+- Review-stage `agent-rig status` showed:
+  - `lock: unlocked path=.agent-rig/_shared/loop.lock`
+  - `next: review agent=reviewer task=task-0001 title=Phase 15 smoke task`
+  - worker latest run summary present
+  - reviewer latest run `none`
+- Review-stage `agent-rig status --json` showed top-level `loop`, `loop.next_action.kind = "review"`, worker latest run summary, and `loop.latest_runs.reviewer = null`.
+- Final `agent-rig status` showed:
+  - `lock: unlocked path=.agent-rig/_shared/loop.lock`
+  - `next: idle`
+  - worker latest run summary present
+  - reviewer latest run summary present
+- Final `agent-rig status --json` showed:
+  - `loop.next_action.kind = "idle"`
+  - `loop.latest_runs.worker.path = ".agent-rig/worker/runs/2026-07-18-222158_task-0001"`
+  - `loop.latest_runs.reviewer.path = ".agent-rig/reviewer/runs/2026-07-18-222924_task-0001"`
+- Disposable run record paths:
+  - worker: `.agent-rig/worker/runs/2026-07-18-222158_task-0001/result.json`
+  - reviewer: `.agent-rig/reviewer/runs/2026-07-18-222924_task-0001/result.json`
+- Disposable `smoke.txt` ended as:
+  - `phase15 smoke workspace`
+  - `worker live smoke line`
+- Real blocker reproduced first: sandboxed live Codex loop execution on this machine still failed with `Operation not permitted` during local app-server initialization. The successful smoke reran `node /Users/inotives/workspaces/agent-rig/dist/index.js loop --once` outside the managed sandbox for both ticks.
+- Smoke result was recorded in `docs/phases/phase-15-loop-observability.md`.
+- Verification:
+  - `npm test`
+  - `node dist/index.js validate`
+  - `git diff --check`
