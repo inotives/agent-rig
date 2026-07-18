@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync, readdirSync, symlinkSync, chmodSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync, readdirSync, symlinkSync, chmodSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -98,6 +98,61 @@ function fakeCodexCalls(cwd) {
   const file = join(cwd, "fake-codex-log", "calls.jsonl");
   if (!existsSync(file)) return [];
   return readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+}
+
+function fakeOpenCode(cwd) {
+  const bin = join(cwd, "fake-opencode-bin");
+  const logDir = join(cwd, "fake-opencode-log");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(logDir, { recursive: true });
+  writeFileSync(join(bin, "opencode"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+const logDir = process.env.AGENT_RIG_FAKE_OPENCODE_LOG_DIR;
+fs.writeFileSync(path.join(logDir, "args.json"), JSON.stringify(args, null, 2), "utf8");
+const counterFile = path.join(logDir, "call-count.txt");
+const callIndex = Number(fs.existsSync(counterFile) ? fs.readFileSync(counterFile, "utf8") : "0") + 1;
+fs.writeFileSync(counterFile, String(callIndex), "utf8");
+const promptFile = args[args.indexOf("--file") + 1] || "";
+const prompt = promptFile && fs.existsSync(promptFile) ? fs.readFileSync(promptFile, "utf8") : "";
+fs.writeFileSync(path.join(logDir, "prompt.txt"), prompt, "utf8");
+const taskFileMatch = prompt.match(/^Task file: (.+)$/m);
+const taskFile = taskFileMatch ? path.join(process.cwd(), taskFileMatch[1].trim()) : "";
+const taskIdMatch = prompt.match(/^Task ID: (.+)$/m);
+const roleMatch = prompt.match(/^Role: (.+)$/m);
+fs.appendFileSync(path.join(logDir, "calls.jsonl"), JSON.stringify({ callIndex, taskId: taskIdMatch ? taskIdMatch[1].trim() : "", role: roleMatch ? roleMatch[1].trim() : "", args }) + "\\n");
+const statusSequence = (process.env.AGENT_RIG_FAKE_OPENCODE_SET_STATUS_SEQUENCE || "").split(",").map((item) => item.trim()).filter(Boolean);
+const nextStatus = statusSequence[callIndex - 1] || process.env.AGENT_RIG_FAKE_OPENCODE_SET_STATUS || "";
+if (taskFile && nextStatus) {
+  const task = fs.readFileSync(taskFile, "utf8");
+  fs.writeFileSync(taskFile, task.replace(/^status: .+$/m, \`status: \${nextStatus}\`), "utf8");
+}
+if (process.env.AGENT_RIG_FAKE_OPENCODE_STDOUT) process.stdout.write(process.env.AGENT_RIG_FAKE_OPENCODE_STDOUT);
+if (process.env.AGENT_RIG_FAKE_OPENCODE_STDERR) process.stderr.write(process.env.AGENT_RIG_FAKE_OPENCODE_STDERR);
+process.exit(Number(process.env.AGENT_RIG_FAKE_OPENCODE_EXIT_STATUS || "0"));
+`, "utf8");
+  chmodSync(join(bin, "opencode"), 0o755);
+  return {
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    AGENT_RIG_FAKE_OPENCODE_LOG_DIR: logDir
+  };
+}
+
+function mergeEnv(...envs) {
+  const parts = [];
+  for (const env of envs) {
+    const value = env.PATH;
+    if (!value) continue;
+    const [first] = String(value).split(":");
+    if (first && !parts.includes(first)) parts.push(first);
+  }
+  for (const item of String(process.env.PATH ?? "").split(":")) {
+    if (item && !parts.includes(item)) parts.push(item);
+  }
+  const rest = { ...envs.reduce((merged, env) => ({ ...merged, ...env }), {}) };
+  rest.PATH = parts.join(":");
+  return rest;
 }
 
 test("npm-style symlink bin runs the CLI", () => {
@@ -846,7 +901,7 @@ test("loop validates worker and reviewer existence", () => {
   assert.match(missingReviewer.stderr, /Unknown agent: missing/);
 });
 
-test("loop rejects non-codex agents with a codex-only message", () => {
+test("loop rejects unsupported loop tools with a phase 14 message", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
   assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
@@ -855,7 +910,7 @@ test("loop rejects non-codex agents with a codex-only message", () => {
   const result = run(["loop", "--once"], cwd);
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Phase 13 loop supports Codex only/);
+  assert.match(result.stderr, /Phase 14 loop supports Codex and OpenCode only/);
   assert.match(result.stderr, /reviewer agent "reviewer" has tool "claude"/);
 });
 
@@ -940,6 +995,55 @@ test("loop can move worker output to review and then reviewer can accept it to d
   assert.equal(reviewerRecord.final_task_status, "done");
 });
 
+test("loop accepts a codex worker with an opencode reviewer and still prioritizes review first", () => {
+  const cwd = tempProject();
+  const env = mergeEnv(
+    fakeCodex(cwd),
+    fakeOpenCode(cwd),
+    { AGENT_RIG_FAKE_OPENCODE_SET_STATUS: "done", AGENT_RIG_FAKE_OPENCODE_STDOUT: "Fake OpenCode final message.\n" }
+  );
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer", "--tool", "opencode"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Review me", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Ready work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Ran reviewer reviewer on task-0001\./);
+  assert.equal(fakeCodexCalls(cwd).length, 0);
+  const opencodeArgs = JSON.parse(readFileSync(join(cwd, "fake-opencode-log", "args.json"), "utf8"));
+  assert.equal(opencodeArgs[0], "run");
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_review-me.md"), "utf8"), /status: done/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: ready/);
+});
+
+test("loop accepts an opencode worker with a codex reviewer", () => {
+  const cwd = tempProject();
+  const env = mergeEnv(
+    fakeCodex(cwd),
+    fakeOpenCode(cwd),
+    { AGENT_RIG_FAKE_OPENCODE_SET_STATUS: "review", AGENT_RIG_FAKE_OPENCODE_STDOUT: "Fake OpenCode worker message.\n" }
+  );
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  writeFileSync(join(cwd, ".agent-rig", "worker", "agent.toml"), readFileSync(join(cwd, ".agent-rig", "worker", "agent.toml"), "utf8").replace('tool = "codex"', 'tool = "opencode"'), "utf8");
+  assert.equal(run(["tasks", "create", "Do work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Ran worker worker on task-0001\./);
+  assert.equal(fakeCodexCalls(cwd).length, 0);
+  const opencodeArgs = JSON.parse(readFileSync(join(cwd, "fake-opencode-log", "args.json"), "utf8"));
+  assert.equal(opencodeArgs[0], "run");
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "worker", "runs"));
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.tool, "opencode");
+  assert.equal(record.final_task_status, "review");
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_do-work.md"), "utf8"), /status: review/);
+});
+
 test("loop claims the next dependency-ready worker task when no review task exists", () => {
   const cwd = tempProject();
   const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" };
@@ -1005,7 +1109,7 @@ test("loop reviewer action invokes codex exec and writes run records", () => {
   const args = JSON.parse(readFileSync(join(cwd, "fake-codex-log", "args.json"), "utf8"));
   assert.deepEqual(args.slice(0, 2), ["exec", "-C"]);
   assert.match(args[2], /agent-rig-/);
-  assert.deepEqual(args.slice(3, 8), ["--sandbox", "workspace-write", "--ask-for-approval", "never", "--output-last-message"]);
+  assert.deepEqual(args.slice(3, 6), ["--sandbox", "workspace-write", "--output-last-message"]);
   assert.equal(args.at(-1), "-");
   assert.equal(args.includes("--dangerously-bypass-approvals-and-sandbox"), false);
   const stdin = readFileSync(join(cwd, "fake-codex-log", "stdin.txt"), "utf8");
@@ -1042,7 +1146,7 @@ test("loop worker action invokes codex exec and writes run records", () => {
   const args = JSON.parse(readFileSync(join(cwd, "fake-codex-log", "args.json"), "utf8"));
   assert.deepEqual(args.slice(0, 2), ["exec", "-C"]);
   assert.match(args[2], /agent-rig-/);
-  assert.deepEqual(args.slice(3, 8), ["--sandbox", "workspace-write", "--ask-for-approval", "never", "--output-last-message"]);
+  assert.deepEqual(args.slice(3, 6), ["--sandbox", "workspace-write", "--output-last-message"]);
   assert.equal(args.at(-1), "-");
   const [runId] = readdirSync(join(cwd, ".agent-rig", "worker", "runs"));
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "runs", runId, "prompt.md")));
@@ -1053,6 +1157,44 @@ test("loop worker action invokes codex exec and writes run records", () => {
   assert.equal(record.role, "worker");
   assert.equal(record.task_id, "task-0001");
   assert.equal(record.final_task_status, "review");
+});
+
+test("loop worker action invokes opencode run and writes run records", () => {
+  const cwd = tempProject();
+  const env = {
+    ...fakeOpenCode(cwd),
+    AGENT_RIG_FAKE_OPENCODE_SET_STATUS: "review",
+    AGENT_RIG_FAKE_OPENCODE_STDOUT: "Fake OpenCode worker message.\n"
+  };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  writeFileSync(join(cwd, ".agent-rig", "worker", "agent.toml"), readFileSync(join(cwd, ".agent-rig", "worker", "agent.toml"), "utf8").replace('tool = "codex"', 'tool = "opencode"'), "utf8");
+  assert.equal(run(["tasks", "create", "Do work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const args = JSON.parse(readFileSync(join(cwd, "fake-opencode-log", "args.json"), "utf8"));
+  assert.deepEqual(args.slice(0, 4), ["run", "--dir", realpathSync(cwd), "--file"]);
+  assert.match(args[4], /\.agent-rig\/worker\/runs\/.+\/prompt\.md$/);
+  assert.deepEqual(args.slice(5, 7), ["--title", "AgentRig worker task-0001"]);
+  assert.equal(args[7], "Read the attached AgentRig loop prompt and follow it exactly.");
+  assert.equal(args.includes("--model"), false);
+  assert.equal(args.includes("--auto"), false);
+  const prompt = readFileSync(join(cwd, "fake-opencode-log", "prompt.txt"), "utf8");
+  assert.match(prompt, /Agent: worker/);
+  assert.match(prompt, /Task ID: task-0001/);
+  const runsDir = join(cwd, ".agent-rig", "worker", "runs");
+  const [runId] = readdirSync(runsDir);
+  assert.equal(readFileSync(join(runsDir, runId, "last-message.md"), "utf8"), "Fake OpenCode worker message.\n");
+  const record = JSON.parse(readFileSync(join(runsDir, runId, "result.json"), "utf8"));
+  assert.equal(record.agent, "worker");
+  assert.equal(record.role, "worker");
+  assert.equal(record.tool, "opencode");
+  assert.equal(record.task_id, "task-0001");
+  assert.equal(record.exit_status, 0);
+  assert.equal(record.final_task_status, "review");
+  assert.deepEqual(record.command_args, args);
 });
 
 test("loop falls back when codex does not support output-last-message", () => {
@@ -1066,7 +1208,7 @@ test("loop falls back when codex does not support output-last-message", () => {
 
   assert.equal(result.status, 0, result.stderr);
   const args = JSON.parse(readFileSync(join(cwd, "fake-codex-log", "args.json"), "utf8"));
-  assert.deepEqual(args.slice(0, 7), ["exec", "-C", args[2], "--sandbox", "workspace-write", "--ask-for-approval", "never"]);
+  assert.deepEqual(args.slice(0, 5), ["exec", "-C", args[2], "--sandbox", "workspace-write"]);
   assert.equal(args.includes("--output-last-message"), false);
   assert.equal(args.at(-1), "-");
   const [runId] = readdirSync(join(cwd, ".agent-rig", "worker", "runs"));
@@ -1126,6 +1268,87 @@ test("loop fails clearly when codex is not on PATH and still writes run records"
   assert.match(record.error, /ENOENT/);
   assert.equal(record.final_task_status, "blocked");
   assert.equal(record.failure_summary, "codex executable not found for reviewer reviewer on task-0001. Install Codex or make `codex` available on PATH.");
+  assert.doesNotMatch(result.stderr, /file:\/\/|at runLoop|at async/);
+});
+
+test("loop reviewer action invokes opencode run and writes run records", () => {
+  const cwd = tempProject();
+  const env = {
+    ...fakeOpenCode(cwd),
+    AGENT_RIG_FAKE_OPENCODE_SET_STATUS: "done",
+    AGENT_RIG_FAKE_OPENCODE_STDOUT: "Fake OpenCode final message.\n"
+  };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer", "--tool", "opencode"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Review me", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const args = JSON.parse(readFileSync(join(cwd, "fake-opencode-log", "args.json"), "utf8"));
+  assert.deepEqual(args.slice(0, 4), ["run", "--dir", realpathSync(cwd), "--file"]);
+  assert.match(args[4], /\.agent-rig\/reviewer\/runs\/.+\/prompt\.md$/);
+  assert.deepEqual(args.slice(5, 7), ["--title", "AgentRig reviewer task-0001"]);
+  assert.equal(args[7], "Read the attached AgentRig loop prompt and follow it exactly.");
+  assert.equal(args.includes("--model"), false);
+  assert.equal(args.includes("--auto"), false);
+  const prompt = readFileSync(join(cwd, "fake-opencode-log", "prompt.txt"), "utf8");
+  assert.match(prompt, /Agent: reviewer/);
+  assert.match(prompt, /Task ID: task-0001/);
+  const runsDir = join(cwd, ".agent-rig", "reviewer", "runs");
+  const [runId] = readdirSync(runsDir);
+  assert.equal(readFileSync(join(runsDir, runId, "last-message.md"), "utf8"), "Fake OpenCode final message.\n");
+  const record = JSON.parse(readFileSync(join(runsDir, runId, "result.json"), "utf8"));
+  assert.equal(record.tool, "opencode");
+  assert.equal(record.exit_status, 0);
+  assert.equal(record.final_task_status, "done");
+  assert.deepEqual(record.command_args, args);
+});
+
+test("loop exits non-zero when opencode exits non-zero but still writes run records", () => {
+  const cwd = tempProject();
+  const env = {
+    ...fakeOpenCode(cwd),
+    AGENT_RIG_FAKE_OPENCODE_EXIT_STATUS: "9",
+    AGENT_RIG_FAKE_OPENCODE_STDERR: "simulated opencode failure\nmore detail\n"
+  };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer", "--tool", "opencode"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Broken review", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /opencode exited with status 9 for reviewer reviewer on task-0001: simulated opencode failure/);
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "reviewer", "runs"));
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.tool, "opencode");
+  assert.equal(record.exit_status, 9);
+  assert.equal(record.final_task_status, "blocked");
+  assert.equal(record.stderr, "simulated opencode failure\nmore detail\n");
+  assert.equal(record.failure_summary, "opencode exited with status 9 for reviewer reviewer on task-0001: simulated opencode failure");
+});
+
+test("loop fails clearly when opencode is not on PATH and still writes run records", () => {
+  const cwd = tempProject();
+  const emptyBin = join(cwd, "empty-bin");
+  mkdirSync(emptyBin, { recursive: true });
+  const env = { PATH: emptyBin };
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer", "--tool", "opencode"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Missing opencode review", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+
+  const result = run(["loop", "--once"], cwd, "", env);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /opencode executable not found for reviewer reviewer on task-0001/);
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "reviewer", "runs"));
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.tool, "opencode");
+  assert.equal(record.exit_status, 1);
+  assert.match(record.error, /ENOENT/);
+  assert.equal(record.final_task_status, "blocked");
+  assert.equal(record.failure_summary, "opencode executable not found for reviewer reviewer on task-0001. Install OpenCode or make `opencode` available on PATH.");
   assert.doesNotMatch(result.stderr, /file:\/\/|at runLoop|at async/);
 });
 

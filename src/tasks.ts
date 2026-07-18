@@ -22,6 +22,15 @@ type SharedTask = {
   record: Record<string, unknown>;
 };
 
+type LoopRunResult = {
+  exitStatus: number;
+  stdout: string;
+  stderr: string;
+  error: string;
+  failureSummary: string;
+  runDir: string;
+};
+
 const taskStatuses = new Set(["todo", "ready", "in_progress", "blocked", "review", "done"]);
 const taskTypes = new Set(["task", "bug", "story", "epic", "chore", "research", "doc"]);
 const priorities = new Set(["low", "normal", "high"]);
@@ -381,8 +390,8 @@ export async function runLoop(args: string[], cwd: string) {
     const maxTicks = loopMaxTicks();
     const intervalMs = loopIntervalMs(interval);
 
-    const workerAgent = requireCodexAgent(root, workerName, "worker");
-    const reviewerAgent = requireCodexAgent(root, reviewerName, "reviewer");
+    const workerAgent = requireLoopAgent(root, workerName, "worker");
+    const reviewerAgent = requireLoopAgent(root, reviewerName, "reviewer");
 
     return await withLock(cwd, "loop.lock", "loop.lock already exists. Stop the running loop or remove the stale lock.", async () => {
       let ticks = 0;
@@ -402,17 +411,17 @@ export async function runLoop(args: string[], cwd: string) {
 function runLoopTick(root: string, cwd: string, workerName: string, reviewerName: string, workerAgent: Agent, reviewerAgent: Agent) {
   const selection = selectLoopTask(readSharedTasks(root, cwd), workerName);
   if (selection.kind === "review") {
-    const result = runCodexLoop(root, cwd, reviewerAgent, selection.task);
+    const result = runLoopAgent(root, cwd, reviewerAgent, selection.task);
     handleLoopResult(cwd, result, reviewerAgent, selection.task.id);
-    if (result.exitStatus !== 0) throw new Error(codexFailureMessage(result.exitStatus, reviewerName, "reviewer", selection.task.id, result.stderr, result.error));
+    if (result.exitStatus !== 0) throw new Error(result.failureSummary || loopFailureMessage(reviewerAgent.tool, result.exitStatus, reviewerName, "reviewer", selection.task.id, result.stderr, result.error));
     console.log(`Ran reviewer ${reviewerName} on ${selection.task.id}.`);
     return;
   }
   if (selection.kind === "worker") {
     updateSharedTask(selection.task, { status: "in_progress", updated_on: dateStamp(new Date()) });
-    const result = runCodexLoop(root, cwd, workerAgent, selection.task);
+    const result = runLoopAgent(root, cwd, workerAgent, selection.task);
     handleLoopResult(cwd, result, workerAgent, selection.task.id);
-    if (result.exitStatus !== 0) throw new Error(codexFailureMessage(result.exitStatus, workerName, "worker", selection.task.id, result.stderr, result.error));
+    if (result.exitStatus !== 0) throw new Error(result.failureSummary || loopFailureMessage(workerAgent.tool, result.exitStatus, workerName, "worker", selection.task.id, result.stderr, result.error));
     console.log(`Ran worker ${workerName} on ${selection.task.id}.`);
     return;
   }
@@ -523,13 +532,19 @@ export function buildLoopPrompt(cwd: string, agentName: string, taskId: string) 
   return assemblePrompt(root, agent, task);
 }
 
-function runCodexLoop(root: string, cwd: string, agent: Agent, task: SharedTask) {
+function runLoopAgent(root: string, cwd: string, agent: Agent, task: SharedTask): LoopRunResult {
+  if (agent.tool === "codex") return runCodexLoop(root, cwd, agent, task);
+  if (agent.tool === "opencode") return runOpenCodeLoop(root, cwd, agent, task);
+  throw new Error(`Phase 14 loop supports Codex and OpenCode only. ${agent.role} agent "${agent.name}" has tool "${agent.tool}".`);
+}
+
+function runCodexLoop(root: string, cwd: string, agent: Agent, task: SharedTask): LoopRunResult {
   const started = new Date();
   const runId = nextRunId(join(root, agent.name, "runs"), task.id, started);
   const runDir = join(root, agent.name, "runs", runId);
   const prompt = assemblePrompt(root, agent, task);
   const lastMessagePath = join(runDir, "last-message.md");
-  const baseArgs = ["exec", "-C", cwd, "--sandbox", "workspace-write", "--ask-for-approval", "never"];
+  const baseArgs = ["exec", "-C", cwd, "--sandbox", "workspace-write"];
 
   mkdirSync(runDir, { recursive: true });
   writeFileSync(join(runDir, "prompt.md"), prompt, "utf8");
@@ -550,33 +565,69 @@ function runCodexLoop(root: string, cwd: string, agent: Agent, task: SharedTask)
   const stdout = spawnText(result.stdout);
   const stderr = spawnText(result.stderr);
   const error = result.error ? message(result.error) : "";
-  const failureSummary = exitStatus === 0 ? "" : codexFailureMessage(exitStatus, agent.name, agent.role, task.id, stderr, error);
-  writeJson(join(runDir, "result.json"), {
+  const failureSummary = exitStatus === 0 ? "" : loopFailureMessage(agent.tool, exitStatus, agent.name, agent.role, task.id, stderr, error);
+  writeJson(join(runDir, "result.json"), loopResultRecord(agent, task.id, args, exitStatus, started, finalTask.status, stdout, stderr, error, failureSummary));
+  return { exitStatus, stdout, stderr, error, failureSummary, runDir };
+}
+
+function runOpenCodeLoop(root: string, cwd: string, agent: Agent, task: SharedTask): LoopRunResult {
+  const started = new Date();
+  const runId = nextRunId(join(root, agent.name, "runs"), task.id, started);
+  const runDir = join(root, agent.name, "runs", runId);
+  const prompt = assemblePrompt(root, agent, task);
+  const promptPath = join(runDir, "prompt.md");
+  const lastMessagePath = join(runDir, "last-message.md");
+  const args = [
+    "run",
+    "--dir",
+    cwd,
+    "--file",
+    promptPath,
+    "--title",
+    `AgentRig ${agent.role} ${task.id}`,
+    "Read the attached AgentRig loop prompt and follow it exactly."
+  ];
+
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(promptPath, prompt, "utf8");
+  const result = spawnSync("opencode", args, { cwd, encoding: "utf8" });
+  const finalTask = requireSharedTask(cwd, task.id);
+  const exitStatus = result.status ?? (result.error ? 1 : 0);
+  const stdout = spawnText(result.stdout);
+  const stderr = spawnText(result.stderr);
+  const error = result.error ? message(result.error) : "";
+  writeFileSync(lastMessagePath, stdout, "utf8");
+  const failureSummary = exitStatus === 0 ? "" : loopFailureMessage(agent.tool, exitStatus, agent.name, agent.role, task.id, stderr, error);
+  writeJson(join(runDir, "result.json"), loopResultRecord(agent, task.id, args, exitStatus, started, finalTask.status, stdout, stderr, error, failureSummary));
+  return { exitStatus, stdout, stderr, error, failureSummary, runDir };
+}
+
+function loopResultRecord(agent: Agent, taskId: string, args: string[], exitStatus: number, started: Date, finalTaskStatus: string, stdout: string, stderr: string, error: string, failureSummary: string) {
+  return {
     agent: agent.name,
     role: agent.role,
     tool: agent.tool,
-    task_id: task.id,
+    task_id: taskId,
     command_args: args,
     exit_status: exitStatus,
     started_at: started.toISOString(),
     finished_at: new Date().toISOString(),
-    final_task_status: finalTask.status,
+    final_task_status: finalTaskStatus,
     stdout,
     stderr,
     error,
     failure_summary: failureSummary
-  });
-  return { exitStatus, stdout, stderr, error, failureSummary, runDir };
+  };
 }
 
-function handleLoopResult(cwd: string, result: ReturnType<typeof runCodexLoop>, agent: Agent, taskId: string) {
+function handleLoopResult(cwd: string, result: LoopRunResult, agent: Agent, taskId: string) {
   const task = requireSharedTask(cwd, taskId);
   if (result.exitStatus !== 0) {
-    blockLoopTask(task, result.failureSummary || codexFailureMessage(result.exitStatus, agent.name, agent.role, taskId, result.stderr, result.error));
+    blockLoopTask(task, result.failureSummary || loopFailureMessage(agent.tool, result.exitStatus, agent.name, agent.role, taskId, result.stderr, result.error));
   } else if (agent.role === "worker" && task.status === "in_progress") {
-    blockLoopTask(task, `worker ${agent.name} left ${taskId} in_progress after codex run`);
+    blockLoopTask(task, staleLoopTaskMessage(agent, taskId, "in_progress"));
   } else if (agent.role === "reviewer" && task.status === "review") {
-    blockLoopTask(task, `reviewer ${agent.name} left ${taskId} in review after codex run`);
+    blockLoopTask(task, staleLoopTaskMessage(agent, taskId, "review"));
   }
   const finalTask = requireSharedTask(cwd, taskId);
   updateLoopResult(result.runDir, {
@@ -615,22 +666,31 @@ function spawnText(value: string | NodeJS.ArrayBufferView | null | undefined) {
   return typeof value === "string" ? value : Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("utf8");
 }
 
-function codexFailureMessage(exitStatus: number, agentName: string, role: string, taskId: string, stderr: string, error: string) {
-  if (isCodexMissing(error)) {
-    return `codex executable not found for ${role} ${agentName} on ${taskId}. Install Codex or make \`codex\` available on PATH.`;
+function loopFailureMessage(tool: string, exitStatus: number, agentName: string, role: string, taskId: string, stderr: string, error: string) {
+  if (isMissingExecutable(error)) {
+    return `${tool} executable not found for ${role} ${agentName} on ${taskId}. Install ${toolName(tool)} or make \`${tool}\` available on PATH.`;
   }
   const detail = firstNonEmptyLine(stderr) || error;
   return detail
-    ? `codex exited with status ${exitStatus} for ${role} ${agentName} on ${taskId}: ${detail}`
-    : `codex exited with status ${exitStatus} for ${role} ${agentName} on ${taskId}.`;
+    ? `${tool} exited with status ${exitStatus} for ${role} ${agentName} on ${taskId}: ${detail}`
+    : `${tool} exited with status ${exitStatus} for ${role} ${agentName} on ${taskId}.`;
 }
 
 function firstNonEmptyLine(text: string) {
   return text.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
 }
 
-function isCodexMissing(error: string) {
+function isMissingExecutable(error: string) {
   return /ENOENT/i.test(error);
+}
+
+function toolName(tool: string) {
+  return tool === "opencode" ? "OpenCode" : "Codex";
+}
+
+function staleLoopTaskMessage(agent: Agent, taskId: string, status: string) {
+  const location = status.startsWith("in_") ? status : `in ${status}`;
+  return `${agent.role} ${agent.name} left ${taskId} ${location} after ${agent.tool} run`;
 }
 
 function lifecycleInstructions(role: string) {
@@ -696,6 +756,10 @@ function handoffFileName(agent: Agent, runId: string, date: Date) {
 function loopHelp() {
   console.log(`Usage: agent-rig loop [--once] [--worker <agent>] [--reviewer <agent>] [--interval <seconds>]
 
+Supports loop agents with \`tool = "codex"\` or \`tool = "opencode"\`.
+OpenCode uses its configured default model; AgentRig does not pass \`--model\` or \`--auto\`.
+Claude loop execution is unsupported.
+
 Options:
   --once                Run one loop tick and exit
   --worker <agent>      Worker agent name (default: worker)
@@ -756,9 +820,9 @@ function lock(cwd: string, lockName: string, lockError: string) {
   };
 }
 
-function requireCodexAgent(root: string, name: string, label: string) {
+function requireLoopAgent(root: string, name: string, label: string) {
   const agent = requireAgent(root, name);
-  if (agent.tool !== "codex") throw new Error(`Phase 13 loop supports Codex only. ${label} agent "${name}" has tool "${agent.tool}".`);
+  if (agent.tool !== "codex" && agent.tool !== "opencode") throw new Error(`Phase 14 loop supports Codex and OpenCode only. ${label} agent "${name}" has tool "${agent.tool}".`);
   return agent;
 }
 

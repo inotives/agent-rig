@@ -2,7 +2,7 @@
 id: task-0009
 title: "Phase 14: extract loop runner boundary"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-17
@@ -10,8 +10,14 @@ updated_on: 2026-07-17
 priority: normal
 parent: ""
 depends_on: []
-message: ""
+message: "Accepted: extracted a minimal loop runner seam via
+  requireLoopAgent/runLoopAgent plus a shared LoopRunResult type while leaving
+  Codex args, --output-last-message fallback, run-record fields, task selection,
+  locking, polling, and prompt assembly unchanged; no OpenCode execution path
+  was added; npm test -- --test-name-pattern='loop' passed (23) and git diff
+  --check passed."
 ---
+
 
 # Task
 
@@ -57,3 +63,8 @@ Extract the minimum runner boundary needed for the loop to dispatch by `agent.to
 
 ## Notes
 
+- Added a small `runLoopAgent(...)` dispatch seam in `src/tasks.ts` and kept the existing Codex execution path inside `runCodexLoop(...)`.
+- Renamed the loop agent validator to `requireLoopAgent(...)` without changing the current Codex-only validation behavior.
+- Introduced a shared `LoopRunResult` type so loop result handling no longer depends on the concrete Codex runner function type.
+- Left task selection, lock handling, polling, prompt assembly, Codex args, fallback behavior, and run record fields unchanged.
+- Verification: `npm test -- --test-name-pattern='loop'` passed with 23 tests.

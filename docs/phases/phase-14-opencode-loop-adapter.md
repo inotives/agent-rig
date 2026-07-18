@@ -87,3 +87,19 @@ The live smoke result must be recorded in the phase doc or PR notes before the p
 - Fake OpenCode tests assert command args, attached prompt file usage, stdout capture, and run record files without requiring real OpenCode auth.
 - A live disposable-workspace smoke proves Codex worker plus OpenCode reviewer can move one task from `ready` to `done`.
 - The live smoke uses OpenCode's default model and does not pass `--model`.
+
+## Live Smoke Result
+
+Live smoke completed on July 18, 2026 in a disposable workspace at `/private/tmp/agent-rig-phase14-smoke-2hjys6/repo`.
+
+- Worker: Codex via `agent-rig loop --once` moved `task-0001` from `ready` to `review` and appended `worker live smoke line` to `smoke.txt`.
+- Reviewer: OpenCode via `agent-rig loop --once` moved `task-0001` from `review` to `done`.
+- Final task status: `done`
+- Worker run record: `.agent-rig/worker/runs/2026-07-18-200722_task-0001/result.json`
+- Reviewer run record: `.agent-rig/reviewer/runs/2026-07-18-200847_task-0001/result.json`
+- OpenCode command args recorded in `result.json`:
+  - `run --dir /private/tmp/agent-rig-phase14-smoke-2hjys6/repo --file <prompt.md> --title "AgentRig reviewer task-0001" "Read the attached AgentRig loop prompt and follow it exactly."`
+  - No `--model`
+  - No `--auto`
+
+Smoke note: the local `codex-cli 0.144.4` rejected the stale `--ask-for-approval never` flag during the first live attempt, so the loop runner was updated to match the installed CLI before rerunning the disposable smoke. The managed sandbox also blocked local Codex app-server initialization on this machine, so the successful live smoke was executed outside that sandbox in the disposable repo.

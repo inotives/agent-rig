@@ -2,17 +2,24 @@
 id: task-0012
 title: "Phase 14: add fake OpenCode coverage"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-17
-updated_on: 2026-07-17
+updated_on: 2026-07-18
 priority: normal
 parent: ""
 depends_on:
   - task-0011
-message: ""
+message: "Accepted: task 12 completes the deterministic fake OpenCode coverage
+  by adding the missing worker happy-path test while keeping reviewer,
+  mixed-tool, missing-executable, and non-zero-exit coverage in place; tests now
+  assert opencode run --dir --file --title, no --model, no --auto, prompt-file
+  usage, stdout-backed last-message.md, and result.json tool/args fields for
+  both worker and reviewer paths; npm test passed (64) and git diff --check
+  passed."
 ---
+
 
 # Task
 
@@ -62,3 +69,13 @@ Add deterministic fake OpenCode tests for the Phase 14 loop behavior.
 
 ## Notes
 
+- Added and reused a fake `opencode` test helper so OpenCode loop coverage stays deterministic and does not require real auth.
+- Added a dedicated fake OpenCode worker happy-path test asserting:
+  - `opencode run --dir <repo-root> --file <prompt.md> --title ...`
+  - no `--model`
+  - no `--auto`
+  - prompt file usage
+  - stdout capture into `last-message.md`
+  - `result.json` with `tool: "opencode"` and command args
+- Kept fake OpenCode reviewer, mixed Codex-worker/OpenCode-reviewer, missing-executable, and non-zero-exit tests in coverage.
+- Verification on July 18, 2026: `npm test` passed with 64 tests.

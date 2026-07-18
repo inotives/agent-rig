@@ -117,7 +117,11 @@ Phase 13 standard execution flow is:
 planner or human prepares tasks -> create/switch feature branch manually -> agent-rig loop
 ```
 
-In this phase, `agent-rig loop` is Codex-only. It runs the configured `worker` and `reviewer` through headless `codex exec` sessions, prefers `review` work before claiming new `ready` work, and keeps branch creation outside the loop.
+In this phase, `agent-rig loop` supports agents configured with `tool = "codex"` or `tool = "opencode"`. It prefers `review` work before claiming new `ready` work and keeps branch creation outside the loop.
+
+Codex agents run through headless `codex exec` sessions. OpenCode agents run through `opencode run` using the OpenCode default model configured outside AgentRig; AgentRig does not pass OpenCode `--model` or `--auto`.
+
+Claude loop execution is still unsupported. Live OpenCode smoke testing is still a manual verification step and is not part of CI.
 
 Typical loop-driven lifecycle:
 

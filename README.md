@@ -37,7 +37,7 @@ It creates a `.agent-rig/` directory where agents, shared context, Markdown task
 
 Handoff logs are intended for cross-session resume notes when work stops midstream or a session closes after a meaningful milestone. They are not meant to duplicate normal planner, worker, or reviewer task flow, which should already live in phase docs, task files, code review notes, and task status changes.
 
-The current MVP can scaffold a workspace, manage agents and credentials, install profile-declared skills, create Markdown-backed tasks, run a Codex-backed worker-reviewer loop, and report live status.
+The current MVP can scaffold a workspace, manage agents and credentials, install profile-declared skills, create Markdown-backed tasks, run a Codex/OpenCode worker-reviewer loop, and report live status.
 
 ## Core Model
 
@@ -147,7 +147,7 @@ git switch -c feat/my-phase-work
 agent-rig loop
 ```
 
-`agent-rig loop` is Phase 13's standard execution path. It is Codex-only in this phase, runs continuously by default, keeps branch creation manual and outside the loop, and uses the existing task lifecycle:
+`agent-rig loop` is the Phase 14 standard execution path. It supports agents configured with `tool = "codex"` or `tool = "opencode"`, runs continuously by default, keeps branch creation manual and outside the loop, and uses the existing task lifecycle:
 
 ```text
 ready -> in_progress -> review -> done
@@ -156,6 +156,10 @@ ready -> in_progress -> review -> done
 ```
 
 Use `agent-rig loop --once` for a deterministic single tick in tests or scripts. `agent-rig watch --once` still exists for the older filesystem-only single-task adapter and is unchanged by the Phase 13 loop work.
+
+OpenCode loop runs use the OpenCode default model configured in the user's environment. AgentRig does not pass OpenCode `--model` or `--auto`. Claude loop execution is still unsupported.
+
+Live OpenCode smoke testing remains a manual verification step and is not part of automated CI.
 
 ## Common Commands
 
@@ -183,13 +187,13 @@ Use `agent-rig loop --once` for a deterministic single tick in tests or scripts.
 | `agent-rig tasks assign <task-id> <agent-name>` | Assign a shared task to an agent. |
 | `agent-rig tasks block <task-id> --reason <reason>` | Mark a task blocked and record the blocker. |
 | `agent-rig tasks done <task-id>` | Mark a task done. |
-| `agent-rig loop` | Run the Codex-only worker-reviewer loop continuously. |
-| `agent-rig loop --once` | Run one Codex-only worker-reviewer loop tick and exit. |
+| `agent-rig loop` | Run the Codex/OpenCode worker-reviewer loop continuously. |
+| `agent-rig loop --once` | Run one Codex/OpenCode worker-reviewer loop tick and exit. |
 | `agent-rig watch --once` | Process one ready shared task and exit. |
 
 ## Implementation Phases
 
-The current implementation history is split into completed archived phases plus the active Phase 13 worker-reviewer loop:
+The current implementation history is split into completed archived phases plus the active Phase 14 OpenCode loop adapter work:
 
 ```text
 1. CLI scaffold
@@ -200,6 +204,7 @@ The current implementation history is split into completed archived phases plus 
 6. Pre-release and npm registry preparation
 ...
 13. Worker-reviewer loop
+14. OpenCode loop adapter
 ```
 
 See [docs/phases](docs/phases/).
