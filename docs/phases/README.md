@@ -18,6 +18,7 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 12. [Phase 12: Ad Hoc Resume Context and Findings Notes](../_archived/phase-12-adhoc-resume-context-and-findings-notes.md) — completed
 13. [Phase 13: Worker-Reviewer Loop](../_archived/phase-13-worker-reviewer-loop.md) — completed
 14. [Phase 14: OpenCode Loop Adapter](../_archived/phase-14-opencode-loop-adapter.md) — completed
+15. [Phase 15: Loop Observability](phase-15-loop-observability.md) — draft
 
 ## Workflow
 
