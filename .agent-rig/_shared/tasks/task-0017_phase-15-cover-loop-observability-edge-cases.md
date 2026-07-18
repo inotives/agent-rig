@@ -2,7 +2,7 @@
 id: task-0017
 title: "Phase 15: cover loop observability edge cases"
 type: task
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-18
@@ -11,8 +11,17 @@ priority: normal
 parent: ""
 depends_on:
   - task-0016
-message: ""
+message: "Accepted: task 17 closes the remaining Phase 15 status edge cases by
+  preserving raw loop.lock pid bytes in JSON, rendering them safely in plain
+  status via JSON.stringify, and adding deterministic coverage for malformed
+  latest worker runs, missing reviewer runs, dependency-blocked ready tasks, and
+  read-only status behavior; npm test -- --test-name-pattern='status lists
+  agents|status --json reports loop lock|status loop observability edge cases'
+  passed (3), npm test passed (66), node dist/index.js validate returned only
+  expected downstream dependency warnings for tasks 0018-0019, and git diff
+  --check passed."
 ---
+
 
 # Task
 
@@ -60,3 +69,17 @@ Add deterministic coverage for missing, malformed, and dependency-blocked loop s
 
 ## Notes
 
+- Fixed `src/live.ts` lock pid handling to preserve the raw `.agent-rig/_shared/loop.lock` contents instead of trimming them.
+- Plain `agent-rig status` now renders lock pid text with `JSON.stringify(...)` so whitespace and trailing newline bytes stay visible without breaking the compact text output.
+- Added a focused status edge-case test in `test/init.test.mjs` covering:
+  - missing reviewer run directory,
+  - malformed latest worker `result.json`,
+  - dependency-blocked `ready` worker task not being selected,
+  - exact raw lock pid text preservation,
+  - `status` remaining read-only and not mutating task frontmatter.
+- Updated the earlier Phase 15 lock expectations to match the raw-pid contract.
+- Verification:
+  - `npm test -- --test-name-pattern='status lists agents|status --json reports loop lock|status loop observability edge cases'`
+  - `npm test`
+  - `node dist/index.js validate`
+  - `git diff --check`

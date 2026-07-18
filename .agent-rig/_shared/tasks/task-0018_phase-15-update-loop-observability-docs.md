@@ -2,7 +2,7 @@
 id: task-0018
 title: "Phase 15: update loop observability docs"
 type: doc
-status: ready
+status: done
 assigned_to: worker
 created_by: planner
 created_on: 2026-07-18
@@ -11,8 +11,15 @@ priority: normal
 parent: ""
 depends_on:
   - task-0017
-message: ""
+message: "Accepted: README and docs/tasks now document the actual Phase 15
+  status contract by describing read-only loop observability in plain status,
+  the top-level loop object in status --json, default worker/reviewer scope
+  only, and run-path pointers for detailed artifacts without claiming stale-lock
+  handling or cleanup; node dist/index.js status --help still only prints the
+  existing usage line, so the user-facing contract lives in the updated docs;
+  git diff --check passed."
 ---
+
 
 # Task
 
@@ -59,3 +66,12 @@ Document loop observability in `agent-rig status`.
 
 ## Notes
 
+- Updated `README.md` to explain that `agent-rig status` is read-only and now includes compact Phase 15 loop observability for the default `worker` and `reviewer`.
+- Documented that `agent-rig status --json` exposes the same derived data under a top-level `loop` object.
+- Documented that detailed artifacts remain in local run paths under `.agent-rig/worker/runs/` and `.agent-rig/reviewer/runs/`.
+- Updated the `agent-rig status` command summary in the README command table to mention loop observability.
+- Updated the implementation phase summary in `README.md` to reflect active Phase 15 loop observability work.
+- Added a short matching note in `docs/tasks.md` so the loop/task workflow docs point users to `status` for read-only loop inspection.
+- Kept docs explicit that only the default `worker` and `reviewer` names are covered here and did not document stale-lock detection or cleanup.
+- Verification:
+  - `git diff --check`
