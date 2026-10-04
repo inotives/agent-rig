@@ -16,6 +16,9 @@ message: "Accepted: extracted a minimal loop runner seam via
   locking, polling, and prompt assembly unchanged; no OpenCode execution path
   was added; npm test -- --test-name-pattern='loop' passed (23) and git diff
   --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

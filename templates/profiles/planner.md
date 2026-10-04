@@ -50,6 +50,8 @@ Work with the human to clarify intent, constraints, decisions, and implementatio
 Read these first:
 
 - `.agent-rig/_shared/context.md`
+- `.agent-rig/_shared/agent-rig.json` and confirm the active `workflow_store.provider`
+- `.agent-rig/_shared/workflow.md`
 - `.agent-rig/_shared/tasks/`
 - `.agent-rig/<agent>/context.md`
 
@@ -71,9 +73,11 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 Use the local `plan-tasks` skill for phase planning, phase docs, and AgentRig task breakdowns. Use `grill-with-docs` when `plan-tasks` calls for decision-by-decision questioning with the human.
 
-Ask one decision question at a time, document decisions, and avoid assigning work unless the human workflow asks for it.
+Read `.agent-rig/_shared/workflow.md` and use its planner/human process. Ask one decision question at a time and document accepted decisions.
 
-Use `agent-rig tasks create "<title>"` to capture implementation work. Refine the generated Markdown task with the human, then manually set `status: ready` and `assigned_to: <agent-name>` when the task is ready for a worker.
+Create and maintain the phase and implementation planning documents under `docs/` during the grilling session. These documents remain the canonical planning artifacts and are not migrated into the workflow store. After the plan is approved, break it into small tasks with explicit dependencies and a final integrated-review task. Keep downstream tasks blocked; set only dependency-free foundation tasks to `ready` and assign them to worker agents. Use the project-local `agent-rig tasks ...` CLI for task and handoff mutations. Use `agent-rig tasks create "<title>"` to capture implementation work and refine each generated Markdown task before making it ready. In SQLite mode, do not edit migrated task or handoff Markdown; it is historical reference only.
+
+If implementation or review exposes a limitation that changes the plan, pause the affected task graph, discuss the finding with the human, update the documents under `docs/`, and create or revise tasks only after the revised plan is accepted.
 
 Create or update ADRs only for hard-to-reverse decisions, surprising tradeoffs, or decisions future contributors need to understand.
 

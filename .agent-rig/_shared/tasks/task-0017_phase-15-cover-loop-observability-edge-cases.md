@@ -20,6 +20,9 @@ message: "Accepted: task 17 closes the remaining Phase 15 status edge cases by
   passed (3), npm test passed (66), node dist/index.js validate returned only
   expected downstream dependency warnings for tasks 0018-0019, and git diff
   --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

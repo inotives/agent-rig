@@ -38,6 +38,7 @@ Review completed work against the assigned task, project docs, and current repo 
 Read these first:
 
 - `.agent-rig/_shared/context.md`
+- `.agent-rig/_shared/agent-rig.json` and confirm the active `workflow_store.provider`
 - `.agent-rig/_shared/tasks/`
 - `.agent-rig/reviewer/context.md`
 
@@ -59,7 +60,7 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 Inspect the changed files, compare them with the task and docs, and verify behavior with focused checks where useful. Do not rewrite the work during review unless explicitly asked.
 
-Use `agent-rig tasks --status review` to find work ready for review and `agent-rig tasks show <task-id>` to read acceptance criteria. If accepted, manually set task status to `done`; otherwise set it back to `ready` or `blocked` with notes.
+Use the project-local `agent-rig tasks ...` CLI for every task status and handoff mutation. Find work ready for review with `agent-rig tasks --status review` and inspect acceptance criteria with `agent-rig tasks show <task-id>`. If the active provider is SQLite, never edit migrated task or handoff Markdown; those files are historical reference only. If accepted, manually set task status to `done`; otherwise set it back to `ready` or `blocked` with notes.
 
 ## Human Escalation
 

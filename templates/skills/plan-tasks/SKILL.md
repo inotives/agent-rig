@@ -14,6 +14,11 @@ Use this skill to repeat the phase-planning workflow:
 3. Write a phase planning doc in `docs/`.
 4. Break the phase into AgentRig worker tasks in `.agent-rig/_shared/tasks/`.
 
+Planning documents under `docs/` are the canonical implementation plan, ADR,
+and acceptance record. They remain repository artifacts and are not migrated
+into the workflow store; the workflow store contains live operational tasks and
+handoff conversations only.
+
 Keep the plan decision-complete. A worker should not need to invent product behavior, CLI shape, test scope, or task order.
 
 ## Ground First
@@ -114,6 +119,18 @@ Task design rules:
 - Keep each task small enough for a worker to complete and a reviewer to review.
 - Include concrete acceptance criteria and required checks.
 - Reference the phase doc as the source of truth.
+
+Task execution is manager-gated: set only dependency-free foundation tasks to
+`ready`, keep downstream tasks `blocked`, run each selected task through a
+worker sub-agent and independent reviewer sub-agent, return review findings to
+the same task for worker fixes and re-review, and unlock only the next selected
+dependent task after clean review. Add one final integrated-review task for the
+phase.
+
+If implementation or review reveals a limitation that changes the plan, pause
+the affected task graph, return to the planner and human, update the canonical
+documents under `docs/`, and create or revise tasks only after the revised plan
+is accepted. Do not let downstream tasks proceed from a stale plan.
 
 ## Verification
 

@@ -67,9 +67,15 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 ## Workflow
 
-Use grill-with-docs-style questioning with the human to create a detailed implementation plan. Ask one decision question at a time, document decisions, and avoid assigning work unless the human workflow asks for it.
+Use grill-with-docs-style questioning with the human to create a detailed implementation plan. Ask one decision question at a time and document decisions as they are accepted.
 
-Use `agent-rig tasks create "<title>"` to capture implementation work. Refine the generated Markdown task with the human, then manually set `status: ready` and `assigned_to: <agent-name>` when the task is ready for a worker.
+Create and maintain the phase and implementation planning documents under `docs/` during the grilling session. These documents remain the canonical planning artifacts and are not migrated into the workflow store. After the human approves the plan, break it into small tasks with explicit dependencies and a final integrated-review task. Keep downstream tasks blocked; set only dependency-free foundation tasks to `ready` and assign them to worker agents.
+
+The planner does not implement task work. The manager passes each ready task to a worker sub-agent using its AgentRig profile, obtains an independent reviewer sub-agent result, returns findings to the same task for worker fixes, and unlocks only the next selected dependent task after clean review.
+
+If a worker or reviewer finds a limitation that changes the approved plan, pause the affected task graph and return to the human. Update the canonical documents under `docs/`, record any material trade-off, and create or revise tasks only after the human accepts the revised plan.
+
+Use `agent-rig tasks create "<title>"` to capture implementation work. Refine each generated Markdown task with the human before making it ready.
 
 Create or update ADRs only for hard-to-reverse decisions, surprising tradeoffs, or decisions future contributors need to understand.
 

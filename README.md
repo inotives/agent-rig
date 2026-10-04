@@ -53,6 +53,8 @@ AgentRig workspaces are ordinary project files:
 
 The default `agent-rig init --yes` workspace is a solo `worker` agent using `codex`. Interactive setup can scaffold solo, coder-reviewer, trinity, supervisor-worker, swarm, testing-reviewer, or custom patterns.
 
+Fresh workspaces can select SQLite directly with `agent-rig init --yes --workflow-store sqlite`. Markdown remains the default.
+
 Agent instructions start from editable profiles in `.agent-rig/_shared/profiles/`. Built-in profiles are `planner`, `worker`, `reviewer`, `researcher`, and `writer`; custom profiles are plain Markdown files with YAML frontmatter.
 
 In practice, use `_shared/handoff_logs/` for session-end operational context such as current branch, active task or phase, unresolved blockers, and the exact next step. Do not add a handoff after every worker or reviewer task unless the task flow itself failed to capture something important.
@@ -107,6 +109,12 @@ For the non-interactive MVP default, scaffold a solo `worker` agent using `codex
 agent-rig init --yes
 ```
 
+To start a fresh workspace with SQLite:
+
+```bash
+agent-rig init --yes --workflow-store sqlite
+```
+
 Or do the same through `npx`:
 
 ```bash
@@ -139,17 +147,47 @@ agent-rig tasks show task-0001
 agent-rig status
 ```
 
+Workflow storage defaults to Markdown task and handoff records. The active
+provider is configured in `.agent-rig/_shared/agent-rig.json`; agents mutate
+workflow state through `agent-rig tasks ...` and never edit SQLite directly.
+To make SQLite canonical, finish Markdown-backed implementation work and run:
+
+```bash
+agent-rig workflow migrate --to sqlite
+```
+
+Migration validates and verifies a new database before switching the provider,
+refuses unsafe reruns, leaves `docs/` and run artifacts outside the store, and
+marks the original Markdown records as historical. After migration, `tasks`,
+`tasks show`, `tasks next`, `status`, and the worker-reviewer loop use SQLite;
+the Markdown files remain reference material rather than dual-written live
+records.
+
+In SQLite mode, `tasks done` and `tasks set-status <id> done` require a worker
+handoff followed by a reviewer handoff. Manual runs can record these with
+`tasks handoff`; a human can explicitly use `--admin-override` for an
+exceptional completion. `tasks handoff <id> --source-file <path>` reconciles a
+handoff file created just after migration and marks that file historical. A
+late import keeps its original timestamp as audit metadata while its SQLite
+sequence records when it joined the live conversation. `status --json` shows
+`source_order_conflict` when that timestamp predates the preceding handoff;
+normal completion then needs a new worker handoff and independent review.
+
 `agent-rig status` is read-only. In Phase 15 it includes a compact `Loop:` section showing lock state, the next default `worker` or `reviewer` action, and the latest default worker/reviewer run summaries. Use `agent-rig status --json` for a top-level `loop` object with the same derived data. Detailed prompt and message artifacts stay in the local run paths under `.agent-rig/worker/runs/` and `.agent-rig/reviewer/runs/`.
 
 Phase 13 worker-reviewer flow:
 
 ```bash
-# planner or human prepares ready tasks first
+# planner and human grill and finalize the phase plan first
+# then split the approved plan into dependency-gated tasks
 git switch -c feat/my-phase-work
+# manager loop: spawn the assigned worker, then an independent reviewer
 agent-rig loop
 ```
 
-`agent-rig loop` is the Phase 14 standard execution path. It supports agents configured with `tool = "codex"` or `tool = "opencode"`, runs continuously by default, keeps branch creation manual and outside the loop, and uses the existing task lifecycle:
+The planner and human first hammer out the phase and implementation details in canonical repository documents under `docs/`; those documents are not migrated into the workflow store. Only after the plan is approved are tasks created. Dependency-free foundation tasks become `ready`; downstream tasks remain `blocked`. For each selected task, the manager spawns a worker sub-agent using its AgentRig profile, waits for a worker handoff, then spawns an independent reviewer sub-agent. Review findings return the same task to the worker for fixes and re-review; only a clean review unlocks the next selected dependent task. If implementation reveals a limitation that changes the plan, pause the affected graph, return to planner/human discussion, update `docs/`, and revise tasks before continuing. A final integrated reviewer runs after all implementation tasks pass.
+
+`agent-rig loop` is the Phase 14 execution engine for a configured worker/reviewer pair. It supports agents configured with `tool = "codex"` or `tool = "opencode"`, runs continuously by default, keeps branch creation and manager decisions outside the loop, and uses the existing task lifecycle:
 
 ```text
 ready -> in_progress -> review -> done
@@ -168,7 +206,8 @@ Live OpenCode smoke testing remains a manual verification step and is not part o
 | Command | Purpose |
 |---|---|
 | `agent-rig init` | Run the setup-pattern interview and scaffold `.agent-rig/`. |
-| `agent-rig init --yes` | Scaffold a solo `worker` using `codex`. |
+| `agent-rig init --yes` | Scaffold a solo `worker` using `codex` with Markdown storage. |
+| `agent-rig init --yes --workflow-store sqlite` | Scaffold a solo `worker` with a fresh SQLite workflow store. |
 | `agent-rig add <agent-name>` | Add an agent to an existing workspace. |
 | `agent-rig add <agent-name> --profile worker` | Add an agent from an editable profile. |
 | `agent-rig profiles` | List available agent profiles. |
@@ -180,8 +219,8 @@ Live OpenCode smoke testing remains a manual verification step and is not part o
 | `agent-rig skills` | Install and list shared or agent-local skills. |
 | `agent-rig status` | Show live session state, task counts, loop observability, and recent handoffs. |
 | `agent-rig start --agent <agent-name>` | Print launch guidance plus relevant resume context for a configured agent. |
-| `agent-rig tasks create "<title>"` | Create a shared Markdown task file. |
-| `agent-rig tasks` | List shared task files. |
+| `agent-rig tasks create "<title>"` | Create a shared task in the active store. |
+| `agent-rig tasks` | List shared tasks. |
 | `agent-rig tasks show <task-id>` | Print the canonical task Markdown. |
 | `agent-rig tasks next --agent <agent-name>` | Print the next dependency-ready shared task for an agent. |
 | `agent-rig tasks next --agent <agent-name> --claim` | Mark the next dependency-ready shared task as `in_progress`. |
@@ -189,6 +228,8 @@ Live OpenCode smoke testing remains a manual verification step and is not part o
 | `agent-rig tasks assign <task-id> <agent-name>` | Assign a shared task to an agent. |
 | `agent-rig tasks block <task-id> --reason <reason>` | Mark a task blocked and record the blocker. |
 | `agent-rig tasks done <task-id>` | Mark a task done. |
+| `agent-rig tasks handoff <task-id> ...` | Record a manual handoff in the active store. |
+| `agent-rig workflow migrate --to sqlite` | Validate and migrate the Markdown workflow store to SQLite. |
 | `agent-rig loop` | Run the Codex/OpenCode worker-reviewer loop continuously. |
 | `agent-rig loop --once` | Run one Codex/OpenCode worker-reviewer loop tick and exit. |
 | `agent-rig watch --once` | Process one ready shared task and exit. |
@@ -208,6 +249,7 @@ The current implementation history is split into completed archived phases plus 
 13. Worker-reviewer loop
 14. OpenCode loop adapter
 15. Loop observability
+16. Pluggable workflow storage
 ```
 
 See [docs/phases](docs/phases/).
@@ -221,7 +263,7 @@ npm test
 npm --cache /tmp/agent-rig-npm-cache pack --dry-run
 ```
 
-For future phases, follow the phase workflow in [AGENTS.md](AGENTS.md): grill the phase docs, commit docs first, then implement from a feature branch.
+For future phases, follow the planning and manager workflow in [AGENTS.md](AGENTS.md): grill with the human, finalize the plan, create dependency-gated tasks, and drive each task through an independent worker/reviewer handoff loop.
 
 ## Repository Layout
 

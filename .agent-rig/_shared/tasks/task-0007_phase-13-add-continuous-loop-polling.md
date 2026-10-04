@@ -16,6 +16,9 @@ message: "Accepted: loop now runs continuously by default while preserving
   bounded continuous-mode tests; review work still wins before worker work on
   each tick; loop.lock cleanup verified by tests after bounded completion; npm
   test passed (57)."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

@@ -16,6 +16,9 @@ message: "Accepted: README, docs/tasks, and loop help now describe
   --auto, manual live-smoke verification, and continued Claude non-support; node
   dist/index.js loop --help matched the documented contract; npm test previously
   passed (64) and git diff --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

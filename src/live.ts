@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parse } from "@iarna/toml";
-import { parse as parseYaml } from "yaml";
 import { readAgents, requireWorkspace, tools } from "./workspace.js";
+import { createWorkflowStore, WorkflowStore, WorkflowTask } from "./workflow-store.js";
 
 const handoffName = /^\d{4}-\d{2}-\d{2}-\d{4}_.+_[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
 const noteName = /^\d{4}-\d{2}-\d{2}-\d{4}_[a-z][a-z0-9-]*_.+\.md$/;
@@ -59,11 +59,19 @@ export function runStart(args: string[], cwd: string) {
 
 function statusModel(cwd: string) {
   const root = requireWorkspace(cwd);
+  const { store, projectIdentifier } = createWorkflowStore(cwd);
   const session = readJson(join(root, "_shared", "session.json"));
   const sessionAgents = isRecord(session?.agents) ? session.agents : {};
-  const tasks = readLoopTasks(cwd, join(root, "_shared", "tasks"));
+  let tasks: LoopTask[] = [];
+  let taskState = "ok";
+  try {
+    tasks = readLoopTasks(store, projectIdentifier);
+  } catch {
+    taskState = "error";
+  }
   return {
     workspace: cwd,
+    workflow: { provider: store.constructor.name === "SQLiteWorkflowStore" ? "sqlite" : "markdown", project_identifier: projectIdentifier },
     session: {
       path: ".agent-rig/_shared/session.json",
       version: session?.version ?? null,
@@ -71,7 +79,7 @@ function statusModel(cwd: string) {
       blockers: Array.isArray(session?.blockers) ? session.blockers : []
     },
     queues: {
-      shared: tasksState(cwd, join(root, "_shared", "tasks"))
+      shared: tasksState(cwd, store.constructor.name === "SQLiteWorkflowStore" ? null : join(root, "_shared", "tasks"), tasks, taskState)
     },
     agents: readAgents(root).map((agent) => {
       const live = isRecord(sessionAgents[agent.name]) ? sessionAgents[agent.name] : {};
@@ -83,7 +91,7 @@ function statusModel(cwd: string) {
         last_seen_at: live.last_seen_at ?? null
       };
     }),
-    handoffs: handoffs(cwd, join(root, "_shared", "handoff_logs")),
+    handoffs: handoffs(store, projectIdentifier),
     loop: {
       lock: loopLock(cwd, join(root, "_shared", "loop.lock")),
       next_action: nextLoopAction(tasks),
@@ -135,50 +143,14 @@ function loopAction(kind: "review" | "worker", task: LoopTask, agent: "reviewer"
   };
 }
 
-function readLoopTasks(cwd: string, dir: string) {
-  if (!existsSync(dir)) return [];
-  const parsed = readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => readLoopTaskSafe(join(dir, entry.name)))
-    .filter((task): task is ReturnType<typeof readLoopTask> => task !== null)
-    .sort((a, b) => a.id.localeCompare(b.id));
-  const done = new Set(parsed.filter((task) => task.status === "done").map((task) => task.id));
-  const ids = new Set(parsed.map((task) => task.id));
-  return parsed.map((task) => ({
+function readLoopTasks(store: WorkflowStore, projectIdentifier: string): LoopTask[] {
+  return store.listTasks(projectIdentifier).map((task) => ({
     id: task.id,
     title: task.title,
     status: task.status,
-    assigned_to: task.assigned_to,
-    dependency_ready: task.depends_on.every((id) => ids.has(id) && done.has(id))
+    assigned_to: task.assignedTo,
+    dependency_ready: task.dependencyReady
   }));
-}
-
-function readLoopTaskSafe(file: string) {
-  try {
-    return readLoopTask(file);
-  } catch {
-    return null;
-  }
-}
-
-function readLoopTask(file: string) {
-  const meta = readFrontmatter(file);
-  return {
-    id: String(meta.id ?? ""),
-    title: String(meta.title ?? ""),
-    status: String(meta.status ?? ""),
-    assigned_to: String(meta.assigned_to ?? ""),
-    depends_on: Array.isArray(meta.depends_on) ? meta.depends_on.filter((item): item is string => typeof item === "string") : []
-  };
-}
-
-function readFrontmatter(file: string) {
-  const text = readFileSync(file, "utf8");
-  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-  if (!match) throw new Error(`Task file is missing frontmatter: ${file}`);
-  const meta = parseYaml(match[1]);
-  if (!isRecord(meta)) throw new Error(`Task frontmatter must be an object: ${file}`);
-  return meta;
 }
 
 function latestLoopRun(cwd: string, dir: string, agent: "worker" | "reviewer") {
@@ -214,11 +186,12 @@ function readLoopRunJson(file: string) {
   }
 }
 
-function tasksState(cwd: string, dir: string) {
+function tasksState(cwd: string, dir: string | null, taskRecords: LoopTask[], state = "ok") {
   try {
-    const tasks = existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".md")).map((entry) => readTaskStatus(join(dir, entry.name))) : [];
+    if (state !== "ok") throw new Error("workflow store unavailable");
+    const tasks = taskRecords.map((task) => task.status);
     return {
-      path: relative(cwd, dir),
+      path: dir ? relative(cwd, dir) : null,
       status: "ok",
       todo: tasks.filter((status) => status === "todo").length,
       ready: tasks.filter((status) => status === "ready").length,
@@ -228,25 +201,26 @@ function tasksState(cwd: string, dir: string) {
       done: tasks.filter((status) => status === "done").length
     };
   } catch {
-    return { path: relative(cwd, dir), status: "error", todo: null, ready: null, in_progress: null, blocked: null, review: null, done: null };
+    return { path: dir ? relative(cwd, dir) : null, status: "error", todo: null, ready: null, in_progress: null, blocked: null, review: null, done: null };
   }
 }
 
-function readTaskStatus(file: string) {
-  const text = readFileSync(file, "utf8");
-  return text.match(/^---\r?\n[\s\S]*?\bstatus:\s*([^\r\n]+)[\s\S]*?\r?\n---\r?\n?/)?.[1]?.trim() ?? "";
-}
-
-function handoffs(cwd: string, dir: string) {
-  return handoffEntries(cwd, dir).slice(0, 5);
-}
-
-function handoffEntries(cwd: string, dir: string) {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && handoffName.test(entry.name))
-    .map((entry) => ({ file: entry.name, path: relative(cwd, join(dir, entry.name)) }))
-    .sort((a, b) => b.file.localeCompare(a.file));
+function handoffs(store: WorkflowStore, projectIdentifier: string) {
+  const markdown = store.constructor.name === "MarkdownWorkflowStore";
+  return store.listAllHandoffs(projectIdentifier).map((handoff) => ({
+    project_identifier: projectIdentifier,
+    task_id: handoff.taskId || null,
+    sequence: handoff.sequence,
+    sender: handoff.sender,
+    recipient: handoff.recipient,
+    status: handoff.status,
+    created_at: handoff.createdAt,
+    ...(handoff.metadata.source_created_at ? { source_created_at: handoff.metadata.source_created_at } : {}),
+    ...(handoff.metadata.source_order_conflict ? { source_order_conflict: true } : {}),
+    // SQLite handoffs have no canonical file; expose their logical identity
+    // instead of manufacturing a filesystem reference.
+    file: markdown && typeof handoff.metadata.filename === "string" ? handoff.metadata.filename : null
+  })).sort((a, b) => String(b.task_id).localeCompare(String(a.task_id)) || b.sequence - a.sequence).slice(0, 5);
 }
 
 function recentNotes(cwd: string, dir: string, limit: number) {
@@ -259,26 +233,31 @@ function recentNotes(cwd: string, dir: string, limit: number) {
 }
 
 function resumeContext(cwd: string, root: string, role: string) {
-  const allHandoffs = handoffEntries(cwd, join(root, "_shared", "handoff_logs"));
-  const plannerHandoff = allHandoffs.find((entry) => entry.file.endsWith("_planner.md")) ?? null;
+  const { store, projectIdentifier } = createWorkflowStore(cwd);
+  const allHandoffs = handoffs(store, projectIdentifier);
+  const plannerHandoff = allHandoffs.find((entry) => entry.sender === "planner") ?? null;
   const latestHandoff = allHandoffs[0] ?? null;
   const notes = recentNotes(cwd, join(root, "_shared", "notes"), 3);
-  const includeLatest = Boolean(latestHandoff && (!plannerHandoff || latestHandoff.file !== plannerHandoff.file) && (role === "planner" || role === "worker" || role === "reviewer"));
+  const includeLatest = Boolean(latestHandoff && (!plannerHandoff || latestHandoff.task_id !== plannerHandoff.task_id || latestHandoff.sequence !== plannerHandoff.sequence) && (role === "planner" || role === "worker" || role === "reviewer"));
   return { plannerHandoff, latestHandoff: includeLatest ? latestHandoff : null, notes };
 }
 
-function printResumeContext(model: { plannerHandoff: { path: string } | null; latestHandoff: { path: string } | null; notes: { path: string }[] }) {
+function printResumeContext(model: { plannerHandoff: { task_id: string | null; sequence: number; file: string | null } | null; latestHandoff: { task_id: string | null; sequence: number; file: string | null } | null; notes: { path: string }[] }) {
   console.log("Resume context:");
   if (!model.plannerHandoff && !model.latestHandoff && !model.notes.length) {
     console.log("  none");
     return;
   }
-  if (model.plannerHandoff) console.log(`  Planner handoff: ${model.plannerHandoff.path}`);
-  if (model.latestHandoff) console.log(`  Latest handoff: ${model.latestHandoff.path}`);
+  if (model.plannerHandoff) console.log(`  Planner handoff: ${handoffReference(model.plannerHandoff)}`);
+  if (model.latestHandoff) console.log(`  Latest handoff: ${handoffReference(model.latestHandoff)}`);
   if (model.notes.length) {
     console.log("  Shared findings notes:");
     for (const note of model.notes) console.log(`    ${note.path}`);
   }
+}
+
+function handoffReference(handoff: { task_id: string | null; sequence: number; file: string | null }) {
+  return handoff.file ? `.agent-rig/_shared/handoff_logs/${handoff.file}` : `${handoff.task_id ?? "unknown-task"}#${handoff.sequence}`;
 }
 
 function credScope(root: string, name: string) {
@@ -318,7 +297,7 @@ function printStatus(model: ReturnType<typeof statusModel>) {
   }
   console.log("Handoffs:");
   if (!model.handoffs.length) console.log("  none");
-  for (const handoff of model.handoffs) console.log(`  ${handoff.file}`);
+  for (const handoff of model.handoffs) console.log(`  ${handoff.file ?? `${handoff.task_id ?? "unknown-task"}#${handoff.sequence}`}`);
 }
 
 function printCredScope(cwd: string, name: string, scope: { env: string; keys: string[] }) {

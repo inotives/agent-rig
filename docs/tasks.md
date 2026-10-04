@@ -1,6 +1,8 @@
 # AgentRig Tasks
 
-AgentRig tasks are Markdown files with YAML frontmatter.
+AgentRig tasks use a backend-neutral workflow-store interface. New workspaces
+default to Markdown files with YAML frontmatter; after an explicit migration,
+SQLite is canonical for live tasks and handoffs.
 
 Canonical task files live in:
 
@@ -39,7 +41,9 @@ agent-rig tasks --json
 agent-rig tasks show task-0001
 ```
 
-`tasks show` prints the Markdown task file because the file is the source of truth.
+`tasks show` reconstructs the task as Markdown from the active provider. In
+Markdown mode this is the source file; in SQLite mode it is a backend-neutral
+view and the SQLite database is authoritative.
 
 ## Task Format
 
@@ -209,5 +213,49 @@ agent-rig watch --once
 `watch --once` processes canonical shared tasks from `.agent-rig/_shared/tasks/`. It skips ready tasks without `assigned_to` because watch needs a target agent.
 
 `watch --once` remains the older filesystem-only single-task adapter. It does not launch headless Codex sessions and is unchanged by the Phase 13 worker-reviewer loop.
+
+## Workflow Storage And Migration
+
+The provider is selected in `.agent-rig/_shared/agent-rig.json`:
+
+```json
+{"workflow_store": {"provider": "markdown"}, "project_identifier": "my-project"}
+```
+
+Markdown is the default. To switch a completed Markdown-backed workspace to
+SQLite, run:
+
+```bash
+agent-rig workflow migrate --to sqlite
+```
+
+Migration imports only tasks and handoff conversations. Planning documents in
+`docs/`, run artifacts, and AgentRig harness state are not imported. It
+validates first, refuses an existing database or marked source, verifies the
+temporary database, then switches configuration and marks the old Markdown
+records with `storage_status: migrated`. A marker-write error is reported
+after the provider switch because SQLite is already canonical.
+
+The normal worker-reviewer completion path requires a worker handoff followed
+by a reviewer handoff. Legacy tasks with zero or one imported handoff retain
+their historical status but are marked with `incomplete_handoff_trail` and
+cannot be newly completed without the configured trail. A human may use the
+explicit administrative override for an exceptional historical decision.
+In SQLite mode, both `tasks done` and `tasks set-status <id> done` enforce this
+trail; use `--admin-override` only for an explicit human exception. Manual
+work can append handoffs with `tasks handoff <id> --sender worker --recipient
+reviewer --status review --message "Summary"`. For a handoff file written
+after the one-way migration, use `tasks handoff <id> --source-file <path>` to
+import it once and mark the source file historical. The import appends at the
+next live sequence and preserves the source timestamp in `source_created_at`.
+If that time predates the preceding handoff, `status --json` exposes
+`source_order_conflict: true`; a new worker/reviewer pair is required for normal
+completion.
+Inside a running worker-reviewer loop, a reviewer's `done` request is held
+until AgentRig can append the reviewer handoff and commit completion together.
+
+The manager replanning process remains in the generated
+`.agent-rig/_shared/workflow.md`: planning and ADR documents stay in `docs/`,
+and implementation tasks are created only after human approval.
 
 Run `agent-rig validate` to catch invalid status, missing metadata, missing dependency references, and unknown assignees.

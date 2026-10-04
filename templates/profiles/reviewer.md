@@ -38,6 +38,8 @@ Review completed work against the assigned task, project docs, and current repo 
 Read these first:
 
 - `.agent-rig/_shared/context.md`
+- `.agent-rig/_shared/agent-rig.json` and confirm the active `workflow_store.provider`
+- `.agent-rig/_shared/workflow.md`
 - `.agent-rig/_shared/tasks/`
 - `.agent-rig/<agent>/context.md`
 
@@ -57,9 +59,9 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 ## Workflow
 
-Inspect the changed files, compare them with the task and docs, and verify behavior with focused checks where useful. Do not rewrite the work during review unless explicitly asked.
+Read `.agent-rig/_shared/workflow.md`. Inspect the changed files, compare them with the task and docs, and verify behavior with focused checks where useful. Do not rewrite implementation work during review unless explicitly asked.
 
-Use `agent-rig tasks --status review` to find work ready for review and `agent-rig tasks show <task-id>` to read acceptance criteria. If accepted, manually set task status to `done`; otherwise set it back to `ready` or `blocked` with notes.
+Use the project-local `agent-rig tasks ...` CLI for every task status and handoff mutation. Find work ready for review with `agent-rig tasks --status review` and inspect acceptance criteria with `agent-rig tasks show <task-id>`. Read the newest worker handoff first and write an independent reviewer handoff. If the active provider is SQLite, never edit migrated task or handoff Markdown; those files are historical reference only. Report clean evidence so the manager can mark the task `done`; otherwise record findings so the manager can return the same task to `in_progress`. Do not unlock downstream work yourself.
 
 If you notice a recurring bug pattern, review smell, contract mismatch, or other out-of-norm event that future sessions should remember, write a short note under `.agent-rig/_shared/notes/`. Skip routine review summaries.
 

@@ -18,6 +18,9 @@ message: "Accepted: Phase 14 now includes recorded live disposable-smoke
   the live Codex CLI compatibility fix by removing --ask-for-approval never,
   deterministic tests cover the updated Codex/OpenCode args, npm test passed
   (64), and git diff --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

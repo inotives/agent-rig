@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { Agent, readAgents, requireWorkspace, validSlug } from "./workspace.js";
+import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, serializeTask, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./workflow-store.js";
+import { replaceFrontmatter } from "./workflow.js";
 
 type SharedTask = {
   id: string;
@@ -20,6 +22,10 @@ type SharedTask = {
   meta: Record<string, unknown>;
   body: string;
   record: Record<string, unknown>;
+  workflow: WorkflowTask;
+  store: WorkflowStore;
+  projectIdentifier: string;
+  cwd: string;
 };
 
 type LoopRunResult = {
@@ -56,6 +62,7 @@ export function runTasks(args: string[], cwd: string) {
   if (command === "block") return tasksBlock(rest, cwd);
   if (command === "unblock") return tasksUnblock(rest, cwd);
   if (command === "done") return tasksDone(rest, cwd);
+  if (command === "handoff") return tasksHandoff(rest, cwd);
   if (command === "next") return tasksNext(rest, cwd);
   if (command === "sync") return tasksSync(rest, cwd);
   return tasksList(args, cwd);
@@ -65,14 +72,16 @@ function tasksHelp() {
   console.log(`Usage: agent-rig tasks [command] [options]
 
 Commands:
-  create <title>              Create a shared Markdown task
-  show <task-id>              Print the canonical task Markdown
-  set-status <task-id> <status>
+  create <title>              Create a shared workflow task
+  show <task-id>              Print the task as Markdown
+  set-status <task-id> <status> [--admin-override]
   assign <task-id> <agent-name>
   set-type <task-id> <type>
   block <task-id> --reason <reason>
   unblock <task-id> --status <todo|ready|in_progress>
-  done <task-id> [--message <message>]
+  done <task-id> [--message <message>] [--admin-override]
+  handoff <task-id> --sender <role> --recipient <role> --status <status> --message <text>
+  handoff <task-id> --source-file <path>  Append late source evidence with its original timestamp
   next [--agent <agent-name>] [--json] [--claim]
   sync github [--label <label>] [--limit <number>] [--dry-run] [--json]
 
@@ -97,32 +106,32 @@ function tasksCreate(args: string[], cwd: string) {
     const type = option(options, "--type") ?? "task";
     const priority = option(options, "--priority") ?? "normal";
     if (!taskStatuses.has(status)) return fail(`Invalid status: ${status}`);
+    if (status === "done") return fail("Create the task before completing it; completion requires worker and reviewer handoffs");
     if (!taskTypes.has(type)) return fail(`Invalid type: ${type}`);
     if (!priorities.has(priority)) return fail(`Invalid priority: ${priority}`);
 
-    const dir = sharedTasksDir(root);
-    mkdirSync(dir, { recursive: true });
-    const id = nextSharedTaskId(dir);
-    const filename = `${id}_${slug(title)}.md`;
-    const file = join(dir, filename);
-    if (existsSync(file)) return fail(`Task already exists: ${relative(cwd, file)}`);
-
     const today = dateStamp(new Date());
-    const meta = {
-      id,
+    const { store, projectIdentifier } = createWorkflowStore(cwd);
+    const requestedId = readWorkspaceProvider(cwd) === "markdown" ? nextSharedTaskId(sharedTasksDir(root)) : "";
+    const created = store.createTask({
+      projectIdentifier,
+      id: requestedId,
       title,
       type,
       status,
-      assigned_to: option(options, "--assigned-to") ?? "",
-      created_by: option(options, "--created-by") ?? "human",
-      created_on: today,
-      updated_on: today,
+      assignedTo: option(options, "--assigned-to") ?? "",
+      createdBy: option(options, "--created-by") ?? "human",
+      createdOn: today,
+      updatedOn: today,
       priority,
       parent: option(options, "--parent") ?? "",
-      depends_on: dependsOn(options)
-    };
-    writeFileSync(file, sharedTaskMarkdown(meta), "utf8");
-    console.log(`Created ${id}: ${relative(cwd, file)}`);
+      dependsOn: dependsOn(options),
+      dependencyReady: true,
+      blockedBy: [],
+      body: defaultTaskBody(),
+      metadata: {}
+    });
+    console.log(`Created ${created.id}${readWorkspaceProvider(cwd) === "markdown" ? `: ${relative(cwd, join(sharedTasksDir(root), `${created.id}_${slug(title)}.md`))}` : ""}`);
     return 0;
   } catch (cause) {
     return fail(message(cause));
@@ -155,7 +164,7 @@ function tasksShow(args: string[], cwd: string) {
     if (!id || args.length !== 1) return fail("Usage: agent-rig tasks show <task-id>");
     const task = readSharedTasks(requireWorkspace(cwd), cwd).find((item) => item.id === id);
     if (!task) return fail(`Task not found: ${id}`);
-    process.stdout.write(readFileSync(task.file, "utf8"));
+    process.stdout.write(serializeTask(task.workflow));
     return 0;
   } catch (cause) {
     return fail(message(cause));
@@ -165,10 +174,21 @@ function tasksShow(args: string[], cwd: string) {
 function tasksSetStatus(args: string[], cwd: string) {
   try {
     const [id, status] = args;
-    if (!id || !status || args.length !== 2) return fail("Usage: agent-rig tasks set-status <task-id> <status>");
+    if (!id || !status) return fail("Usage: agent-rig tasks set-status <task-id> <status> [--admin-override]");
+    const options = parseOptions(args.slice(2), new Set(["--admin-override"]), new Set(["--admin-override"]));
     if (!taskStatuses.has(status)) return fail(`Invalid status: ${status}`);
+    if (options.has("--admin-override") && status !== "done") return fail("--admin-override applies only to completion");
     const task = requireSharedTask(cwd, id);
-    updateSharedTask(task, { status, updated_on: dateStamp(new Date()) });
+    if (status === "done" && process.env.AGENT_RIG_LOOP_REVIEW_TASK === id) {
+      updateSharedTask(task, { pending_completion: true, updated_on: dateStamp(new Date()) });
+      console.log(`Pending reviewer completion for ${id}`);
+      return 0;
+    }
+    // This is the agent-facing backend-neutral mutation command. Loop
+    // transitions pair completion with a handoff; direct task maintenance
+    // must remain usable with both workflow providers.
+    if (status === "done") task.store.completeTask(task.projectIdentifier, id, options.has("--admin-override"));
+    updateSharedTask(task, { status, pending_completion: undefined, updated_on: dateStamp(new Date()) });
     console.log(`Updated ${id}: status=${status}`);
     return 0;
   } catch (cause) {
@@ -246,14 +266,62 @@ function tasksUnblock(args: string[], cwd: string) {
 function tasksDone(args: string[], cwd: string) {
   try {
     const id = args[0];
-    if (!id) return fail("Usage: agent-rig tasks done <task-id> [--message <message>]");
-    const options = parseOptions(args.slice(1), new Set(["--message"]));
+    if (!id) return fail("Usage: agent-rig tasks done <task-id> [--message <message>] [--admin-override]");
+    const options = parseOptions(args.slice(1), new Set(["--message", "--admin-override"]), new Set(["--admin-override"]));
     const updates: Record<string, unknown> = { status: "done", updated_on: dateStamp(new Date()) };
     const msg = option(options, "--message");
     if (msg) updates.message = msg;
     const task = requireSharedTask(cwd, id);
+    if (process.env.AGENT_RIG_LOOP_REVIEW_TASK === id) {
+      updateSharedTask(task, { ...updates, status: "review", pending_completion: true });
+      console.log(`Pending reviewer completion for ${id}`);
+      return 0;
+    }
+    task.store.completeTask(task.projectIdentifier, id, options.has("--admin-override"));
     updateSharedTask(task, updates);
     console.log(`Done ${id}${msg ? `: ${msg}` : ""}`);
+    return 0;
+  } catch (cause) {
+    return fail(message(cause));
+  }
+}
+
+function tasksHandoff(args: string[], cwd: string) {
+  try {
+    const id = args[0];
+    if (!id) return fail("Usage: agent-rig tasks handoff <task-id> --sender <role> --recipient <role> --status <status> --message <text> | --source-file <path>");
+    const options = parseOptions(args.slice(1), new Set(["--sender", "--recipient", "--status", "--message", "--source-file"]));
+    const task = requireSharedTask(cwd, id);
+    const source = option(options, "--source-file");
+    let handoff: WorkflowHandoff;
+    if (source) {
+      if (!(task.store instanceof SQLiteWorkflowStore)) return fail("--source-file requires the SQLite workflow store");
+      const file = resolve(cwd, source);
+      if (realpathSync(dirname(file)) !== realpathSync(join(cwd, ".agent-rig", "_shared", "handoff_logs"))) return fail("Handoff source must be in .agent-rig/_shared/handoff_logs/");
+      const raw = readFileSync(file, "utf8");
+      if (/^storage_status:\s*migrated\s*$/m.test(raw)) return fail(`Handoff already imported: ${basename(file)}`);
+      handoff = parseHandoff(file, basename(file));
+      if (handoff.taskId !== id) return fail(`Handoff task does not match ${id}`);
+      handoff.projectIdentifier = task.projectIdentifier;
+      const previous = task.store.listHandoffs(task.projectIdentifier, id).at(-1);
+      const sourceCreatedAt = handoff.createdAt;
+      handoff.createdAt = new Date().toISOString();
+      if (sourceCreatedAt) {
+        handoff.metadata.source_created_at = sourceCreatedAt;
+        if (previous?.createdAt && new Date(sourceCreatedAt) < new Date(previous.createdAt)) handoff.metadata.source_order_conflict = true;
+      }
+    } else {
+      const sender = option(options, "--sender");
+      const recipient = option(options, "--recipient");
+      const status = option(options, "--status");
+      const message = option(options, "--message");
+      if (!sender || !recipient || !status || !message) return fail("Handoff requires --sender, --recipient, --status, and --message");
+      handoff = { projectIdentifier: task.projectIdentifier, taskId: id, sequence: 0, sender, recipient, status, message, createdAt: new Date().toISOString(), metadata: {} };
+    }
+    handoff.sequence = task.store.listHandoffs(task.projectIdentifier, id).length + 1;
+    task.store.addHandoff(handoff);
+    if (source) replaceFrontmatter(resolve(cwd, source), new Date().toISOString());
+    console.log(`Recorded handoff ${id} #${handoff.sequence}`);
     return 0;
   } catch (cause) {
     return fail(message(cause));
@@ -302,8 +370,8 @@ function tasksSync(args: string[], cwd: string) {
     if (!Number.isInteger(limit) || limit < 1) return fail(`Invalid limit: ${limitText}`);
 
     const root = requireWorkspace(cwd);
-    const dir = sharedTasksDir(root);
-    mkdirSync(dir, { recursive: true });
+    const { store, projectIdentifier } = createWorkflowStore(cwd);
+    const workflowProvider = readWorkspaceProvider(cwd);
 
     const repo = githubRepo(cwd);
     const issues = githubIssues(cwd, limit, option(options, "--label"));
@@ -313,7 +381,7 @@ function tasksSync(args: string[], cwd: string) {
     const today = dateStamp(new Date());
     const imported: Record<string, unknown>[] = [];
     const skipped: Record<string, unknown>[] = [];
-    let nextNumber = nextSharedTaskNumber(dir);
+    let nextNumber = existing.reduce((max, task) => Math.max(max, Number(task.id.match(/(\d+)$/)?.[1] ?? 0)), 0) + 1;
 
     for (const issue of issues) {
       const duplicate = existing.find((task) => githubSourceMatches(task.meta.source, repo, issue.number));
@@ -322,22 +390,9 @@ function tasksSync(args: string[], cwd: string) {
         continue;
       }
 
-      const id = `task-${String(nextNumber++).padStart(4, "0")}`;
-      const file = join(dir, `${id}_${slug(issue.title)}.md`);
+       const id = `task-${String(nextNumber++).padStart(4, "0")}`;
       const labels = issue.labels.map((label) => label.name);
-      const meta = {
-        id,
-        title: issue.title,
-        type: githubIssueType(labels),
-        status: "todo",
-        assigned_to: "",
-        created_by: "github-sync",
-        created_on: today,
-        updated_on: today,
-        priority: "normal",
-        parent: "",
-        depends_on: [],
-        source: {
+       const metadata = { source: {
           provider: "github",
           repo,
           issue: issue.number,
@@ -345,10 +400,9 @@ function tasksSync(args: string[], cwd: string) {
           state_at_import: "open",
           imported_at: today,
           labels
-        }
-      };
-      if (!dryRun) writeFileSync(file, sharedTaskMarkdown(meta, githubIssueTaskBody(issue)), "utf8");
-      imported.push({ issue: issue.number, task: id, path: relative(cwd, file) });
+         } };
+       if (!dryRun) store.createTask({ projectIdentifier, id, title: issue.title, type: githubIssueType(labels), status: "todo", assignedTo: "", priority: "normal", parent: "", dependsOn: [], dependencyReady: true, blockedBy: [], createdBy: "github-sync", createdOn: today, updatedOn: today, body: githubIssueTaskBody(issue), metadata });
+       imported.push({ issue: issue.number, task: id, ...(workflowProvider === "markdown" ? { path: relative(cwd, join(sharedTasksDir(root), `${id}_${slug(issue.title)}.md`)) } : {}) });
     }
 
     if (json) console.log(JSON.stringify({ repo, imported, skipped_existing: skipped, dry_run: dryRun, limit }, null, 2));
@@ -411,16 +465,18 @@ export async function runLoop(args: string[], cwd: string) {
 function runLoopTick(root: string, cwd: string, workerName: string, reviewerName: string, workerAgent: Agent, reviewerAgent: Agent) {
   const selection = selectLoopTask(readSharedTasks(root, cwd), workerName);
   if (selection.kind === "review") {
+    const handoffCount = selection.task.store.listHandoffs(selection.task.projectIdentifier, selection.task.id).length;
     const result = runLoopAgent(root, cwd, reviewerAgent, selection.task);
-    handleLoopResult(cwd, result, reviewerAgent, selection.task.id);
+    handleLoopResult(cwd, result, reviewerAgent, selection.task.id, handoffCount);
     if (result.exitStatus !== 0) throw new Error(result.failureSummary || loopFailureMessage(reviewerAgent.tool, result.exitStatus, reviewerName, "reviewer", selection.task.id, result.stderr, result.error));
     console.log(`Ran reviewer ${reviewerName} on ${selection.task.id}.`);
     return;
   }
   if (selection.kind === "worker") {
     updateSharedTask(selection.task, { status: "in_progress", updated_on: dateStamp(new Date()) });
+    const handoffCount = selection.task.store.listHandoffs(selection.task.projectIdentifier, selection.task.id).length;
     const result = runLoopAgent(root, cwd, workerAgent, selection.task);
-    handleLoopResult(cwd, result, workerAgent, selection.task.id);
+    handleLoopResult(cwd, result, workerAgent, selection.task.id, handoffCount);
     if (result.exitStatus !== 0) throw new Error(result.failureSummary || loopFailureMessage(workerAgent.tool, result.exitStatus, workerName, "worker", selection.task.id, result.stderr, result.error));
     console.log(`Ran worker ${workerName} on ${selection.task.id}.`);
     return;
@@ -457,20 +513,19 @@ function runOne(cwd: string, root: string, agent: Agent, task: SharedTask) {
     const blocked = task.meta.simulate === "blocked";
     const status = blocked ? "blocked" : "done";
     const msg = `Fake adapter ${blocked ? "blocked" : "completed"} ${task.id}.`;
-    finish(root, agent, task, runDir, runId, status, msg);
+    finish(root, agent, task, runDir, runId, status, msg, true);
   } catch (cause) {
     const msg = message(cause);
     const runDir = join(root, agent.name, "runs", runId);
     mkdirSync(runDir, { recursive: true });
-    finish(root, agent, task, runDir, runId, "blocked", msg);
+    finish(root, agent, task, runDir, runId, "blocked", msg, true);
   }
 }
 
-function finish(root: string, agent: Agent, task: SharedTask, runDir: string, runId: string, status: "done" | "blocked", msg: string) {
+function finish(root: string, agent: Agent, task: SharedTask, runDir: string, runId: string, status: "done" | "blocked", msg: string, administrativeOverride = false) {
   const finished = new Date().toISOString();
-  updateSharedTask(task, { status, run_id: runId, finished_at: finished, message: msg, updated_on: dateStamp(new Date()) });
+  updateSharedTaskAndHandoff(task, { status, run_id: runId, finished_at: finished, message: msg, updated_on: dateStamp(new Date()) }, agent, runId, status, msg, administrativeOverride);
   writeJson(join(runDir, "result.json"), { status, message: msg, handoff: handoffFileName(agent, runId, new Date()) });
-  writeHandoff(root, agent, task, runId, status, msg);
   if (status === "blocked") addBlocker(root, agent.name, msg);
   updateAgentSession(root, agent, status === "done" ? "idle" : "blocked");
 }
@@ -484,12 +539,20 @@ function assemblePrompt(root: string, agent: Agent, task: SharedTask) {
   const agentToolsPath = join(".agent-rig", agent.name, "tools");
   const sharedToolsPath = join(".agent-rig", "_shared", "tools");
   const phaseDocPath = inferPhaseDocPath(task);
+  const provider = readWorkspaceWorkflowConfig(task.cwd).workflow_store.provider;
+  const cli = process.argv[1]?.endsWith("/dist/index.js")
+    ? `"${process.execPath}" "${resolve(process.argv[1])}"`
+    : "agent-rig";
+  const recentHandoffs = task.store.listHandoffs(task.projectIdentifier, task.id).slice(-6);
   return [
     "# AgentRig Loop Prompt",
     `Agent: ${agent.name}`,
     `Role: ${agent.role}`,
     `Task ID: ${task.id}`,
-    `Task file: ${task.path}`,
+    `Project: ${task.projectIdentifier}`,
+    `Active workflow provider: ${provider}`,
+    `AgentRig command for this run: ${cli}`,
+    "Use that command for task status and handoff mutations. In SQLite mode, never edit migrated task or handoff Markdown; it is historical reference only.",
     phaseDocPath ? `Phase doc: ${phaseDocPath}` : "Phase doc: not inferred",
     "",
     "# Required Task Outcome",
@@ -518,8 +581,14 @@ function assemblePrompt(root: string, agent: Agent, task: SharedTask) {
     "",
     readFileSync(join(root, agent.name, "context.md"), "utf8").trim(),
     "",
-    "# Task Markdown",
-    task.path,
+    "# Recent Task Handoffs (oldest to newest)",
+    recentHandoffs.length ? recentHandoffs.map((handoff) =>
+      `## #${handoff.sequence} ${handoff.sender} → ${handoff.recipient} (${handoff.status}, ${handoff.createdAt})\n${handoff.message.trim()}`
+    ).join("\n\n") : "No handoffs recorded yet.",
+    "",
+    "# Task",
+    `Project: ${task.projectIdentifier}`,
+    `Task ID: ${task.id}`,
     "",
     task.body.trim()
   ].join("\n") + "\n";
@@ -553,10 +622,11 @@ function runCodexLoop(root: string, cwd: string, agent: Agent, task: SharedTask)
   const preferredArgs = [...baseArgs, "--output-last-message", lastMessagePath, "-"];
   const fallbackArgs = [...baseArgs, "-"];
   let args = preferredArgs;
-  let result = spawnSync("codex", args, { cwd, input: prompt, encoding: "utf8" });
+  const env = { ...process.env, ...(agent.role === "reviewer" ? { AGENT_RIG_LOOP_REVIEW_TASK: task.id } : {}) };
+  let result = spawnSync("codex", args, { cwd, input: prompt, encoding: "utf8", env });
   if (codexDoesNotSupportLastMessage(result)) {
     args = fallbackArgs;
-    result = spawnSync("codex", args, { cwd, input: prompt, encoding: "utf8" });
+    result = spawnSync("codex", args, { cwd, input: prompt, encoding: "utf8", env });
   }
   if (!existsSync(lastMessagePath)) writeFileSync(lastMessagePath, "", "utf8");
 
@@ -590,7 +660,7 @@ function runOpenCodeLoop(root: string, cwd: string, agent: Agent, task: SharedTa
 
   mkdirSync(runDir, { recursive: true });
   writeFileSync(promptPath, prompt, "utf8");
-  const result = spawnSync("opencode", args, { cwd, encoding: "utf8" });
+  const result = spawnSync("opencode", args, { cwd, encoding: "utf8", env: { ...process.env, ...(agent.role === "reviewer" ? { AGENT_RIG_LOOP_REVIEW_TASK: task.id } : {}) } });
   const finalTask = requireSharedTask(cwd, task.id);
   const exitStatus = result.status ?? (result.error ? 1 : 0);
   const stdout = spawnText(result.stdout);
@@ -620,14 +690,33 @@ function loopResultRecord(agent: Agent, taskId: string, args: string[], exitStat
   };
 }
 
-function handleLoopResult(cwd: string, result: LoopRunResult, agent: Agent, taskId: string) {
+function handleLoopResult(cwd: string, result: LoopRunResult, agent: Agent, taskId: string, handoffCount: number) {
   const task = requireSharedTask(cwd, taskId);
   if (result.exitStatus !== 0) {
     blockLoopTask(task, result.failureSummary || loopFailureMessage(agent.tool, result.exitStatus, agent.name, agent.role, taskId, result.stderr, result.error));
   } else if (agent.role === "worker" && task.status === "in_progress") {
     blockLoopTask(task, staleLoopTaskMessage(agent, taskId, "in_progress"));
-  } else if (agent.role === "reviewer" && task.status === "review") {
+  } else if (agent.role === "reviewer" && task.status === "review" && task.meta.pending_completion !== true) {
     blockLoopTask(task, staleLoopTaskMessage(agent, taskId, "review"));
+  }
+  if (result.exitStatus === 0 && task.status !== "blocked") {
+    const messagePath = join(result.runDir, "last-message.md");
+    const handoffMessage = existsSync(messagePath) ? readFileSync(messagePath, "utf8") : "";
+    const updates = {
+      status: task.meta.pending_completion === true ? "done" : task.status,
+      pending_completion: undefined,
+      run_id: basename(result.runDir),
+      finished_at: new Date().toISOString(),
+      message: handoffMessage,
+      updated_on: dateStamp(new Date())
+    };
+    const handoffs = task.store.listHandoffs(task.projectIdentifier, task.id);
+    if (handoffs.length > handoffCount && handoffs.at(-1)?.sender === agent.role) {
+      if (updates.status === "done") task.store.completeTask?.(task.projectIdentifier, task.id);
+      updateSharedTask(task, updates);
+    } else {
+      updateSharedTaskAndHandoff(task, updates, agent, basename(result.runDir), updates.status, handoffMessage);
+    }
   }
   const finalTask = requireSharedTask(cwd, taskId);
   updateLoopResult(result.runDir, {
@@ -663,7 +752,8 @@ function codexDoesNotSupportLastMessage(result: ReturnType<typeof spawnSync>) {
 
 function spawnText(value: string | NodeJS.ArrayBufferView | null | undefined) {
   if (!value) return "";
-  return typeof value === "string" ? value : Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("utf8");
+  const text = typeof value === "string" ? value : Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("utf8");
+  return text.replace(/(?:\r\n|\n)+$/, "\n");
 }
 
 function loopFailureMessage(tool: string, exitStatus: number, agentName: string, role: string, taskId: string, stderr: string, error: string) {
@@ -705,10 +795,36 @@ function inferPhaseDocPath(task: SharedTask) {
   return match?.[0] ?? "";
 }
 
-function writeHandoff(root: string, agent: Agent, task: SharedTask, runId: string, status: string, msg: string) {
-  const dir = join(root, "_shared", "handoff_logs");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, handoffFileName(agent, runId, new Date())), `---\nagent: ${agent.name}\nrole: ${agent.role}\ntool: ${agent.tool}\ntask: ${task.id}\ntask_title: ${task.title}\nrun: ${runId}\nstatus: ${status}\n---\n\n# Handoff\n\n## Message\n\n${msg}\n`, "utf8");
+function updateSharedTaskAndHandoff(task: SharedTask, updates: Record<string, unknown>, agent: Agent, runId: string, status: string, msg: string, administrativeOverride = false) {
+  const createdAt = new Date().toISOString();
+  const handoffs = task.store.listHandoffs(task.projectIdentifier, task.id);
+  const handoff: WorkflowHandoff = {
+    projectIdentifier: task.projectIdentifier,
+    taskId: task.id,
+    sequence: handoffs.length + 1,
+    sender: agent.role,
+    recipient: agent.role === "worker" ? "reviewer" : "worker",
+    status,
+    message: msg,
+    createdAt,
+    metadata: {
+      agent: agent.name,
+      tool: agent.tool,
+      run: runId,
+      task_title: task.title,
+      ...(task.store.constructor.name === "MarkdownWorkflowStore" ? { filename: handoffFileName(agent, runId, new Date()) } : {})
+    }
+  };
+  const patch = taskPatch(task, updates, task.body);
+  if (task.store.updateTaskWithHandoff) {
+    task.store.updateTaskWithHandoff(task.projectIdentifier, task.id, patch, { ...handoff, sequence: undefined }, { administrativeOverride });
+    const updated = task.store.getTask(task.projectIdentifier, task.id);
+    if (!updated) throw new Error(`Task not found: ${task.id}`);
+    Object.assign(task, toSharedTask(task.cwd, updated, task.store));
+    return;
+  }
+  updateSharedTask(task, updates);
+  task.store.addHandoff(handoff);
 }
 
 function updateAgentSession(root: string, agent: Agent, status: string) {
@@ -831,38 +947,48 @@ function sharedTasksDir(root: string) {
 }
 
 function readSharedTasks(root: string, cwd: string) {
-  const dir = sharedTasksDir(root);
-  if (!existsSync(dir)) return [];
-  const parsed = readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => {
-      const file = join(dir, entry.name);
-      return { file, ...readSharedTaskMarkdown(file) };
-    });
-  const done = new Set(parsed.filter((task) => task.meta.status === "done").map((task) => String(task.meta.id ?? "")));
-  const ids = new Set(parsed.map((task) => String(task.meta.id ?? "")));
-
-  return parsed
-    .map((task): SharedTask => toSharedTask(cwd, task.file, task.meta, task.body, done, ids))
-    .sort((a, b) => a.id.localeCompare(b.id));
+  const { store, projectIdentifier } = createWorkflowStore(cwd);
+  return store.listTasks(projectIdentifier).map((task) => toSharedTask(cwd, task, store)).sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function toSharedTask(cwd: string, file: string, meta: Record<string, unknown>, body: string, done: Set<string>, ids: Set<string>): SharedTask {
-  const depends = Array.isArray(meta.depends_on) ? meta.depends_on.filter((item): item is string => typeof item === "string") : [];
-  const blockedBy = depends.filter((id) => !ids.has(id) || !done.has(id));
+function toSharedTask(cwd: string, workflow: WorkflowTask, store: WorkflowStore): SharedTask {
+  const meta = workflowMetadata(workflow);
+  const file = store instanceof MarkdownWorkflowStore ? join(sharedTasksDir(requireWorkspace(cwd)), `${workflow.id}_${slug(workflow.title)}.md`) : "";
   const record = {
-    id: String(meta.id ?? ""),
-    title: String(meta.title ?? ""),
-    type: String(meta.type ?? "task"),
-    status: String(meta.status ?? ""),
-    assigned_to: String(meta.assigned_to ?? ""),
-    priority: String(meta.priority ?? "normal"),
-    dependency_count: depends.length,
-    dependency_ready: blockedBy.length === 0,
-    blocked_by: blockedBy,
-    path: relative(cwd, file)
+    id: workflow.id,
+    title: workflow.title,
+    type: workflow.type,
+    status: workflow.status,
+    assigned_to: workflow.assignedTo,
+    priority: workflow.priority,
+    dependency_count: workflow.dependsOn.length,
+    dependency_ready: workflow.dependencyReady,
+    blocked_by: workflow.blockedBy,
+    path: file ? relative(cwd, file) : "",
+    project_identifier: workflow.projectIdentifier
   };
-  return { ...record, depends_on: depends, file, meta, body, record };
+  return { ...record, depends_on: workflow.dependsOn, file, meta, body: workflow.body, record, workflow, store, projectIdentifier: workflow.projectIdentifier, cwd };
+}
+
+function workflowMetadata(task: WorkflowTask) {
+  return {
+    ...task.metadata,
+    id: task.id,
+    title: task.title,
+    type: task.type,
+    status: task.status,
+    assigned_to: task.assignedTo,
+    created_by: task.createdBy,
+    created_on: task.createdOn,
+    updated_on: task.updatedOn,
+    priority: task.priority,
+    parent: task.parent,
+    depends_on: task.dependsOn
+  };
+}
+
+function readWorkspaceProvider(cwd: string) {
+  return readWorkspaceWorkflowConfig(cwd).workflow_store.provider;
 }
 
 function requireSharedTask(cwd: string, id: string) {
@@ -985,14 +1111,28 @@ ${body}
 }
 
 function updateSharedTask(task: SharedTask, updates: Record<string, unknown>, body = task.body) {
+  const patch = taskPatch(task, updates, body);
+  task.store.updateTask(task.projectIdentifier, task.id, patch as never);
+  const updated = task.store.getTask(task.projectIdentifier, task.id);
+  if (!updated) throw new Error(`Task not found: ${task.id}`);
+  Object.assign(task, toSharedTask(task.cwd, updated, task.store));
+}
+
+function taskPatch(task: SharedTask, updates: Record<string, unknown>, body: string) {
   const meta = { ...task.meta };
   for (const [key, value] of Object.entries(updates)) {
     if (typeof value === "undefined" || value === "") delete meta[key];
     else meta[key] = value;
   }
-  writeFileSync(task.file, sharedTaskMarkdown(meta, body), "utf8");
-  task.meta = meta;
-  task.body = body;
+  const patch: Record<string, unknown> = { body, metadata: {} };
+  const fields: Record<string, string> = { title: "title", type: "type", status: "status", assigned_to: "assignedTo", priority: "priority", parent: "parent", depends_on: "dependsOn", updated_on: "updatedOn" };
+  const metadata: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(meta)) {
+    if (!(key in fields) && !["id", "created_by", "created_on"].includes(key)) metadata[key] = value;
+  }
+  for (const [key, field] of Object.entries(fields)) if (key in meta) patch[field] = meta[key];
+  patch.metadata = metadata;
+  return patch;
 }
 
 function readSharedTaskMarkdown(file: string) {
@@ -1006,8 +1146,12 @@ function readSharedTaskMarkdown(file: string) {
 
 function sharedTaskMarkdown(meta: Record<string, unknown>, body?: string) {
   const ordered = orderedFrontmatter(meta);
-  const taskBody = body ?? "# Task\n\n## Context\n\n\n## Goal\n\n\n## Scope\n\n\n## Planner Notes\n\n\n## Implementation Plan\n\n\n## Acceptance Criteria\n\n- [ ] First verifiable criterion.\n\n## Notes\n\n";
+  const taskBody = body ?? defaultTaskBody();
   return `---\n${stringifyYaml(ordered).trimEnd()}\n---\n\n${taskBody.trimEnd()}\n`;
+}
+
+function defaultTaskBody() {
+  return "# Task\n\n## Context\n\n\n## Goal\n\n\n## Scope\n\n\n## Planner Notes\n\n\n## Implementation Plan\n\n\n## Acceptance Criteria\n\n- [ ] First verifiable criterion.\n\n## Notes\n\n";
 }
 
 function orderedFrontmatter(meta: Record<string, unknown>) {

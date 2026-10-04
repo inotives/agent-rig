@@ -28,20 +28,21 @@ AgentRig assumes local project skills and tools take precedence over similar glo
 
 ## Task Workflow
 
-Shared tasks live in:
+With the default Markdown provider, shared tasks live in:
 
 ```text
 .agent-rig/_shared/tasks/
 ```
 
-Each task is a Markdown file with YAML frontmatter. Treat the task file as the source of truth.
+Each default-provider task is a Markdown file with YAML frontmatter. After
+migration, SQLite is the source of truth and these files are historical only.
 
 Before starting work:
 
-1. Read the assigned task file.
+1. Read the assigned task with `agent-rig tasks show <task-id>`.
 2. Check `depends_on` and `status`.
 3. Only work on tasks that are ready for your role.
-4. Update the task through AgentRig commands when possible.
+4. Update the task through AgentRig commands.
 
 Useful commands:
 
@@ -53,23 +54,29 @@ agent-rig tasks show <task-id>
 agent-rig tasks set-status <task-id> <status>
 agent-rig tasks done <task-id> --message "<summary>"
 agent-rig tasks block <task-id> --reason "<reason>"
+agent-rig tasks handoff <task-id> --sender <role> --recipient <role> --status <status> --message "<summary>"
 ```
+
+Confirm the active provider in `.agent-rig/_shared/agent-rig.json` before
+mutating workflow state. Use the project-local `agent-rig tasks ...` command
+for every task and handoff mutation. In SQLite mode, migrated task and handoff
+Markdown is historical reference only and must not be edited directly.
 
 ## Handoff
 
-Write handoffs into:
+With the default Markdown provider, AgentRig writes handoffs into:
 
 ```text
 .agent-rig/_shared/handoff_logs/
 ```
 
-Use this filename format:
+In Markdown mode, use this filename format:
 
 ```text
 <date-YYYY-MM-DD-hhmm>_<session_id>_<claude|codex|opencode|etc>_<role>.md
 ```
 
-Use YAML frontmatter for metadata such as:
+In Markdown mode, use YAML frontmatter for metadata such as:
 
 ```yaml
 ---
@@ -90,36 +97,73 @@ status: <done|blocked|handoff>
 - Prefer project-local commands and docs over global memory.
 - If blocked, record the blocker in the task and write a handoff.
 
-## Project Phase Workflow
+## Project Phase And Agent Workflow
 
-AgentRig work is organized by implementation phases under `docs/phases/`, with completed phases archived under `docs/_archived/`.
+AgentRig work is organized by implementation phases under `docs/phases/`, with
+completed phases archived under `docs/_archived/`.
 
 For each new phase:
 
-1. Start with `grill-with-docs`.
-   - Read the relevant phase markdown and existing project docs before asking questions.
-   - Ask one decision question at a time.
-   - Provide a recommended answer with each question.
-   - Update the phase markdown and ADRs as decisions are made.
-   - Create ADRs only for meaningful tradeoffs that future contributors would need to understand.
+1. Prepare the planning workspace.
+   - Confirm the current branch and clean working tree.
+   - When starting from `main`, create and switch to a phase feature branch
+     from the latest `main` before changing phase docs or creating tasks.
 
-2. Finish and commit the docs first.
-   - When grilling is complete, commit the updated docs on `main`.
-   - Push the docs commit to `origin/main`.
-   - Keep this separate from implementation commits.
+2. Grill the phase with the human.
+   - Read the relevant phase markdown and existing project docs first.
+   - Use `grill-with-docs` and ask one decision question at a time.
+   - Provide a recommended answer and concrete trade-offs with each question.
+   - Record accepted decisions in the phase document and meaningful trade-offs
+     in ADRs.
+   - Keep phase plans, implementation plans, ADRs, and acceptance documentation
+     as repository files under `docs/`. These documents are canonical planning
+     artifacts and are not workflow-store records.
+   - Do not create implementation tasks until the human-approved plan is
+     clear.
 
-3. Start implementation from a new feature branch.
-   - Create the feature branch from the latest `main`.
-   - Implement according to the finalized phase docs.
-   - Keep changes scoped to the phase.
-   - Run the relevant checks and live tests described by the phase acceptance criteria.
+3. Break the approved plan into tasks.
+   - The planner and human turn the finalized phase into small, independently
+     verifiable AgentRig task files.
+   - Add explicit `depends_on` edges and one final integrated-review task.
+   - Set only dependency-free foundation tasks to `ready`.
+   - Keep downstream tasks `blocked`; dependency metadata alone does not
+     authorize them to start.
 
-4. Complete the phase.
-   - Commit implementation work on the feature branch.
-   - Push the branch and provide PR notes.
-   - After the PR lands, checkout `main` and pull.
-   - Move the completed phase doc from `docs/phases/` to `docs/_archived/`.
-   - Then begin grilling the next phase.
+4. Run the manager-driven worker/reviewer loop.
+   - Unblock and claim one selected eligible worker task.
+   - Spawn a worker sub-agent using the assigned AgentRig profile. It reads
+     the task, project docs, relevant prior handoffs, and affected code; makes
+     only scoped changes; runs focused checks; sets the task to `review`; and
+     writes a worker handoff. It does not commit or push.
+   - Spawn an independent reviewer sub-agent using the reviewer profile. It
+     reads the task, worker handoff, project docs, and current diff; verifies
+     the acceptance criteria; does not edit implementation files; and writes a
+     reviewer handoff.
+   - If review is clean, mark the task `done` and unblock only the next
+     selected dependent task.
+   - If review finds a problem, set the same task back to `in_progress` and
+     spawn a worker to read both handoffs, implement the focused fix, add
+     regression coverage where needed, verify it, and write a new handoff.
+     Repeat independent review until clean; do not unlock downstream work.
+
+   - If implementation or review exposes a limitation that changes the plan,
+     pause the affected task graph. Do not silently work around a material
+     scope or architecture change.
+   - Return to the planner and human to discuss the finding, update the
+     canonical documents under `docs/`, and add or revise ADRs when needed.
+   - Create new tasks or revise task dependencies only after the updated plan
+     is accepted. Keep newly affected downstream tasks `blocked` until the
+     revised predecessors pass review.
+
+5. Complete the phase.
+   - After all implementation tasks pass task-level review, run the final
+     integrated reviewer task against the complete diff and phase acceptance
+     checks.
+   - Write the planner phase handoff with verification evidence and resolved
+     review findings.
+   - Commit, push, or open a pull request only when the human explicitly asks.
+   - After merge, archive the completed phase document under `docs/_archived/`
+     before beginning the next phase.
 
 ## Coding Guidelines
 

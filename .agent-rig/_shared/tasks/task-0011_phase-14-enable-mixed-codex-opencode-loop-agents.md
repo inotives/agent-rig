@@ -18,6 +18,9 @@ message: "Accepted: task 11 adds the missing mixed-tool acceptance coverage
   the fake-tool PATH merge; node --test mixed-tool patterns passed (2), node
   --test OpenCode failure/runner patterns passed (4), npm test --
   --test-name-pattern='loop|opencode' passed (28), and git diff --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

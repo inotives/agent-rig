@@ -5,6 +5,7 @@ import { parse } from "@iarna/toml";
 import { parse as parseYaml } from "yaml";
 import { credsGitignore, roles, tools } from "./workspace.js";
 import { listWorkspaceProfiles } from "./profiles.js";
+import { readWorkspaceWorkflowConfig } from "./workflow-store.js";
 
 export type Problem = { path: string; message: string };
 export type Result = { errors: Problem[]; warnings: Problem[] };
@@ -64,11 +65,20 @@ function validateShared(root: string, result: Result) {
     if (!isRecord(data.created_by) || typeof data.created_by.name === "undefined" || typeof data.created_by.version === "undefined") {
       error(result, "_shared/agent-rig.json", "created_by.name and created_by.version are required.");
     }
+    try {
+      readWorkspaceWorkflowConfig(dirnameFromRoot(root));
+    } catch (cause) {
+      error(result, "_shared/agent-rig.json", cause instanceof Error ? cause.message : String(cause));
+    }
   });
   jsonObject(join(root, "_shared", "session.json"), result, ["version", "created_at", "updated_at", "agents", "current_task_id", "blockers"]);
   warnMissingDir(join(root, "_shared", "tasks"), result);
   validateSharedTasks(root, result);
   nonEmptyMarkdown(join(root, "_shared", "context.md"), result);
+}
+
+function dirnameFromRoot(root: string) {
+  return resolve(root, "..");
 }
 
 function validateAgent(name: string, dir: string, tomlPath: string, result: Result) {

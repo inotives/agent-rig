@@ -16,6 +16,9 @@ message: "Accepted: README and docs/tasks now describe the Codex-only Phase 13
   --help matches the documented flags/defaults; acceptance coverage now proves
   worker ready->review then reviewer review->done with both run-record
   directories written; npm test passed (58) and git diff --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

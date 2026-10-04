@@ -17,6 +17,9 @@ message: "Accepted: added the OpenCode loop runner path with automated
   --file --title command shape, no --model, no --auto, stdout-backed
   last-message.md, and OpenCode-specific failure summaries; npm test --
   --test-name-pattern='loop|opencode' passed (26) and git diff --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

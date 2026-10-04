@@ -15,6 +15,9 @@ message: "Accepted: review-first loop selection verified; review tasks stay
   unmodified, worker claims reuse dependency-ready selection, other-agent and
   blocked tasks are skipped, no-action path works; npm test and git diff --check
   clean."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

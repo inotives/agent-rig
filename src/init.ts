@@ -1,14 +1,17 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { addAgent, Agent, installSkill, normalizeInstalledSkill, repairCredsGitignore, SkillSpec, skillFolderName, workspaceRoot } from "./workspace.js";
 import { dedupeSkills, loadWorkspaceProfile, roleProfile, seedProfiles, skillSpecs } from "./profiles.js";
+import { createWorkflowStore, isProjectIdentifier, isWorkflowStoreProvider, projectIdentifierFromDirectory } from "./workflow-store.js";
 
 type Pattern = "solo" | "coder-reviewer" | "trinity" | "supervisor-worker" | "swarm" | "testing-reviewer" | "custom";
 
 const SCAFFOLD_VERSION = "0.0.1";
+const templateRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "templates");
 
 const patternAgents: Record<Pattern, Agent[]> = {
   solo: [{ name: "worker", role: "worker", tool: "codex" }],
@@ -47,19 +50,33 @@ export async function runInit(args: string[], cwd: string) {
     return 1;
   }
 
+  const projectIdentifier = initOption(args, "--project-identifier");
+  if (projectIdentifier && !isProjectIdentifier(projectIdentifier)) {
+    console.error("--project-identifier must be a lowercase slug starting with a letter (max 40 characters).");
+    return 1;
+  }
+
+  const workflowStore = initOption(args, "--workflow-store") ?? "markdown";
+  if (!isWorkflowStoreProvider(workflowStore)) {
+    console.error("--workflow-store must be markdown or sqlite.");
+    return 1;
+  }
+
   if (args.includes("--yes")) {
     scaffold(cwd, {
       agents: patternAgents.solo,
-      addProjectGitignore: true
+      addProjectGitignore: true,
+      projectIdentifier: projectIdentifier ?? projectIdentifierFromDirectory(cwd),
+      workflowStore
     });
     console.log("Scaffolded .agent-rig/ with 1 agent.");
     return 0;
   }
 
-  return runInteractiveInit(cwd);
+  return runInteractiveInit(cwd, projectIdentifier, workflowStore);
 }
 
-async function runInteractiveInit(cwd: string) {
+async function runInteractiveInit(cwd: string, projectIdentifier?: string, workflowStore: "markdown" | "sqlite" = "markdown") {
   const prompt = makePrompt();
   const project = detectProject(cwd);
 
@@ -92,12 +109,12 @@ async function runInteractiveInit(cwd: string) {
     return 0;
   }
 
-  scaffold(cwd, { agents, addProjectGitignore });
+  scaffold(cwd, { agents, addProjectGitignore, projectIdentifier: projectIdentifier ?? projectIdentifierFromDirectory(cwd), workflowStore });
   console.log(`Scaffolded .agent-rig/ with ${agents.length} ${agents.length === 1 ? "agent" : "agents"}.`);
   return 0;
 }
 
-function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: boolean }) {
+function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: boolean; projectIdentifier: string; workflowStore: "markdown" | "sqlite" }) {
   const root = workspaceRoot(cwd);
   mkdirSync(join(root, "_shared"), { recursive: true });
   mkdirSync(join(root, "_shared", "tools"), { recursive: true });
@@ -114,8 +131,14 @@ function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: 
   writeJson(join(root, "_shared", "agent-rig.json"), {
     workspace_version: 1,
     scaffold_version: SCAFFOLD_VERSION,
-    created_by: { name: "agent-rig", version: SCAFFOLD_VERSION }
+    created_by: { name: "agent-rig", version: SCAFFOLD_VERSION },
+    workflow_store: { provider: options.workflowStore },
+    project_identifier: options.projectIdentifier
   });
+  if (options.workflowStore === "sqlite") {
+    const { store } = createWorkflowStore(cwd);
+    if ("close" in store && typeof store.close === "function") store.close();
+  }
   writeJson(join(root, "_shared", "session.json"), {
     version: 1,
     created_at: new Date().toISOString(),
@@ -125,6 +148,7 @@ function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: 
     blockers: []
   });
   writeFileSync(join(root, "_shared", "context.md"), contextMarkdown(cwd), "utf8");
+  writeFileSync(join(root, "_shared", "workflow.md"), readFileSync(join(templateRoot, "workflow.md"), "utf8"), "utf8");
   writeFileSync(join(root, "human", "README.md"), "# Human\n\nUse this folder for approval, unblock, and override notes.\n", "utf8");
 
   const profileByAgent = options.agents.map((agent) => ({ agent, profile: loadWorkspaceProfile(root, roleProfile(agent.role)) }));
@@ -138,6 +162,14 @@ function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: 
   if (options.addProjectGitignore) {
     addGitignoreEntry(cwd, ".agent-rig/");
   }
+}
+
+function initOption(args: string[], name: string) {
+  const prefix = `${name}=`;
+  const inline = args.find((arg) => arg.startsWith(prefix));
+  if (inline) return inline.slice(prefix.length);
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
 }
 
 function contextMarkdown(cwd: string) {
