@@ -16,6 +16,9 @@ message: "Accepted: loop now blocks non-zero codex exits and stale
   rewritten with final_task_status and blocked failure_summary after post-run
   reconciliation; accepted reviewer done/ready and worker review transitions are
   covered; npm test passed (54)."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

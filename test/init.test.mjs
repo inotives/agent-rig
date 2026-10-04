@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { buildLoopPrompt } from "../dist/tasks.js";
+import { SQLiteWorkflowStore } from "../dist/workflow-store.js";
 
 const cli = new URL("../dist/index.js", import.meta.url).pathname;
 
@@ -48,9 +49,10 @@ function fakeCodex(cwd) {
   const logDir = join(cwd, "fake-codex-log");
   mkdirSync(bin, { recursive: true });
   mkdirSync(logDir, { recursive: true });
-  writeFileSync(join(bin, "codex"), `#!/usr/bin/env node
+writeFileSync(join(bin, "codex"), `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 const input = fs.readFileSync(0, "utf8");
 const logDir = process.env.AGENT_RIG_FAKE_CODEX_LOG_DIR;
@@ -59,10 +61,11 @@ fs.writeFileSync(path.join(logDir, "stdin.txt"), input, "utf8");
 const counterFile = path.join(logDir, "call-count.txt");
 const callIndex = Number(fs.existsSync(counterFile) ? fs.readFileSync(counterFile, "utf8") : "0") + 1;
 fs.writeFileSync(counterFile, String(callIndex), "utf8");
-const taskFileMatch = input.match(/^Task file: (.+)$/m);
-const taskFile = taskFileMatch ? path.join(process.cwd(), taskFileMatch[1].trim()) : "";
 const taskIdMatch = input.match(/^Task ID: (.+)$/m);
 const roleMatch = input.match(/^Role: (.+)$/m);
+const taskFile = taskIdMatch && fs.existsSync(path.join(process.cwd(), ".agent-rig", "_shared", "tasks"))
+  ? path.join(process.cwd(), ".agent-rig", "_shared", "tasks", fs.readdirSync(path.join(process.cwd(), ".agent-rig", "_shared", "tasks")).find((name) => name.startsWith(taskIdMatch[1].trim() + "_") && name.endsWith(".md")) || "")
+  : "";
 fs.appendFileSync(path.join(logDir, "calls.jsonl"), JSON.stringify({ callIndex, taskId: taskIdMatch ? taskIdMatch[1].trim() : "", role: roleMatch ? roleMatch[1].trim() : "", args }) + "\\n");
 const lastMessageIndex = args.indexOf("--output-last-message");
 if (process.env.AGENT_RIG_FAKE_CODEX_REJECT_LAST_MESSAGE === "1" && lastMessageIndex !== -1) {
@@ -75,9 +78,10 @@ if (lastMessageIndex !== -1 && args[lastMessageIndex + 1]) {
 }
 const statusSequence = (process.env.AGENT_RIG_FAKE_CODEX_SET_STATUS_SEQUENCE || "").split(",").map((item) => item.trim()).filter(Boolean);
 const nextStatus = statusSequence[callIndex - 1] || process.env.AGENT_RIG_FAKE_CODEX_SET_STATUS || "";
-if (taskFile && nextStatus) {
-  const task = fs.readFileSync(taskFile, "utf8");
-  fs.writeFileSync(taskFile, task.replace(/^status: .+$/m, \`status: \${nextStatus}\`), "utf8");
+const cliPath = ${JSON.stringify(cli)};
+if (taskIdMatch && nextStatus) spawnSync(process.execPath, [cliPath, "tasks", "set-status", taskIdMatch[1].trim(), nextStatus], { cwd: process.cwd(), stdio: "ignore" });
+if (taskIdMatch && process.env.AGENT_RIG_FAKE_CODEX_RECORD_HANDOFF === "1") {
+  spawnSync(process.execPath, [cliPath, "tasks", "handoff", taskIdMatch[1].trim(), "--sender", roleMatch[1].trim(), "--recipient", "worker", "--status", nextStatus, "--message", "Reviewer recorded evidence"], { cwd: process.cwd(), stdio: "ignore" });
 }
 if (taskFile && process.env.AGENT_RIG_FAKE_CODEX_APPEND_NOTE) {
   fs.appendFileSync(taskFile, process.env.AGENT_RIG_FAKE_CODEX_APPEND_NOTE);
@@ -105,9 +109,10 @@ function fakeOpenCode(cwd) {
   const logDir = join(cwd, "fake-opencode-log");
   mkdirSync(bin, { recursive: true });
   mkdirSync(logDir, { recursive: true });
-  writeFileSync(join(bin, "opencode"), `#!/usr/bin/env node
+writeFileSync(join(bin, "opencode"), `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 const logDir = process.env.AGENT_RIG_FAKE_OPENCODE_LOG_DIR;
 fs.writeFileSync(path.join(logDir, "args.json"), JSON.stringify(args, null, 2), "utf8");
@@ -117,17 +122,16 @@ fs.writeFileSync(counterFile, String(callIndex), "utf8");
 const promptFile = args[args.indexOf("--file") + 1] || "";
 const prompt = promptFile && fs.existsSync(promptFile) ? fs.readFileSync(promptFile, "utf8") : "";
 fs.writeFileSync(path.join(logDir, "prompt.txt"), prompt, "utf8");
-const taskFileMatch = prompt.match(/^Task file: (.+)$/m);
-const taskFile = taskFileMatch ? path.join(process.cwd(), taskFileMatch[1].trim()) : "";
 const taskIdMatch = prompt.match(/^Task ID: (.+)$/m);
 const roleMatch = prompt.match(/^Role: (.+)$/m);
+const taskFile = taskIdMatch && fs.existsSync(path.join(process.cwd(), ".agent-rig", "_shared", "tasks"))
+  ? path.join(process.cwd(), ".agent-rig", "_shared", "tasks", fs.readdirSync(path.join(process.cwd(), ".agent-rig", "_shared", "tasks")).find((name) => name.startsWith(taskIdMatch[1].trim() + "_") && name.endsWith(".md")) || "")
+  : "";
 fs.appendFileSync(path.join(logDir, "calls.jsonl"), JSON.stringify({ callIndex, taskId: taskIdMatch ? taskIdMatch[1].trim() : "", role: roleMatch ? roleMatch[1].trim() : "", args }) + "\\n");
 const statusSequence = (process.env.AGENT_RIG_FAKE_OPENCODE_SET_STATUS_SEQUENCE || "").split(",").map((item) => item.trim()).filter(Boolean);
 const nextStatus = statusSequence[callIndex - 1] || process.env.AGENT_RIG_FAKE_OPENCODE_SET_STATUS || "";
-if (taskFile && nextStatus) {
-  const task = fs.readFileSync(taskFile, "utf8");
-  fs.writeFileSync(taskFile, task.replace(/^status: .+$/m, \`status: \${nextStatus}\`), "utf8");
-}
+const cliPath = ${JSON.stringify(cli)};
+if (taskIdMatch && nextStatus) spawnSync(process.execPath, [cliPath, "tasks", "set-status", taskIdMatch[1].trim(), nextStatus], { cwd: process.cwd(), stdio: "ignore" });
 if (process.env.AGENT_RIG_FAKE_OPENCODE_STDOUT) process.stdout.write(process.env.AGENT_RIG_FAKE_OPENCODE_STDOUT);
 if (process.env.AGENT_RIG_FAKE_OPENCODE_STDERR) process.stderr.write(process.env.AGENT_RIG_FAKE_OPENCODE_STDERR);
 process.exit(Number(process.env.AGENT_RIG_FAKE_OPENCODE_EXIT_STATUS || "0"));
@@ -172,6 +176,13 @@ test("init --yes creates solo Codex worker scaffold", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "agent-rig.json")));
+  const workspaceConfig = JSON.parse(readFileSync(join(cwd, ".agent-rig", "_shared", "agent-rig.json"), "utf8"));
+  assert.equal(workspaceConfig.workflow_store.provider, "markdown");
+  assert.equal(workspaceConfig.project_identifier, cwd.split(/[\\/]/).pop().toLowerCase());
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "workflow.md")));
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "workflow.md"), "utf8"), /independent reviewer/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "workflow.md"), "utf8"), /--workflow-store sqlite/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "workflow.md"), "utf8"), /canonical repository files/);
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "tasks")));
   assert.equal(existsSync(join(cwd, ".agent-rig", "_shared", "task_queue.json")), false);
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "profiles", "worker.md")));
@@ -184,11 +195,49 @@ test("init --yes creates solo Codex worker scaffold", () => {
   assert.ok(existsSync(join(cwd, ".agent-rig", "worker", "tools", ".gitkeep")));
   assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "agent.toml"), "utf8"), /tool = "codex"/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /# Worker Profile/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /\.agent-rig\/_shared\/workflow\.md/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /project-local `agent-rig tasks \.\.\.` CLI/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /active provider is SQLite/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /write a short note under `.agent-rig\/_shared\/notes\/`/);
   assert.match(readFileSync(join(cwd, ".gitignore"), "utf8"), /^\.agent-rig\/$/m);
   assert.equal(readFileSync(join(cwd, ".agent-rig", ".creds", ".gitignore"), "utf8"), "*\n!.gitignore\n!*.toml\n!*.env.example\n");
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "skills", "find-skills")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "skills", "handoff")));
+});
+
+test("init accepts and persists a validated project identifier", () => {
+  const cwd = tempProject();
+  const result = run(["init", "--yes", "--project-identifier", "customer-platform"], cwd);
+  assert.equal(result.status, 0, result.stderr);
+  const config = JSON.parse(readFileSync(join(cwd, ".agent-rig", "_shared", "agent-rig.json"), "utf8"));
+  assert.equal(config.project_identifier, "customer-platform");
+});
+
+test("init can select SQLite for a fresh workspace", () => {
+  const cwd = tempProject();
+  const result = run(["init", "--yes", "--workflow-store", "sqlite"], cwd);
+
+  assert.equal(result.status, 0, result.stderr);
+  const config = JSON.parse(readFileSync(join(cwd, ".agent-rig", "_shared", "agent-rig.json"), "utf8"));
+  assert.equal(config.workflow_store.provider, "sqlite");
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "workflow.sqlite")));
+  assert.equal(readdirSync(join(cwd, ".agent-rig", "_shared", "tasks")).filter((name) => name.endsWith(".md")).length, 0);
+});
+
+test("init rejects an unknown workflow store", () => {
+  const cwd = tempProject();
+  const result = run(["init", "--yes", "--workflow-store", "postgres"], cwd);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /workflow-store must be markdown or sqlite/);
+  assert.equal(existsSync(join(cwd, ".agent-rig")), false);
+});
+
+test("init rejects an invalid project identifier", () => {
+  const cwd = tempProject();
+  const result = run(["init", "--yes", "--project-identifier", "Bad_Name"], cwd);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /project-identifier.*lowercase slug/i);
 });
 
 test("init refuses an existing .agent-rig workspace", () => {
@@ -549,7 +598,8 @@ test("status lists agents, shared task counts, and handoffs as text and json", (
 test("status --json reports loop lock, next action priority, dependency-ready worker tasks, and latest runs", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
-  assert.equal(run(["tasks", "create", "Foundation", "--assigned-to", "worker", "--status", "done"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Foundation", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  assert.equal(run(["tasks", "set-status", "task-0001", "done", "--admin-override"], cwd).status, 0);
   assert.equal(run(["tasks", "create", "Ready work", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-0001"], cwd).status, 0);
   assert.equal(run(["tasks", "create", "Blocked by dependency", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-9999"], cwd).status, 0);
   assert.equal(run(["tasks", "create", "Needs review", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
@@ -599,7 +649,7 @@ test("status --json reports loop lock, next action priority, dependency-ready wo
   });
   assert.equal(status.loop.latest_runs.reviewer, null);
 
-  assert.equal(run(["tasks", "set-status", "task-0004", "done"], cwd).status, 0);
+  assert.equal(run(["tasks", "set-status", "task-0004", "done", "--admin-override"], cwd).status, 0);
   text = run(["status"], cwd);
   assert.equal(text.status, 0, text.stderr);
   assert.match(text.stdout, /next: worker agent=worker task=task-0002 title=Ready work/);
@@ -761,6 +811,196 @@ test("tasks create lists, filters, shows, and emits json", () => {
   assert.match(show.stdout, /^---\nid: task-0001/);
 });
 
+test("SQLite provider routes task commands, status, show, and watch through the store", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  const configPath = join(cwd, ".agent-rig", "_shared", "agent-rig.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.workflow_store.provider = "sqlite";
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+
+  assert.equal(run(["tasks", "create", "SQLite work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  const listed = JSON.parse(run(["tasks", "--json"], cwd).stdout);
+  assert.deepEqual(listed.map((task) => ({ id: task.id, status: task.status, project_identifier: task.project_identifier })), [
+    { id: "task-0001", status: "ready", project_identifier: config.project_identifier }
+  ]);
+  const shown = run(["tasks", "show", "task-0001"], cwd);
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.match(shown.stdout, /id: task-0001/);
+  assert.match(shown.stdout, /title: SQLite work/);
+  assert.equal(run(["status", "--json"], cwd).status, 0);
+  const beforeWatch = JSON.parse(run(["status", "--json"], cwd).stdout);
+  assert.equal(beforeWatch.workflow.provider, "sqlite");
+  assert.equal(beforeWatch.queues.shared.path, null);
+  assert.equal(beforeWatch.queues.shared.ready, 1);
+
+  const watched = run(["watch", "--once"], cwd);
+  assert.equal(watched.status, 0, watched.stderr);
+  const afterWatch = JSON.parse(run(["status", "--json"], cwd).stdout);
+  assert.equal(afterWatch.queues.shared.done, 1);
+  assert.equal(afterWatch.queues.shared.blocked, 0);
+  assert.equal(afterWatch.handoffs[0].task_id, "task-0001");
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "workflow.sqlite")));
+});
+
+test("SQLite CLI completion requires a worker and reviewer trail unless explicitly overridden", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  const configPath = join(cwd, ".agent-rig", "_shared", "agent-rig.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.workflow_store.provider = "sqlite";
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+
+  const invalidCreate = run(["tasks", "create", "Already done", "--status", "done"], cwd);
+  assert.notEqual(invalidCreate.status, 0);
+  assert.equal(run(["tasks", "--json"], cwd).stdout.trim(), "[]");
+  assert.equal(run(["tasks", "create", "Needs review"], cwd).status, 0);
+  for (const command of [["tasks", "done", "task-0001"], ["tasks", "set-status", "task-0001", "done"]]) {
+    const result = run(command, cwd);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /requires worker and reviewer handoffs/);
+    assert.match(run(["tasks", "show", "task-0001"], cwd).stdout, /status: todo/);
+  }
+
+  for (const [sender, recipient, status] of [["worker", "reviewer", "review"], ["reviewer", "worker", "ready"]]) {
+    const result = run(["tasks", "handoff", "task-0001", "--sender", sender, "--recipient", recipient, "--status", status, "--message", `${sender} evidence`], cwd);
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const fixesRequired = run(["tasks", "done", "task-0001"], cwd);
+  assert.notEqual(fixesRequired.status, 0);
+  assert.match(fixesRequired.stderr, /requires worker and reviewer handoffs/);
+  assert.match(run(["tasks", "show", "task-0001"], cwd).stdout, /status: todo/);
+  assert.equal(run(["tasks", "handoff", "task-0001", "--sender", "worker", "--recipient", "reviewer", "--status", "review", "--message", "addressed fixes"], cwd).status, 0);
+  assert.equal(run(["tasks", "handoff", "task-0001", "--sender", "reviewer", "--recipient", "worker", "--status", "done", "--message", "accepted after fixes"], cwd).status, 0);
+  assert.equal(run(["tasks", "done", "task-0001"], cwd).status, 0);
+  assert.match(run(["tasks", "show", "task-0001"], cwd).stdout, /status: done/);
+
+  assert.equal(run(["tasks", "create", "Set status path"], cwd).status, 0);
+  for (const [sender, recipient, status] of [["worker", "reviewer", "review"], ["reviewer", "worker", "done"]]) {
+    assert.equal(run(["tasks", "handoff", "task-0002", "--sender", sender, "--recipient", recipient, "--status", status, "--message", `${sender} evidence`], cwd).status, 0);
+  }
+  assert.equal(run(["tasks", "set-status", "task-0002", "done"], cwd).status, 0);
+
+  assert.equal(run(["tasks", "create", "Override case"], cwd).status, 0);
+  assert.equal(run(["tasks", "set-status", "task-0003", "done", "--admin-override"], cwd).status, 0);
+  assert.match(run(["tasks", "show", "task-0003"], cwd).stdout, /status: done/);
+
+  assert.equal(run(["tasks", "create", "Late handoff"], cwd).status, 0);
+  const source = join(cwd, ".agent-rig", "_shared", "handoff_logs", "2026-10-04-2300_task-0004_codex_worker.md");
+  mkdirSync(join(cwd, ".agent-rig", "_shared", "handoff_logs"), { recursive: true });
+  writeFileSync(source, "---\ntask: task-0004\nagent: worker\nrecipient: reviewer\nstatus: review\n---\n\nLate worker evidence.\n", "utf8");
+  const imported = run(["tasks", "handoff", "task-0004", "--source-file", source], cwd);
+  assert.equal(imported.status, 0, imported.stderr);
+  assert.match(readFileSync(source, "utf8"), /storage_status: migrated/);
+  assert.notEqual(run(["tasks", "handoff", "task-0004", "--source-file", source], cwd).status, 0);
+  const state = JSON.parse(run(["status", "--json"], cwd).stdout);
+  assert.ok(state.handoffs.some((handoff) => handoff.task_id === "task-0004" && handoff.sender === "worker" && handoff.source_created_at === new Date(2026, 9, 4, 23, 0).toISOString()));
+});
+
+test("Markdown CLI completion requires a worker and reviewer trail unless explicitly overridden", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.notEqual(run(["tasks", "create", "Already done", "--status", "done"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Needs review"], cwd).status, 0);
+
+  for (const command of [["tasks", "done", "task-0001"], ["tasks", "set-status", "task-0001", "done"]]) {
+    const result = run(command, cwd);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /requires worker and reviewer handoffs/);
+    assert.match(run(["tasks", "show", "task-0001"], cwd).stdout, /status: todo/);
+  }
+
+  assert.equal(run(["tasks", "done", "task-0001", "--admin-override"], cwd).status, 0);
+  assert.match(run(["tasks", "show", "task-0001"], cwd).stdout, /status: done/);
+});
+
+test("late source handoffs retain audit time without changing the live conversation order", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  const shared = join(cwd, ".agent-rig", "_shared");
+  const configPath = join(shared, "agent-rig.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.workflow_store.provider = "sqlite";
+  writeFileSync(configPath, JSON.stringify(config), "utf8");
+  assert.equal(run(["tasks", "create", "Late source"], cwd).status, 0);
+  assert.equal(run(["tasks", "handoff", "task-0001", "--sender", "reviewer", "--recipient", "worker", "--status", "ready", "--message", "fix requested"], cwd).status, 0);
+
+  const source = join(shared, "handoff_logs", "2026-10-04-2255_task-0001_codex_worker.md");
+  mkdirSync(join(shared, "handoff_logs"), { recursive: true });
+  writeFileSync(source, "---\ntask: task-0001\nagent: worker\nrecipient: reviewer\nstatus: review\ncreated_at: 2026-10-04T00:00:00.000Z\n---\n\nEarlier worker evidence.\n", "utf8");
+  const imported = run(["tasks", "handoff", "task-0001", "--source-file", source], cwd);
+  assert.equal(imported.status, 0, imported.stderr);
+  const store = new SQLiteWorkflowStore(join(shared, "workflow.sqlite"), config.project_identifier);
+  try {
+    const history = store.listHandoffs(config.project_identifier, "task-0001");
+    assert.deepEqual(history.map(({ sequence, sender }) => [sequence, sender]), [[1, "reviewer"], [2, "worker"]]);
+    assert.equal(history[1].metadata.source_created_at, "2026-10-04T00:00:00.000Z");
+    assert.equal(history[1].metadata.source_order_conflict, true);
+    assert.ok(history[1].createdAt > history[0].createdAt);
+  } finally { store.close(); }
+  const inspection = JSON.parse(run(["status", "--json"], cwd).stdout).handoffs.find(({ task_id, sequence }) => task_id === "task-0001" && sequence === 2);
+  assert.equal(inspection.source_order_conflict, true);
+  assert.equal(inspection.source_created_at, "2026-10-04T00:00:00.000Z");
+  assert.equal(run(["tasks", "handoff", "task-0001", "--sender", "reviewer", "--recipient", "worker", "--status", "done", "--message", "old work reviewed"], cwd).status, 0);
+  assert.match(run(["tasks", "done", "task-0001"], cwd).stderr, /requires worker and reviewer handoffs/);
+  assert.equal(run(["tasks", "handoff", "task-0001", "--sender", "worker", "--recipient", "reviewer", "--status", "review", "--message", "new work"], cwd).status, 0);
+  assert.equal(run(["tasks", "handoff", "task-0001", "--sender", "reviewer", "--recipient", "worker", "--status", "done", "--message", "new review"], cwd).status, 0);
+  assert.equal(run(["tasks", "done", "task-0001"], cwd).status, 0);
+});
+
+test("SQLite loop preserves worker-reviewer fixes and completion integrity", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  const configPath = join(cwd, ".agent-rig", "_shared", "agent-rig.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.workflow_store.provider = "sqlite";
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  assert.equal(run(["tasks", "create", "SQLite loop", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+
+  const fake = fakeCodex(cwd);
+  const statuses = ["review", "ready", "review", "done"];
+  for (const status of statuses) {
+    const result = run(["loop", "--once"], cwd, "", { ...fake, AGENT_RIG_FAKE_CODEX_SET_STATUS: status });
+    assert.equal(result.status, 0, result.stderr);
+  }
+
+  const state = JSON.parse(run(["status", "--json"], cwd).stdout);
+  assert.equal(state.workflow.provider, "sqlite");
+  assert.equal(state.queues.shared.done, 1);
+  assert.deepEqual(state.handoffs.slice().reverse().map((handoff) => ({ sequence: handoff.sequence, sender: handoff.sender, status: handoff.status })), [
+    { sequence: 1, sender: "worker", status: "review" },
+    { sequence: 2, sender: "reviewer", status: "ready" },
+    { sequence: 3, sender: "worker", status: "review" },
+    { sequence: 4, sender: "reviewer", status: "done" }
+  ]);
+});
+
+test("SQLite loop completes with a reviewer handoff already recorded in the run", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
+  const configPath = join(cwd, ".agent-rig", "_shared", "agent-rig.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.workflow_store.provider = "sqlite";
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  assert.equal(run(["tasks", "create", "Review once", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  const fake = fakeCodex(cwd);
+  assert.equal(run(["loop", "--once"], cwd, "", { ...fake, AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" }).status, 0);
+  assert.equal(run(["tasks", "set-status", "task-0001", "done"], cwd, "", { AGENT_RIG_LOOP_REVIEW_TASK: "task-0001" }).status, 0);
+  assert.equal(run(["tasks", "set-status", "task-0001", "review"], cwd).status, 0);
+  assert.doesNotMatch(run(["tasks", "show", "task-0001"], cwd).stdout, /pending_completion:/);
+
+  const result = run(["loop", "--once"], cwd, "", { ...fake, AGENT_RIG_FAKE_CODEX_SET_STATUS: "done", AGENT_RIG_FAKE_CODEX_RECORD_HANDOFF: "1" });
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(run(["status", "--json"], cwd).stdout);
+  assert.equal(state.queues.shared.done, 1);
+  assert.deepEqual(state.handoffs.slice().reverse().map(({ sequence, sender }) => [sequence, sender]), [[1, "worker"], [2, "reviewer"]]);
+  const [runId] = readdirSync(join(cwd, ".agent-rig", "reviewer", "runs"));
+  const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json"), "utf8"));
+  assert.equal(record.final_task_status, "done");
+});
+
 test("tasks lifecycle commands mutate shared task frontmatter and preserve body", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
@@ -773,7 +1013,7 @@ test("tasks lifecycle commands mutate shared task frontmatter and preserve body"
   assert.equal(run(["tasks", "assign", "task-0001", "worker"], cwd).status, 0);
   assert.equal(run(["tasks", "block", "task-0001", "--reason", "Need API key"], cwd).status, 0);
   assert.equal(run(["tasks", "unblock", "task-0001", "--status", "ready"], cwd).status, 0);
-  assert.equal(run(["tasks", "done", "task-0001", "--message", "Verified locally."], cwd).status, 0);
+  assert.equal(run(["tasks", "done", "task-0001", "--message", "Verified locally.", "--admin-override"], cwd).status, 0);
 
   const text = readFileSync(file, "utf8");
   assert.match(text, /type: research/);
@@ -788,7 +1028,8 @@ test("tasks lifecycle commands mutate shared task frontmatter and preserve body"
 test("tasks next is dependency-aware and claims only with --claim", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
-  assert.equal(run(["tasks", "create", "Foundation", "--assigned-to", "worker", "--status", "done"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Foundation", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  assert.equal(run(["tasks", "set-status", "task-0001", "done", "--admin-override"], cwd).status, 0);
   assert.equal(run(["tasks", "create", "Ready work", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-0001"], cwd).status, 0);
   assert.equal(run(["tasks", "create", "Blocked by dependency", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-9999"], cwd).status, 0);
 
@@ -1189,7 +1430,8 @@ test("loop claims the next dependency-ready worker task when no review task exis
   const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" };
   assert.equal(run(["init", "--yes"], cwd).status, 0);
   assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
-  assert.equal(run(["tasks", "create", "Done foundation", "--assigned-to", "worker", "--status", "done"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Done foundation", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  assert.equal(run(["tasks", "set-status", "task-0001", "done", "--admin-override"], cwd).status, 0);
   assert.equal(run(["tasks", "create", "Ready work", "--assigned-to", "worker", "--status", "ready", "--depends-on", "task-0001"], cwd).status, 0);
 
   const result = run(["loop", "--once"], cwd, "", env);
@@ -1362,7 +1604,7 @@ test("loop falls back when codex does not support output-last-message", () => {
 
 test("loop exits non-zero when codex exits non-zero but still writes run records", () => {
   const cwd = tempProject();
-  const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_EXIT_STATUS: "7", AGENT_RIG_FAKE_CODEX_STDERR: "simulated codex failure\nmore detail\n" };
+  const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_EXIT_STATUS: "7", AGENT_RIG_FAKE_CODEX_STDERR: "simulated codex failure\nmore detail\n\n\n" };
   assert.equal(run(["init", "--yes"], cwd).status, 0);
   assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
   assert.equal(run(["tasks", "create", "Broken review", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
@@ -1450,7 +1692,7 @@ test("loop exits non-zero when opencode exits non-zero but still writes run reco
   const env = {
     ...fakeOpenCode(cwd),
     AGENT_RIG_FAKE_OPENCODE_EXIT_STATUS: "9",
-    AGENT_RIG_FAKE_OPENCODE_STDERR: "simulated opencode failure\nmore detail\n"
+    AGENT_RIG_FAKE_OPENCODE_STDERR: "simulated opencode failure\nmore detail\n\n\n"
   };
   assert.equal(run(["init", "--yes"], cwd).status, 0);
   assert.equal(run(["add", "reviewer", "--role", "reviewer", "--tool", "opencode"], cwd).status, 0);
@@ -1555,7 +1797,7 @@ test("loop accepts reviewer returning a task to ready with notes", () => {
   assert.equal(record.failure_summary, "");
 });
 
-test("worker loop prompt includes task paths, contents, lifecycle, and local precedence", () => {
+test("worker loop prompt includes identity, lifecycle, and local precedence", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
   assert.equal(run(["tasks", "create", "Implement X", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
@@ -1567,12 +1809,16 @@ test("worker loop prompt includes task paths, contents, lifecycle, and local pre
   assert.match(prompt, /Agent: worker/);
   assert.match(prompt, /Role: worker/);
   assert.match(prompt, /Task ID: task-0001/);
-  assert.match(prompt, /Task file: \.agent-rig\/_shared\/tasks\/task-0001_implement-x\.md/);
+  assert.match(prompt, /Project: /);
+  assert.match(prompt, /Active workflow provider: markdown/);
+  assert.match(prompt, /AgentRig command for this run: /);
+  assert.match(prompt, /In SQLite mode, never edit migrated task or handoff Markdown/);
+  assert.match(prompt, /Use that command for task status and handoff mutations\./);
+  assert.doesNotMatch(prompt, /Task file:/);
   assert.match(prompt, /Phase doc: docs\/phases\/phase-13-worker-reviewer-loop\.md/);
   assert.match(prompt, /# Shared Context File\n\.agent-rig\/_shared\/context\.md/);
   assert.match(prompt, /# Agent Instructions File\n\.agent-rig\/worker\/instructions\.md/);
   assert.match(prompt, /# Agent Context File\n\.agent-rig\/worker\/context\.md/);
-  assert.match(prompt, /# Task Markdown\n\.agent-rig\/_shared\/tasks\/task-0001_implement-x\.md/);
   assert.match(prompt, /Implement only the assigned task\./);
   assert.match(prompt, /`review` when the work is ready for review, or `blocked`/);
   assert.match(prompt, /Read applicable skills from `\.agent-rig\/worker\/skills\/` first\./);
@@ -1596,7 +1842,12 @@ test("reviewer loop prompt includes reviewer lifecycle instructions and local pr
   assert.match(prompt, /Agent: reviewer/);
   assert.match(prompt, /Role: reviewer/);
   assert.match(prompt, /Task ID: task-0001/);
-  assert.match(prompt, /Task file: \.agent-rig\/_shared\/tasks\/task-0001_review-x\.md/);
+  assert.match(prompt, /Project: /);
+  assert.match(prompt, /Active workflow provider: markdown/);
+  assert.match(prompt, /AgentRig command for this run: /);
+  assert.match(prompt, /In SQLite mode, never edit migrated task or handoff Markdown/);
+  assert.match(prompt, /Use that command for task status and handoff mutations\./);
+  assert.doesNotMatch(prompt, /Task file:/);
   assert.match(prompt, /Phase doc: docs\/phases\/phase-13-worker-reviewer-loop\.md/);
   assert.match(prompt, /# Agent Instructions File\n\.agent-rig\/reviewer\/instructions\.md/);
   assert.match(prompt, /# Agent Context File\n\.agent-rig\/reviewer\/context\.md/);

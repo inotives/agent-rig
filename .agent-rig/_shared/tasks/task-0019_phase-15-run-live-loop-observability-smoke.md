@@ -17,6 +17,9 @@ message: "Accepted: Phase 15 now includes a recorded live disposable smoke in
   worker/reviewer run record paths, and the real sandbox blocker plus
   unsandboxed fallback needed on this machine; npm test passed (66), node
   dist/index.js validate passed cleanly, and git diff --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

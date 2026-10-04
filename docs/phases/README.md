@@ -19,13 +19,28 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 13. [Phase 13: Worker-Reviewer Loop](../_archived/phase-13-worker-reviewer-loop.md) — completed
 14. [Phase 14: OpenCode Loop Adapter](../_archived/phase-14-opencode-loop-adapter.md) — completed
 15. [Phase 15: Loop Observability](phase-15-loop-observability.md) — draft
+16. [Phase 16: Pluggable Workflow Storage](phase-16-workflow-storage.md) — draft
 
 ## Workflow
 
 For each phase:
 
-1. Run `grill-with-docs` against the phase doc and `docs/project_specs.md`.
-2. Resolve open decisions in the phase doc.
-3. Add ADRs only for hard-to-reverse tradeoffs.
-4. Commit finalized docs on `main`.
-5. Implement from a feature branch.
+1. Confirm the branch and working tree; create the phase feature branch from
+   the latest `main` before changing phase docs or creating tasks.
+2. Run `grill-with-docs` against the phase doc and existing project docs.
+3. Resolve open decisions with the human one at a time and record accepted
+   decisions in the phase doc.
+4. Add ADRs only for hard-to-reverse tradeoffs.
+5. After the human-approved plan is final, split it into dependency-gated
+   AgentRig tasks and one final integrated-review task.
+6. Set only dependency-free foundation tasks to `ready`; keep downstream
+   tasks `blocked`.
+7. Drive each selected task through a worker sub-agent, an independent
+   reviewer sub-agent, and focused worker fixes/re-review until clean.
+8. Unlock only the next selected dependent task after clean review, then run
+   the final integrated review.
+9. If implementation or review reveals a material limitation, pause the
+   affected graph, return to planner/human discussion, update the canonical
+   docs, and revise or create tasks only after acceptance.
+10. Commit, push, or open a pull request only when explicitly requested.
+11. After merge, archive the completed phase document under `docs/_archived/`.

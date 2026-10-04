@@ -17,6 +17,9 @@ message: "Accepted: codex loop invocation and run-record contract verified;
   exits now return friendly non-zero CLI errors without stack traces while
   preserving run artifacts; npm test passed (51) and live missing-codex repro
   verified."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

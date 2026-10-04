@@ -14,6 +14,9 @@ depends_on:
 message: "Accepted: loop command wired and guarded as scoped for task 0002;
   help, lock behavior, unknown/non-Codex agent failures, and watch regression
   checks verified; npm test and git diff --check clean."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

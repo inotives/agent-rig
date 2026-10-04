@@ -15,6 +15,9 @@ message: "Accepted: role-aware loop prompts verified for worker and reviewer;
   required paths, lifecycle states, phase-doc inference, local skill/tool
   precedence, and no-native-tool-mounting wording present; npm test and git diff
   --check clean."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

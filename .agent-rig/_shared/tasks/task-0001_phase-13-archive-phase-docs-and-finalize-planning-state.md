@@ -12,6 +12,9 @@ parent: ""
 depends_on: []
 message: "Accepted: phase docs state verified; Phase 12 archived, Phase 13
   active in docs index, no runtime code changes, git diff --check clean."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

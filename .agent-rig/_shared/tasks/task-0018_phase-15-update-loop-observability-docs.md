@@ -18,6 +18,9 @@ message: "Accepted: README and docs/tasks now document the actual Phase 15
   handling or cleanup; node dist/index.js status --help still only prints the
   existing usage line, so the user-facing contract lives in the updated docs;
   git diff --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

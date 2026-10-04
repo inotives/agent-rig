@@ -18,6 +18,9 @@ message: "Accepted: task 12 completes the deterministic fake OpenCode coverage
   usage, stdout-backed last-message.md, and result.json tool/args fields for
   both worker and reviewer paths; npm test passed (64) and git diff --check
   passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

@@ -19,6 +19,9 @@ message: "Accepted: status --json now adds the read-only loop object with
   passed (2), npm test passed (65), node dist/index.js validate returned only
   expected downstream dependency warnings for tasks 0016-0019, and git diff
   --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

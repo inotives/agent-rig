@@ -21,6 +21,9 @@ message: "Accepted: plain status now renders a compact Loop section from the
   passed (2), npm test passed (65), node dist/index.js validate returned only
   expected downstream dependency warnings for tasks 0017-0019, and git diff
   --check passed."
+storage_status: migrated
+migrated_to: sqlite
+migrated_at: 2026-10-04T14:53:28.966Z
 ---
 
 

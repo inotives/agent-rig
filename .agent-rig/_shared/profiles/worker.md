@@ -43,6 +43,7 @@ Implement assigned tasks with the smallest working change that satisfies the doc
 Read these first:
 
 - `.agent-rig/_shared/context.md`
+- `.agent-rig/_shared/agent-rig.json` and confirm the active `workflow_store.provider`
 - `.agent-rig/_shared/tasks/`
 - `.agent-rig/<agent>/context.md`
 
@@ -64,7 +65,9 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 Read the task, inspect the affected code, implement the smallest viable change, and run the smallest relevant check before handoff. If a check cannot run, state why.
 
-Use `agent-rig tasks --status ready` to find ready tasks and `agent-rig tasks show <task-id>` to read the task Markdown. Prefer tasks assigned to `<agent>`. When work starts, manually set the task status to `in_progress`; when implementation is ready for review, manually set it to `review`.
+Use the project-local `agent-rig tasks ...` CLI for every task status and handoff mutation. Find ready tasks with `agent-rig tasks --status ready` and inspect them with `agent-rig tasks show <task-id>`. Prefer tasks assigned to `<agent>`. When work starts, manually set the task status to `in_progress`; when implementation is ready for review, run the focused checks, set the task to `review`, and write a worker handoff. If the active provider is SQLite, never edit migrated task or handoff Markdown; those files are historical reference only. Do not commit or push.
+
+When fixing reviewer findings, read the worker and reviewer handoffs first, change only the identified scope, add regression coverage when needed, rerun verification, and write a new handoff before returning the task to review.
 
 ## Human Escalation
 
