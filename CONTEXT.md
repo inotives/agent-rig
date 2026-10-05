@@ -29,3 +29,10 @@ providers; a provider may choose an appropriate native representation.
 The project identifier is a stable slug that identifies the AgentRig workspace
 that owns a workflow record. It remains attached to tasks and handoffs when
 those records are exported or moved to another provider.
+
+## Phase
+
+A phase is an optional planning grouping for workflow tasks. It identifies the
+implementation or delivery phase a task belongs to and is distinct from the
+task's lifecycle status. Existing records may be displayed using a legacy
+title or filename fallback until an explicit phase is assigned.

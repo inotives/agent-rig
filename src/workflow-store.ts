@@ -18,6 +18,8 @@ export type WorkflowTask = {
   assignedTo: string;
   priority: string;
   parent: string;
+  /** Canonical phase when explicitly assigned; legacy inference is display-only. */
+  phase?: string;
   dependsOn: string[];
   dependencyReady: boolean;
   blockedBy: string[];
@@ -28,7 +30,7 @@ export type WorkflowTask = {
   metadata: Record<string, unknown>;
 };
 
-export type WorkflowTaskPatch = Partial<Pick<WorkflowTask, "title" | "type" | "status" | "assignedTo" | "priority" | "parent" | "dependsOn" | "updatedOn" | "body" | "metadata">>;
+export type WorkflowTaskPatch = Partial<Pick<WorkflowTask, "title" | "type" | "status" | "assignedTo" | "priority" | "parent" | "phase" | "dependsOn" | "updatedOn" | "body" | "metadata">>;
 
 export type WorkflowHandoff = {
   projectIdentifier: ProjectIdentifier;
@@ -47,6 +49,13 @@ export type WorkflowTaskQuery = {
   status?: string;
   assignedTo?: string;
 };
+
+/** Resolve the UI-facing phase without persisting legacy inference. */
+export function resolveTaskPhase(task: Pick<WorkflowTask, "phase" | "title">, sourceFilename = ""): string {
+  if (task.phase?.trim()) return task.phase.trim();
+  const token = `${task.title} ${sourceFilename}`.match(/(?:^|[^a-z0-9])phase(?:-|\s)(\d+)\b/i);
+  return token ? `phase-${token[1]}` : "Unassigned";
+}
 
 /** Backend-neutral persistence boundary for live tasks and handoff conversations. */
 export interface WorkflowStore {
@@ -96,6 +105,7 @@ type SQLiteTaskRow = {
   assigned_to: string;
   priority: string;
   parent: string;
+  phase: string | null;
   created_by: string;
   created_on: string;
   updated_on: string;
@@ -239,7 +249,7 @@ export class SQLiteWorkflowStore implements WorkflowStore {
       CREATE TABLE IF NOT EXISTS tasks (
         project_identifier TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL,
         type TEXT NOT NULL, status TEXT NOT NULL, assigned_to TEXT NOT NULL,
-        priority TEXT NOT NULL, parent TEXT NOT NULL, created_by TEXT NOT NULL,
+        priority TEXT NOT NULL, parent TEXT NOT NULL, phase TEXT, created_by TEXT NOT NULL,
         created_on TEXT NOT NULL, updated_on TEXT NOT NULL, body_markdown TEXT NOT NULL,
         metadata_json TEXT NOT NULL DEFAULT '{}',
         PRIMARY KEY (project_identifier, task_id)
@@ -266,8 +276,10 @@ export class SQLiteWorkflowStore implements WorkflowStore {
       CREATE INDEX IF NOT EXISTS dependencies_lookup ON task_dependencies(project_identifier, dependency_id);
       CREATE INDEX IF NOT EXISTS handoffs_recent ON handoffs(project_identifier, task_id, created_at, sequence);
     `);
-    this.db.prepare("INSERT OR IGNORE INTO store_metadata (project_identifier, key, value_json) VALUES (?, ?, ?)")
-      .run(this.projectIdentifier, "schema_version", JSON.stringify(1));
+    const columns = this.db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "phase")) this.db.exec("ALTER TABLE tasks ADD COLUMN phase TEXT");
+    this.db.prepare("INSERT INTO store_metadata (project_identifier, key, value_json) VALUES (?, ?, ?) ON CONFLICT(project_identifier, key) DO UPDATE SET value_json = excluded.value_json")
+      .run(this.projectIdentifier, "schema_version", JSON.stringify(2));
   }
 
   private runTransaction<T>(operation: () => T): T {
@@ -276,10 +288,10 @@ export class SQLiteWorkflowStore implements WorkflowStore {
   }
 
   private insertTask(task: WorkflowTask): void {
-    this.db.prepare(`INSERT INTO tasks (project_identifier, task_id, title, type, status, assigned_to, priority, parent, created_by, created_on, updated_on, body_markdown, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    this.db.prepare(`INSERT INTO tasks (project_identifier, task_id, title, type, status, assigned_to, priority, parent, phase, created_by, created_on, updated_on, body_markdown, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       this.projectIdentifier, task.id, task.title, task.type, task.status, task.assignedTo, task.priority,
-      task.parent, task.createdBy, task.createdOn, task.updatedOn, task.body, JSON.stringify(task.metadata)
+      task.parent, task.phase ?? null, task.createdBy, task.createdOn, task.updatedOn, task.body, JSON.stringify(task.metadata)
     );
     const dependency = this.db.prepare("INSERT INTO task_dependencies (project_identifier, task_id, dependency_id) VALUES (?, ?, ?)");
     for (const id of task.dependsOn) dependency.run(this.projectIdentifier, task.id, id);
@@ -289,8 +301,8 @@ export class SQLiteWorkflowStore implements WorkflowStore {
     const current = this.getTask(projectIdentifier, taskId);
     if (!current) throw new Error(`Task not found: ${taskId}`);
     const next = { ...current, ...patch, projectIdentifier, metadata: patch.metadata ?? current.metadata };
-    this.db.prepare(`UPDATE tasks SET title = ?, type = ?, status = ?, assigned_to = ?, priority = ?, parent = ?, updated_on = ?, body_markdown = ?, metadata_json = ? WHERE project_identifier = ? AND task_id = ?`).run(
-      next.title, next.type, next.status, next.assignedTo, next.priority, next.parent, next.updatedOn, next.body, JSON.stringify(next.metadata), projectIdentifier, taskId
+    this.db.prepare(`UPDATE tasks SET title = ?, type = ?, status = ?, assigned_to = ?, priority = ?, parent = ?, phase = ?, updated_on = ?, body_markdown = ?, metadata_json = ? WHERE project_identifier = ? AND task_id = ?`).run(
+      next.title, next.type, next.status, next.assignedTo, next.priority, next.parent, next.phase ?? null, next.updatedOn, next.body, JSON.stringify(next.metadata), projectIdentifier, taskId
     );
     if (patch.dependsOn) {
       this.db.prepare("DELETE FROM task_dependencies WHERE project_identifier = ? AND task_id = ?").run(projectIdentifier, taskId);
@@ -333,10 +345,13 @@ export class SQLiteWorkflowStore implements WorkflowStore {
     const all = this.listTasksRaw(row.project_identifier);
     const done = new Set(all.filter((task) => task.status === "done").map((task) => task.id));
     const ids = new Set(all.map((task) => task.id));
+    const metadata = parseMetadata(row.metadata_json);
+    const phase = row.phase ?? (typeof metadata.phase === "string" && metadata.phase.trim() ? metadata.phase.trim() : undefined);
     return { projectIdentifier: row.project_identifier, id: row.task_id, title: row.title, type: row.type, status: row.status,
-      assignedTo: row.assigned_to, priority: row.priority, parent: row.parent, dependsOn,
+      assignedTo: row.assigned_to, priority: row.priority, parent: row.parent, ...(phase ? { phase } : {}), dependsOn,
       dependencyReady: dependsOn.every((id) => ids.has(id) && done.has(id)), blockedBy: dependsOn.filter((id) => !ids.has(id) || !done.has(id)),
-      createdBy: row.created_by, createdOn: row.created_on, updatedOn: row.updated_on, body: row.body_markdown, metadata: parseMetadata(row.metadata_json) };
+      createdBy: row.created_by, createdOn: row.created_on, updatedOn: row.updated_on, body: row.body_markdown,
+      metadata: { ...metadata, ...(phase ? { phase } : {}) } };
   }
 
   private listTasksRaw(projectIdentifier: string): Array<{ id: string; status: string }> {
@@ -354,7 +369,7 @@ function parseMetadata(value: string): Record<string, unknown> {
 
 const taskFrontmatterOrder = [
   "id", "title", "type", "status", "assigned_to", "created_by", "created_on",
-  "updated_on", "priority", "parent", "depends_on"
+  "updated_on", "priority", "parent", "phase", "depends_on"
 ];
 
 const handoffFrontmatterKeys = [
@@ -512,6 +527,7 @@ export class MarkdownWorkflowStore implements WorkflowStore {
       assignedTo: String(metadata.assigned_to ?? ""),
       priority: String(metadata.priority ?? "normal"),
       parent: String(metadata.parent ?? ""),
+      ...(typeof metadata.phase === "string" && metadata.phase.trim() ? { phase: metadata.phase.trim() } : {}),
       dependsOn,
       dependencyReady: dependsOn.every((id) => ids.has(id) && done.has(id)),
       blockedBy: dependsOn.filter((id) => !ids.has(id) || !done.has(id)),
@@ -519,7 +535,7 @@ export class MarkdownWorkflowStore implements WorkflowStore {
       createdOn: String(metadata.created_on ?? ""),
       updatedOn: String(metadata.updated_on ?? ""),
       body,
-      metadata: omitKeys(metadata, taskFrontmatterOrder)
+      metadata: { ...omitKeys(metadata, taskFrontmatterOrder), ...(typeof metadata.phase === "string" && metadata.phase.trim() ? { phase: metadata.phase.trim() } : {}) }
     };
   }
 
@@ -597,6 +613,7 @@ export function serializeTask(task: WorkflowTask) {
     updated_on: task.updatedOn,
     priority: task.priority,
     parent: task.parent,
+    ...(task.phase ? { phase: task.phase } : {}),
     depends_on: task.dependsOn
   };
   return serializeMarkdown(orderMetadata(metadata, taskFrontmatterOrder), task.body);

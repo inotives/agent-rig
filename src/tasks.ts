@@ -3,13 +3,14 @@ import { spawnSync } from "node:child_process";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { Agent, readAgents, requireWorkspace, validSlug } from "./workspace.js";
-import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, serializeTask, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./workflow-store.js";
+import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, resolveTaskPhase, serializeTask, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./workflow-store.js";
 import { replaceFrontmatter } from "./workflow.js";
 
 type SharedTask = {
   id: string;
   status: string;
   type: string;
+  phase: string;
   title: string;
   assigned_to: string;
   priority: string;
@@ -59,6 +60,7 @@ export function runTasks(args: string[], cwd: string) {
   if (command === "set-status") return tasksSetStatus(rest, cwd);
   if (command === "assign") return tasksAssign(rest, cwd);
   if (command === "set-type") return tasksSetType(rest, cwd);
+  if (command === "set-phase") return tasksSetPhase(rest, cwd);
   if (command === "block") return tasksBlock(rest, cwd);
   if (command === "unblock") return tasksUnblock(rest, cwd);
   if (command === "done") return tasksDone(rest, cwd);
@@ -77,6 +79,7 @@ Commands:
   set-status <task-id> <status> [--admin-override]
   assign <task-id> <agent-name>
   set-type <task-id> <type>
+  set-phase <task-id> <phase>
   block <task-id> --reason <reason>
   unblock <task-id> --status <todo|ready|in_progress>
   done <task-id> [--message <message>] [--admin-override]
@@ -98,9 +101,9 @@ function tasksCreate(args: string[], cwd: string) {
   try {
     const root = requireWorkspace(cwd);
     const title = args[0];
-    if (!title || title.startsWith("--")) return fail("Usage: agent-rig tasks create <title> [--assigned-to <agent>] [--status <status>] [--type <type>] [--priority <priority>] [--parent <task-id>] [--depends-on <task-id[,task-id]>] [--created-by <name>]");
+    if (!title || title.startsWith("--")) return fail("Usage: agent-rig tasks create <title> [--assigned-to <agent>] [--status <status>] [--type <type>] [--priority <priority>] [--phase <phase>] [--parent <task-id>] [--depends-on <task-id[,task-id]>] [--created-by <name>]");
 
-    const allowed = new Set(["--assigned-to", "--status", "--type", "--priority", "--parent", "--depends-on", "--created-by"]);
+    const allowed = new Set(["--assigned-to", "--status", "--type", "--priority", "--phase", "--parent", "--depends-on", "--created-by"]);
     const options = parseOptions(args.slice(1), allowed);
     const status = option(options, "--status") ?? "todo";
     const type = option(options, "--type") ?? "task";
@@ -124,6 +127,7 @@ function tasksCreate(args: string[], cwd: string) {
       createdOn: today,
       updatedOn: today,
       priority,
+      phase: option(options, "--phase"),
       parent: option(options, "--parent") ?? "",
       dependsOn: dependsOn(options),
       dependencyReady: true,
@@ -219,6 +223,19 @@ function tasksSetType(args: string[], cwd: string) {
     const task = requireSharedTask(cwd, id);
     updateSharedTask(task, { type, updated_on: dateStamp(new Date()) });
     console.log(`Updated ${id}: type=${type}`);
+    return 0;
+  } catch (cause) {
+    return fail(message(cause));
+  }
+}
+
+function tasksSetPhase(args: string[], cwd: string) {
+  try {
+    const [id, phase] = args;
+    if (!id || !phase || args.length !== 2) return fail("Usage: agent-rig tasks set-phase <task-id> <phase>");
+    const task = requireSharedTask(cwd, id);
+    updateSharedTask(task, { phase, updated_on: dateStamp(new Date()) });
+    console.log(`Updated ${id}: phase=${phase}`);
     return 0;
   } catch (cause) {
     return fail(message(cause));
@@ -953,11 +970,12 @@ function readSharedTasks(root: string, cwd: string) {
 
 function toSharedTask(cwd: string, workflow: WorkflowTask, store: WorkflowStore): SharedTask {
   const meta = workflowMetadata(workflow);
-  const file = store instanceof MarkdownWorkflowStore ? join(sharedTasksDir(requireWorkspace(cwd)), `${workflow.id}_${slug(workflow.title)}.md`) : "";
+  const file = store instanceof MarkdownWorkflowStore ? taskSourcePath(cwd, workflow.id, workflow.title) : "";
   const record = {
     id: workflow.id,
     title: workflow.title,
     type: workflow.type,
+    phase: resolveTaskPhase(workflow, file),
     status: workflow.status,
     assigned_to: workflow.assignedTo,
     priority: workflow.priority,
@@ -968,6 +986,15 @@ function toSharedTask(cwd: string, workflow: WorkflowTask, store: WorkflowStore)
     project_identifier: workflow.projectIdentifier
   };
   return { ...record, depends_on: workflow.dependsOn, file, meta, body: workflow.body, record, workflow, store, projectIdentifier: workflow.projectIdentifier, cwd };
+}
+
+function taskSourcePath(cwd: string, id: string, title: string): string {
+  const directory = sharedTasksDir(requireWorkspace(cwd));
+  if (existsSync(directory)) {
+    const source = readdirSync(directory).find((name) => name.startsWith(`${id}_`) && name.endsWith(".md"));
+    if (source) return join(directory, source);
+  }
+  return join(directory, `${id}_${slug(title)}.md`);
 }
 
 function workflowMetadata(task: WorkflowTask) {
@@ -983,6 +1010,7 @@ function workflowMetadata(task: WorkflowTask) {
     updated_on: task.updatedOn,
     priority: task.priority,
     parent: task.parent,
+    ...(task.phase ? { phase: task.phase } : {}),
     depends_on: task.dependsOn
   };
 }
@@ -1125,7 +1153,7 @@ function taskPatch(task: SharedTask, updates: Record<string, unknown>, body: str
     else meta[key] = value;
   }
   const patch: Record<string, unknown> = { body, metadata: {} };
-  const fields: Record<string, string> = { title: "title", type: "type", status: "status", assigned_to: "assignedTo", priority: "priority", parent: "parent", depends_on: "dependsOn", updated_on: "updatedOn" };
+  const fields: Record<string, string> = { title: "title", type: "type", status: "status", assigned_to: "assignedTo", priority: "priority", parent: "parent", phase: "phase", depends_on: "dependsOn", updated_on: "updatedOn" };
   const metadata: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(meta)) {
     if (!(key in fields) && !["id", "created_by", "created_on"].includes(key)) metadata[key] = value;

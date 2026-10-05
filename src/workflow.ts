@@ -9,11 +9,24 @@ import {
   WorkflowTask,
   readWorkspaceWorkflowConfig
 } from "./workflow-store.js";
+import { backupWorkflowDatabase, importMarkdownToSQLite, rebuildSQLiteFromMarkdown, repairSQLitePlaceholders } from "./workflow-safety.js";
 
 const migrationKeys = ["storage_status", "migrated_to", "migrated_at"] as const;
 const legacyHandoffFilename = /^\d{4}-\d{2}-\d{2}-(?:\d{4}|task-[a-z0-9-]+)_(?:.+_)?[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
 
 export function runWorkflow(args: string[], cwd: string): number {
+  if (args[0] === "import" && args[1] === "--from" && args[2] === "markdown") return runSafety(() => importMarkdownToSQLite(cwd), args.includes("--json"));
+  if (args[0] === "backup") {
+    const output = optionValue(args, "--output");
+    return runSafety(() => ({ backup: backupWorkflowDatabase(cwd, output, args.includes("--force")) }), args.includes("--json"));
+  }
+  if (args[0] === "rebuild") {
+    const confirmation = optionValue(args, "--confirm") ?? "";
+    return runSafety(() => rebuildSQLiteFromMarkdown(cwd, args.includes("--replace"), confirmation), args.includes("--json"));
+  }
+  if (args[0] === "repair" && (args.includes("--placeholders") || args.includes("--placeholders-from")) && args.includes("markdown")) {
+    return runSafety(() => repairSQLitePlaceholders(cwd, args.includes("--dry-run")), args.includes("--json"));
+  }
   if (args.length === 3 && args[0] === "migrate" && args[1] === "--to" && args[2] === "sqlite") {
     try {
       migrateMarkdownToSQLite(cwd);
@@ -24,8 +37,20 @@ export function runWorkflow(args: string[], cwd: string): number {
       return 1;
     }
   }
-  console.error("Usage: agent-rig workflow migrate --to sqlite");
+  console.error("Usage: agent-rig workflow {migrate --to sqlite|import --from markdown|backup|rebuild [--replace --confirm 'REPLACE SQLITE']|repair --placeholders --from markdown [--dry-run --json]}");
   return 1;
+}
+
+function optionValue(args: string[], option: string) { const index = args.indexOf(option); return index >= 0 ? args[index + 1] : undefined; }
+function runSafety(operation: () => unknown, json: boolean) {
+  try { const report = operation(); if (json) console.log(JSON.stringify(report)); else console.log(report); return hasSafetyIssues(report) ? 1 : 0; }
+  catch (cause) { console.error(cause instanceof Error ? cause.message : String(cause)); return 1; }
+}
+
+function hasSafetyIssues(report: unknown): boolean {
+  if (!report || typeof report !== "object") return false;
+  const record = report as Record<string, unknown>;
+  return ["conflicted", "orphaned", "wouldLose", "refused"].some((key) => Array.isArray(record[key]) && record[key].length > 0);
 }
 
 export function migrateMarkdownToSQLite(cwd: string, now = new Date().toISOString()): void {

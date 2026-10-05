@@ -86,6 +86,17 @@ The final migration is intentionally one-way for the active workspace:
 Markdown records remain as marked historical reference. Agents continue to use
 the `agent-rig tasks ...` interface; they do not edit the database directly.
 
+### Explicit Placeholder Body Repair
+
+`agent-rig workflow repair --placeholders --from markdown` is a narrow,
+explicit repair operation for SQLite tasks whose body is exactly the default
+empty task template. It requires the workflow write lock, supports
+`--dry-run` and `--json`, and uses the same task ID in both stores. It refuses
+missing, malformed, mismatched, changed, or handoff-bearing records, preserves
+SQLite lifecycle fields and metadata, and copies only the Markdown body (plus
+an absent canonical `phase`). This is not a normal import or SQLite rebuild;
+Markdown is not marked or rewritten by the repair.
+
 ## Accepted Decisions
 
 ### SQLite Becomes Canonical After Migration
