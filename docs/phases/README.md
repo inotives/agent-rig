@@ -20,6 +20,7 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 14. [Phase 14: OpenCode Loop Adapter](../_archived/phase-14-opencode-loop-adapter.md) — completed
 15. [Phase 15: Loop Observability](phase-15-loop-observability.md) — draft
 16. [Phase 16: Pluggable Workflow Storage](phase-16-workflow-storage.md) — draft
+17. [Phase 17: Task Board UI](phase-17-task-board-ui.md) — draft
 
 ## Workflow
 

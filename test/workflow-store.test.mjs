@@ -9,7 +9,8 @@ import {
   SQLiteWorkflowStore,
   projectIdentifierFromDirectory,
   readWorkspaceWorkflowConfig,
-  resolveWorkspaceWorkflowConfig
+  resolveWorkspaceWorkflowConfig,
+  resolveTaskPhase
 } from "../dist/workflow-store.js";
 
 test("workflow configuration defaults legacy workspaces to Markdown", () => {
@@ -58,6 +59,17 @@ test("Markdown tasks preserve unknown frontmatter and opaque bodies", () => {
   assert.equal(updated.status, "in_progress");
   assert.equal(updated.body, body);
   assert.equal(updated.metadata.custom_field, "retained");
+});
+
+test("Task phases round-trip explicitly and legacy phase inference stays display-only", () => {
+  const { root, store } = storeFixture();
+  writeFileSync(join(root, "_shared", "tasks", "task-0001_phase-17.md"), "---\nid: task-0001\ntitle: Legacy task\ntype: task\nstatus: ready\nassigned_to: worker\ncreated_by: human\ncreated_on: 2026-10-04\nupdated_on: 2026-10-04\npriority: normal\nparent: \"\"\ndepends_on: []\n---\n# Task\n", "utf8");
+  const legacy = store.getTask("fixture", "task-0001");
+  assert.equal(legacy.phase, undefined);
+  assert.equal(resolveTaskPhase(legacy, "task-0001_phase-17.md"), "phase-17");
+  store.createTask({ projectIdentifier: "fixture", id: "task-0002", title: "Explicit", type: "task", status: "ready", assignedTo: "worker", priority: "normal", parent: "", phase: "phase-99", dependsOn: [], dependencyReady: true, blockedBy: [], createdBy: "human", createdOn: "2026-10-04", updatedOn: "2026-10-04", body: "# Task\n", metadata: {} });
+  assert.equal(store.getTask("fixture", "task-0002").phase, "phase-99");
+  assert.equal(resolveTaskPhase(store.getTask("fixture", "task-0002"), "task-0002_explicit.md"), "phase-99");
 });
 
 test("Markdown dependencies are ready only when every dependency is done", () => {
@@ -155,7 +167,7 @@ function sqliteFixture() {
 function sqliteTask(id = "", status = "ready") {
   return {
     projectIdentifier: "fixture", id, title: "SQLite task", type: "task", status,
-    assignedTo: "worker", priority: "normal", parent: "", dependsOn: [],
+    assignedTo: "worker", priority: "normal", parent: "", phase: "phase-16", dependsOn: [],
     dependencyReady: true, blockedBy: [], createdBy: "human", createdOn: "2026-10-04",
     updatedOn: "2026-10-04", body: "# Rich **body**\n", metadata: { source_filename: "legacy.md" }
   };
@@ -174,6 +186,9 @@ test("SQLite bootstraps schema, allocates task IDs, and preserves records", () =
     store.createTask(sqliteTask());
     const task = store.getTask("fixture", "task-0001");
     assert.equal(task.body, "# Rich **body**\n");
+    assert.equal(task.phase, "phase-16");
+    store.updateTask("fixture", "task-0001", { phase: "phase-17" });
+    assert.equal(store.getTask("fixture", "task-0001").phase, "phase-17");
     assert.equal(task.metadata.source_filename, "legacy.md");
     assert.deepEqual(store.listDependencies("fixture", "task-0001"), []);
     assert.deepEqual(store.allocateTaskId("fixture"), "task-0003");

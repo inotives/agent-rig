@@ -9,6 +9,7 @@ import { runStart, runStatus } from "./live.js";
 import { runLoop, runTasks, runWatch } from "./tasks.js";
 import { runDoctor } from "./doctor.js";
 import { runWorkflow } from "./workflow.js";
+import { runUi } from "./ui-server.js";
 
 export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   const [command, ...args] = argv;
@@ -43,6 +44,7 @@ export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   if (command === "loop") return runLoop(args, cwd);
   if (command === "watch") return runWatch(args, cwd);
   if (command === "workflow") return runWorkflow(args, cwd);
+  if (command === "ui") return runUi(args, cwd);
 
   console.error(`Unknown command: ${command}`);
   return 1;
@@ -68,6 +70,7 @@ Commands:
   loop       Run the worker-reviewer loop shell
   watch      Process one ready shared task with --once
   workflow   Manage workflow storage and migrations
+  ui         Serve the local task-board UI
   version    Print package version
 
 Examples:

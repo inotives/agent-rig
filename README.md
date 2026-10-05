@@ -163,6 +163,12 @@ marks the original Markdown records as historical. After migration, `tasks`,
 the Markdown files remain reference material rather than dual-written live
 records.
 
+For recovery and incremental synchronization, use `workflow import --from
+markdown` (locked, non-destructive, and JSON-capable), `workflow backup
+[--output <path>]`, or `workflow rebuild --replace --confirm "REPLACE SQLITE"`.
+Rebuild is a dry run unless explicitly confirmed; it creates a timestamped
+backup and keeps SQLite records on same-ID conflicts.
+
 In SQLite mode, `tasks done` and `tasks set-status <id> done` require a worker
 handoff followed by a reviewer handoff. Manual runs can record these with
 `tasks handoff`; a human can explicitly use `--admin-override` for an
@@ -201,6 +207,29 @@ OpenCode loop runs use the OpenCode default model configured in the user's envir
 
 Live OpenCode smoke testing remains a manual verification step and is not part of automated CI.
 
+## Local Task Board UI
+
+Start the read-only task board from the project whose workflow state you want
+to inspect:
+
+```bash
+agent-rig ui
+# open http://127.0.0.1:8787 in a browser
+```
+
+The UI binds to localhost only and uses port `8787` by default. Select another
+port with `agent-rig ui --port 9000`; the command prints the listening URL and
+does not open a browser automatically. The board reads the active workflow
+provider and never mutates tasks or handoffs. Use the `agent-rig tasks ...`
+commands for all workflow changes.
+
+The frontend is packaged as static assets. From a repository checkout,
+`npm run build` compiles TypeScript and then runs Tailwind to generate
+`dist/ui.css`, copies `src/ui.html` to `dist/index.html`, and emits the
+frontend bundle used by the server. Run `npm install` before the first build so
+the local Tailwind executable is available; installed packages serve the
+already-built assets and do not build frontend dependencies at runtime.
+
 ## Common Commands
 
 | Command | Purpose |
@@ -215,6 +244,8 @@ Live OpenCode smoke testing remains a manual verification step and is not part o
 | `agent-rig doctor` | Check local AgentRig environment and workspace health. |
 | `agent-rig agents` | List configured agents and tools. |
 | `agent-rig validate` | Validate workspace files without mutating them. |
+| `agent-rig ui` | Serve the read-only local task board at `127.0.0.1:8787`. |
+| `agent-rig ui --port <port>` | Serve the read-only local task board on a custom port. |
 | `agent-rig creds` | Create credential placeholders and `.env.example` files. |
 | `agent-rig skills` | Install and list shared or agent-local skills. |
 | `agent-rig status` | Show live session state, task counts, loop observability, and recent handoffs. |
@@ -230,13 +261,16 @@ Live OpenCode smoke testing remains a manual verification step and is not part o
 | `agent-rig tasks done <task-id>` | Mark a task done. |
 | `agent-rig tasks handoff <task-id> ...` | Record a manual handoff in the active store. |
 | `agent-rig workflow migrate --to sqlite` | Validate and migrate the Markdown workflow store to SQLite. |
+| `agent-rig workflow import --from markdown` | Import new unmarked Markdown records without overwriting SQLite. |
+| `agent-rig workflow backup [--output <path>]` | Create and validate a consistent read-only SQLite snapshot. |
+| `agent-rig workflow rebuild [--replace --confirm "REPLACE SQLITE"]` | Preview or guardedly rebuild SQLite from Markdown. |
 | `agent-rig loop` | Run the Codex/OpenCode worker-reviewer loop continuously. |
 | `agent-rig loop --once` | Run one Codex/OpenCode worker-reviewer loop tick and exit. |
 | `agent-rig watch --once` | Process one ready shared task and exit. |
 
 ## Implementation Phases
 
-The current implementation history is split into completed archived phases plus the active Phase 15 loop observability work:
+The current implementation history is split into completed archived phases plus the active Phase 17 task-board UI work:
 
 ```text
 1. CLI scaffold
@@ -250,6 +284,7 @@ The current implementation history is split into completed archived phases plus 
 14. OpenCode loop adapter
 15. Loop observability
 16. Pluggable workflow storage
+17. Task board UI
 ```
 
 See [docs/phases](docs/phases/).
@@ -259,9 +294,13 @@ See [docs/phases](docs/phases/).
 Run the local checks:
 
 ```bash
+npm run build
 npm test
 npm --cache /tmp/agent-rig-npm-cache pack --dry-run
 ```
+
+`npm run build` is required when changing the UI source or packaging a release:
+it runs `tsc` and the Tailwind/static-asset build in `scripts/build-ui.mjs`.
 
 For future phases, follow the planning and manager workflow in [AGENTS.md](AGENTS.md): grill with the human, finalize the plan, create dependency-gated tasks, and drive each task through an independent worker/reviewer handoff loop.
 

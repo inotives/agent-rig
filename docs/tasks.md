@@ -229,6 +229,20 @@ SQLite, run:
 agent-rig workflow migrate --to sqlite
 ```
 
+The storage safety commands are incremental import, read-only backup, and
+guarded rebuild:
+
+```bash
+agent-rig workflow import --from markdown --json
+agent-rig workflow backup --output /tmp/workflow.sqlite
+agent-rig workflow rebuild --replace --confirm "REPLACE SQLITE"
+```
+
+Import requires the exclusive workflow lock and marks source Markdown only
+after its SQLite transaction commits. Rebuild is dry-run by default, creates a
+timestamped backup before replacement, and preserves SQLite records on
+same-ID conflicts.
+
 Migration imports only tasks and handoff conversations. Planning documents in
 `docs/`, run artifacts, and AgentRig harness state are not imported. It
 validates first, refuses an existing database or marked source, verifies the
