@@ -5,15 +5,17 @@ import { join } from "node:path";
 import test from "node:test";
 import { createUiServer } from "../dist/ui-server.js";
 import { SQLiteWorkflowStore } from "../dist/workflow-store.js";
-import { mountBoard } from "../dist/ui.js";
+import { mountSlidingBoard } from "../dist/ui.js";
 
 class FakeElement {
   constructor(tagName, ownerDocument = null) { this.tagName = tagName.toUpperCase(); this.ownerDocument = ownerDocument; this.children = []; this.parentNode = null; this.attributes = new Map(); this.listeners = new Map(); this.dataset = {}; this.classList = { values: new Set(), add: (...names) => names.forEach((name) => this.classList.values.add(name)), remove: (...names) => names.forEach((name) => this.classList.values.delete(name)), toggle: (name, enabled) => enabled ? this.classList.values.add(name) : this.classList.values.delete(name) }; this.value = ""; this.disabled = false; this.type = ""; }
   set textContent(value) { this._text = String(value ?? ""); this.children = []; }
   get textContent() { return [this._text ?? "", ...this.children.map((child) => child.textContent)].join(""); }
+  get firstElementChild() { return this.children[0] ?? null; }
   set innerHTML(value) { this._text = String(value ?? "").replace(/<[^>]+>/g, "").replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">"); this.children = []; }
   get innerHTML() { return this._text ?? ""; }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  removeAttribute(name) { this.attributes.delete(name); }
   getAttribute(name) { return this.attributes.get(name); }
   append(...children) { for (const child of children.flat()) { if (!child) continue; child.parentNode = this; this.children.push(child); } }
   appendChild(child) { this.append(child); return child; }
@@ -23,7 +25,7 @@ class FakeElement {
   dispatchEvent(event) { for (const listener of this.listeners.get(event.type) ?? []) listener(event); }
   click() { this.focus(); this.dispatchEvent({ type: "click", target: this }); }
   focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
-  querySelector(selector) { return this.findAll(selector)[0] ?? null; }
+  querySelector(selector) { if (selector === "main > aside") return this.findAll("main")[0]?.children.find((child) => child.tagName === "ASIDE") ?? null; return this.findAll(selector)[0] ?? null; }
   findAll(selector) {
     const matches = (element) => selector === "[data-workflow-alert]"
       ? element.dataset.workflowAlert === "true"
@@ -102,9 +104,18 @@ test("browser smoke serves board assets and route behavior without write methods
       const browserFetch = globalThis.fetch;
       globalThis.fetch = (input, init) => browserFetch(new URL(input, base), init);
       const root = harness.document.root;
-      mountBoard(root);
+       mountSlidingBoard(root);
       await waitFor(() => root.textContent.includes("Phase 17 board"));
       assert.match(root.textContent, /Phase 17 board/);
+      const drawer = root.findAll("aside")[0];
+      const scrim = root.findAll("button").find((button) => button.getAttribute("aria-label") === "Close task details");
+      assert.ok(drawer.classList.values.has("fixed"), "drawer is viewport-fixed");
+      assert.ok(drawer.classList.values.has("w-[80vw]"), "drawer uses 80vw on larger viewports");
+      assert.ok(drawer.classList.values.has("max-w-[calc(100vw-1rem)]"), "drawer remains usable on narrow viewports");
+      assert.ok(drawer.classList.values.has("bg-base-100"), "drawer has an opaque theme background");
+      assert.equal(drawer.getAttribute("inert"), "");
+      assert.equal(scrim.getAttribute("inert"), "");
+      assert.equal(scrim.getAttribute("tabindex"), "-1");
       const graph = root.findAll("svg")[0];
       assert.equal(graph.getAttribute("aria-label"), "Task dependency flow");
       assert.equal(root.findAll("g").length, 2);
@@ -121,10 +132,22 @@ test("browser smoke serves board assets and route behavior without write methods
       assert.doesNotMatch(root.textContent, /Phase 17 board/);
       assert.match(root.textContent, /Phase 16 legacy task/);
 
-      globalThis.location.hash = "#/tasks/task-0001";
-      globalThis.window.dispatchEvent({ type: "hashchange" });
-      await waitFor(() => root.textContent.includes("Handoff timeline"));
-      assert.match(root.textContent, /Handoff timeline/);
+       globalThis.location.hash = "#/tasks/task-0001?phase=phase-16";
+       globalThis.window.dispatchEvent({ type: "hashchange" });
+       await waitFor(() => root.textContent.includes("Handoff timeline"));
+       assert.match(root.textContent, /Handoff timeline/);
+       assert.equal(drawer.getAttribute("inert"), undefined);
+       assert.equal(scrim.getAttribute("inert"), undefined);
+       const closeTask = harness.document.body.findAll("button").find((button) => button.textContent === "×");
+       closeTask.dispatchEvent({ type: "keydown", key: "Escape", preventDefault: () => {} });
+       assert.equal(globalThis.location.hash, "#/?phase=phase-16");
+       globalThis.window.dispatchEvent({ type: "hashchange" });
+       await waitFor(() => root.findAll("g").length === 2);
+       assert.equal(drawer.getAttribute("inert"), "");
+       assert.equal(scrim.getAttribute("inert"), "");
+      const handoffTable = root.findAll("table")[0];
+      assert.deepEqual(handoffTable.findAll("th").map((cell) => cell.textContent), ["Seq#", "Sender", "Recipient", "Status", "Timestamp", ""]);
+      assert.equal(handoffTable.findAll("dt").length, 0);
       globalThis.history.back();
       await waitFor(() => root.findAll("g").length === 2);
       assert.match(root.textContent, /Phase 17 board/);
@@ -137,6 +160,9 @@ test("browser smoke serves board assets and route behavior without write methods
       assert.equal(root.findAll("button").filter((button) => button.textContent === "Details").length, 1);
       root.findAll("button").find((button) => button.textContent === "Details").click();
       assert.match(harness.document.body.textContent, /Handoff #1/);
+      const dialog = harness.document.body.children.find((child) => child.getAttribute("role") === "dialog");
+      assert.equal(dialog.getAttribute("aria-labelledby"), "handoff-dialog-title");
+      assert.equal(dialog.querySelector("#handoff-dialog-title")?.textContent, "Handoff #1");
       const close = harness.document.body.findAll("button").find((button) => button.getAttribute("aria-label") === "Close handoff details");
       close.click();
       assert.doesNotMatch(harness.document.body.textContent, /Handoff #1/);
@@ -147,8 +173,8 @@ test("browser smoke serves board assets and route behavior without write methods
       assert.doesNotMatch(harness.document.body.textContent, /Handoff #1/);
 
       root.findAll("button").find((button) => button.textContent === "Details").click();
-      const dialog = harness.document.body.children.find((child) => child.getAttribute("role") === "dialog");
-      dialog.click();
+      const backdropDialog = harness.document.body.children.find((child) => child.getAttribute("role") === "dialog");
+      backdropDialog.click();
       assert.doesNotMatch(harness.document.body.textContent, /Handoff #1/);
 
       globalThis.window.scrollY = 321;
@@ -169,7 +195,7 @@ test("browser smoke serves board assets and route behavior without write methods
       globalThis.window.dispatchEvent({ type: "hashchange" });
       await waitFor(() => root.findAll("g").length === 2);
       root.findAll("g")[0].click();
-      assert.equal(globalThis.location.hash, "#/tasks/task-0002");
+       assert.equal(globalThis.location.hash, "#/tasks/task-0002?phase=phase-16");
       globalThis.window.dispatchEvent({ type: "hashchange" });
       await waitFor(() => root.textContent.includes("Handoff timeline"));
       assert.match(root.textContent, /Handoff timeline/);
