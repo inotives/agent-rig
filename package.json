@@ -1,6 +1,6 @@
 {
   "name": "@inotives/agent-rig",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Filesystem-first agent workspaces for Claude, Codex, OpenCode, and custom subscription tools.",
   "type": "module",
   "license": "Apache-2.0",
@@ -43,6 +43,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.0.0",
+    "daisyui": "^4.12.24",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.0"
   },

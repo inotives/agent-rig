@@ -36,3 +36,16 @@ A phase is an optional planning grouping for workflow tasks. It identifies the
 implementation or delivery phase a task belongs to and is distinct from the
 task's lifecycle status. Existing records may be displayed using a legacy
 title or filename fallback until an explicit phase is assigned.
+
+## UI Component Layer
+
+The UI component layer provides semantic controls and surfaces for the
+read-only task board. It is locally bundled with the AgentRig package so the
+UI remains usable without a runtime network dependency.
+
+## Task Flow Graph
+
+The task flow graph is a read-only native SVG view of task dependencies. Its
+layout is deterministic and separate from the UI component layer; graph
+libraries are deferred until the current layout cannot represent real project
+workflows.

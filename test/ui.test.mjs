@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
-import { applyTheme, beginUiLoad, completeUiLoad, createUiState, failUiLoad, filterHandoffs, filterTasks, layoutTaskGraph, mountBoard, parseRoute, positionTaskPreview, preferredTheme, routeHash, setUiRoute, sortHandoffs, sortTasks, STATUS_COLUMNS } from "../dist/ui.js";
+import { applyTheme, beginUiLoad, completeUiLoad, createUiState, failUiLoad, filterHandoffs, filterTasks, layoutTaskGraph, mountBoard, openHandoffModal, parseRoute, positionTaskPreview, preferredTheme, renderTaskPreview, routeHash, setUiRoute, sortHandoffs, sortTasks, STATUS_COLUMNS, taskPreviewHeaderClass, taskPreviewMetadata, taskPreviewTone } from "../dist/ui.js";
 import { resolveTaskPhase } from "../dist/workflow-store.js";
 
 const task = (id, priority, updated_on, phase = "phase-17") => ({ id, title: id, type: "task", status: "ready", assigned_to: "worker", priority, phase, updated_on, handoff_count: 0 });
@@ -54,6 +55,55 @@ test("task preview position follows the hovered card and flips left near the rig
   assert.notDeepEqual(first, second);
 });
 
+test("task preview uses the accepted semantic tone mapping and structured metadata", () => {
+  const statuses = ["todo", "ready", "in_progress", "blocked", "review", "done"];
+  assert.deepEqual(statuses.map((status) => taskPreviewTone(status)), ["neutral", "info", "warning", "error", "secondary", "success"]);
+  assert.deepEqual(statuses.map((status) => taskPreviewHeaderClass(status)), [
+    "bg-neutral text-neutral-content",
+    "bg-info text-info-content",
+    "bg-warning text-warning-content",
+    "bg-error text-error-content",
+    "bg-secondary text-secondary-content",
+    "bg-success text-success-content"
+  ]);
+  const previewTask = { ...task("task-0048", "high", "2026-10-06"), title: "Enhance task hover preview", status: "in_progress", phase: "phase-19", handoff_count: 2 };
+  assert.deepEqual(taskPreviewMetadata(previewTask), {
+    Status: "in progress",
+    Assignee: "worker",
+    Phase: "phase-19",
+    Priority: "high",
+    Handoffs: 2
+  });
+});
+
+test("task preview replaces previous contents when rendering successive tasks", () => {
+  class Element {
+    constructor(tag) { this.tagName = tag; this.children = []; this.dataset = {}; this.attributes = new Map(); }
+    append(...children) { this.children.push(...children); }
+    replaceChildren(...children) { this.children = children; }
+    setAttribute(name, value) { this.attributes.set(name, value); }
+  }
+  const previousDocument = globalThis.document;
+  globalThis.document = { createElement: (tag) => new Element(tag) };
+  try {
+    const preview = new Element("div");
+    const first = { ...task("task-0049", "high", "2026-10-06"), title: "First task", status: "ready" };
+    const second = { ...task("task-0050", "normal", "2026-10-06"), title: "Second task", status: "done" };
+    renderTaskPreview(preview, first);
+    assert.equal(preview.children.length, 2);
+    renderTaskPreview(preview, second);
+    assert.equal(preview.children.length, 2);
+    assert.equal(preview.children[0].children[0].textContent, "Second task");
+    assert.equal(preview.children[0].children[1].textContent, "task-0050");
+    assert.equal(preview.children[0].className, "px-3 py-2 bg-success text-success-content");
+    assert.equal(preview.children[1].children[0].children[0].children[0].textContent, "Status");
+    assert.equal(preview.children[1].children[0].children[0].children[0].tagName, "dt");
+    assert.equal(preview.attributes.get("role"), "status");
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
 test("handoffs sort newest first and search message and metadata", () => {
   const handoffs = [handoff(1, "initial"), { ...handoff(2, "reviewed"), metadata: { ticket: "ABC-42" } }];
   assert.deepEqual(sortHandoffs(handoffs).map(({ sequence }) => sequence), [2, 1]);
@@ -74,6 +124,41 @@ test("theme preference reads system default and persists explicit choice", () =>
   assert.equal(classNames.has("dark"), false);
 });
 
+test("native dialog cancel cleans up and restores focus", () => {
+  class Element {
+    constructor(tag) { this.tagName = tag; this.children = []; this.listeners = new Map(); this.classList = { toggle() {} }; }
+    append(...children) { this.children.push(...children); }
+    remove() { this.removed = true; }
+    setAttribute() {}
+    addEventListener(type, listener) { this.listeners.set(type, listener); }
+    dispatchEvent(event) { this.listeners.get(event.type)?.(event); }
+    focus() { this.focused = true; }
+    showModal() { this.shownModally = true; }
+  }
+  const previous = { document: globalThis.document };
+  const trigger = new Element("button");
+  const body = new Element("body");
+  globalThis.document = {
+    activeElement: trigger,
+    body,
+    createElement: (tag) => new Element(tag),
+    addEventListener() {},
+    removeEventListener() {}
+  };
+  try {
+    openHandoffModal(handoff(1, "details"), trigger);
+    const dialog = body.children[0];
+    assert.equal(dialog.shownModally, true);
+    let prevented = false;
+    dialog.dispatchEvent({ type: "cancel", preventDefault: () => { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.equal(dialog.removed, true);
+    assert.equal(trigger.focused, true);
+  } finally {
+    Object.assign(globalThis, previous);
+  }
+});
+
 test("SPA state keeps selection, routes, and last good data across load failures", () => {
   globalThis.localStorage = { getItem: () => null, setItem: () => {} };
   globalThis.window = { matchMedia: () => ({ matches: false }) };
@@ -91,6 +176,31 @@ test("SPA state keeps selection, routes, and last good data across load failures
   assert.equal(failed.error, "offline");
   assert.equal(failed.lastGoodData, data);
   assert.equal(failed.selectedTaskId, "task-0001");
+});
+
+test("phase selection persists in the hash and restores after UI state recreation", () => {
+  globalThis.localStorage = { getItem: () => null, setItem: () => {} };
+  globalThis.window = { matchMedia: () => ({ matches: false }) };
+  const route = { kind: "board" };
+  const hash = routeHash(route, "phase-19");
+  assert.equal(hash, "#/?phase=phase-19");
+  assert.equal(createUiState(hash).selectedPhase, "phase-19");
+  assert.equal(createUiState("#/?phase=not-a-phase").selectedPhase, "__all__");
+  assert.deepEqual(createUiState("#/tasks/task-0050?phase=phase-19").route, { kind: "task", taskId: "task-0050" });
+  assert.equal(routeHash({ kind: "task", taskId: "task-0050" }, "phase-19"), "#/tasks/task-0050?phase=phase-19");
+});
+
+test("phase selection is retained when opening a task from the filtered board", () => {
+  const boardState = createUiState("#/?phase=phase-19");
+  assert.equal(routeHash({ kind: "task", taskId: "task-0052" }, boardState.selectedPhase), "#/tasks/task-0052?phase=phase-19");
+});
+
+test("sliding task drawer uses an opaque left-anchored 80vw panel", () => {
+  const source = readFileSync(new URL("../src/ui.ts", import.meta.url), "utf8");
+  assert.match(source, /classList\.remove\("opacity-70"\)/);
+  assert.match(source, /left-0.*w-\[80vw\].*bg-base-100.*opacity-100/);
+  assert.match(source, /classList\.toggle\("-translate-x-full", !open\)/);
+  assert.match(source, /classList\.toggle\("translate-x-0", open\)/);
 });
 
 test("mountBoard preserves a task route from the current location", async () => {
