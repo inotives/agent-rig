@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.4 - 2026-10-06
+
+- Added pluggable SQLite workflow storage with task and handoff migration support.
+- Added the read-only task board UI with phase filtering, task details, searchable handoffs, and light/dark themes.
+- Revamped the board as an SPA with hash routing, SVG task-flow visualization, zoom/fit controls, responsive split details, and accessible handoff modals.
+- Fixed task hover previews so they appear near the hovered task card instead of at the board edge.
+
 ## 0.1.3 - 2026-07-06
 
 - Added an AgentRig-local `plan-tasks` skill to the built-in planner profile.
