@@ -61,7 +61,8 @@ function workflowSummary(store: WorkflowStore, projectIdentifier: string) {
       priority: task.priority,
       phase: resolveTaskPhase(task),
       updated_on: task.updatedOn,
-      handoff_count: store.listHandoffs(projectIdentifier, task.id).length
+      handoff_count: store.listHandoffs(projectIdentifier, task.id).length,
+      ...(task.dependsOn.length ? { depends_on: task.dependsOn } : {})
     }))
   };
 }

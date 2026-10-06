@@ -8,7 +8,7 @@ import { SQLiteWorkflowStore } from "../dist/workflow-store.js";
 import { mountBoard } from "../dist/ui.js";
 
 class FakeElement {
-  constructor(tagName) { this.tagName = tagName.toUpperCase(); this.children = []; this.parentNode = null; this.attributes = new Map(); this.listeners = new Map(); this.dataset = {}; this.classList = { values: new Set(), toggle: (name, enabled) => enabled ? this.classList.values.add(name) : this.classList.values.delete(name) }; this.value = ""; this.disabled = false; this.type = ""; }
+  constructor(tagName, ownerDocument = null) { this.tagName = tagName.toUpperCase(); this.ownerDocument = ownerDocument; this.children = []; this.parentNode = null; this.attributes = new Map(); this.listeners = new Map(); this.dataset = {}; this.classList = { values: new Set(), add: (...names) => names.forEach((name) => this.classList.values.add(name)), remove: (...names) => names.forEach((name) => this.classList.values.delete(name)), toggle: (name, enabled) => enabled ? this.classList.values.add(name) : this.classList.values.delete(name) }; this.value = ""; this.disabled = false; this.type = ""; }
   set textContent(value) { this._text = String(value ?? ""); this.children = []; }
   get textContent() { return [this._text ?? "", ...this.children.map((child) => child.textContent)].join(""); }
   set innerHTML(value) { this._text = String(value ?? "").replace(/<[^>]+>/g, "").replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">"); this.children = []; }
@@ -21,7 +21,8 @@ class FakeElement {
   remove() { this.parentNode?.children.splice(this.parentNode.children.indexOf(this), 1); this.parentNode = null; }
   addEventListener(type, listener) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
   dispatchEvent(event) { for (const listener of this.listeners.get(event.type) ?? []) listener(event); }
-  click() { this.dispatchEvent({ type: "click", target: this }); }
+  click() { this.focus(); this.dispatchEvent({ type: "click", target: this }); }
+  focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
   querySelector(selector) { return this.findAll(selector)[0] ?? null; }
   findAll(selector) {
     const matches = (element) => selector === "[data-workflow-alert]"
@@ -34,10 +35,12 @@ class FakeElement {
 }
 
 class FakeDocument {
-  constructor() { this.documentElement = new FakeElement("html"); this.body = new FakeElement("body"); this.root = new FakeElement("div"); this.root.setAttribute("id", "app"); this.body.append(this.root); this.listeners = new Map(); }
-  createElement(tagName) { return new FakeElement(tagName); }
+  constructor() { this.documentElement = new FakeElement("html", this); this.body = new FakeElement("body", this); this.root = new FakeElement("div", this); this.root.setAttribute("id", "app"); this.body.append(this.root); this.listeners = new Map(); this.activeElement = null; }
+  createElement(tagName) { return new FakeElement(tagName, this); }
+  createElementNS(_namespace, tagName) { return new FakeElement(tagName, this); }
   querySelector(selector) { return this.body.querySelector(selector); }
   addEventListener(type, listener) { this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]); }
+  dispatchEvent(event) { for (const listener of this.listeners.get(event.type) ?? []) listener(event); }
   removeEventListener(type, listener) { this.listeners.set(type, (this.listeners.get(type) ?? []).filter((item) => item !== listener)); }
 }
 
@@ -45,14 +48,18 @@ function installBrowserHarness() {
   const document = new FakeDocument();
   const storage = new Map();
   const windowListeners = new Map();
+  const scrollCalls = [];
   const previous = { document: globalThis.document, window: globalThis.window, location: globalThis.location, history: globalThis.history, localStorage: globalThis.localStorage, Option: globalThis.Option, fetch: globalThis.fetch };
   globalThis.document = document;
-  globalThis.window = { matchMedia: () => ({ matches: false }), addEventListener: (type, listener) => windowListeners.set(type, [...(windowListeners.get(type) ?? []), listener]), dispatchEvent: (event) => { for (const listener of windowListeners.get(event.type) ?? []) listener(event); } };
+  globalThis.window = { matchMedia: () => ({ matches: false }), scrollY: 0, scrollTo: (...values) => scrollCalls.push(values.length > 1 ? values[1] : values[0]), addEventListener: (type, listener) => windowListeners.set(type, [...(windowListeners.get(type) ?? []), listener]), dispatchEvent: (event) => { for (const listener of windowListeners.get(event.type) ?? []) listener(event); } };
   globalThis.location = { hash: "" };
-  globalThis.history = { back: () => { globalThis.location.hash = ""; globalThis.window.dispatchEvent({ type: "hashchange" }); } };
+  globalThis.history = {
+    back: () => { globalThis.location.hash = ""; globalThis.window.dispatchEvent({ type: "hashchange" }); },
+    forward: () => { globalThis.location.hash = "#/tasks/task-0001"; globalThis.window.dispatchEvent({ type: "hashchange" }); },
+  };
   globalThis.localStorage = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
   globalThis.Option = class extends FakeElement { constructor(label, value) { super("option"); this.textContent = label; this.value = value; } };
-  return { document, restore: () => Object.assign(globalThis, previous) };
+  return { document, scrollCalls, restore: () => Object.assign(globalThis, previous) };
 }
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -65,7 +72,7 @@ test("browser smoke serves board assets and route behavior without write methods
   writeFileSync(join(shared, "agent-rig.json"), JSON.stringify({ workflow_store: { provider: "sqlite" }, project_identifier: "fixture" }));
   const store = new SQLiteWorkflowStore(join(shared, "workflow.sqlite"), "fixture");
   store.createTask({ projectIdentifier: "fixture", id: "task-0001", title: "Phase 17 board", type: "task", status: "ready", assignedTo: "worker", priority: "high", parent: "", phase: "phase-17", dependsOn: [], dependencyReady: true, blockedBy: [], createdBy: "planner", createdOn: "2026-10-05", updatedOn: "2026-10-05", body: "# Detail", metadata: {} });
-  store.createTask({ projectIdentifier: "fixture", id: "task-0002", title: "Phase 16 legacy task", type: "task", status: "done", assignedTo: "worker", priority: "normal", parent: "", dependsOn: [], dependencyReady: true, blockedBy: [], createdBy: "planner", createdOn: "2026-10-05", updatedOn: "2026-10-05", body: "# Legacy", metadata: {} });
+  store.createTask({ projectIdentifier: "fixture", id: "task-0002", title: "Phase 16 legacy task", type: "task", status: "done", assignedTo: "worker", priority: "normal", parent: "", phase: "phase-16", dependsOn: ["task-0001"], dependencyReady: true, blockedBy: [], createdBy: "planner", createdOn: "2026-10-05", updatedOn: "2026-10-05", body: "# Legacy", metadata: {} });
   store.addHandoff({ projectIdentifier: "fixture", taskId: "task-0001", sequence: 1, sender: "worker", recipient: "reviewer", status: "review", message: "Needle handoff", createdAt: "2026-10-05T10:00:00.000Z", metadata: { ticket: "ABC-42" } });
   store.close();
   const server = createUiServer(cwd);
@@ -98,6 +105,15 @@ test("browser smoke serves board assets and route behavior without write methods
       mountBoard(root);
       await waitFor(() => root.textContent.includes("Phase 17 board"));
       assert.match(root.textContent, /Phase 17 board/);
+      const graph = root.findAll("svg")[0];
+      assert.equal(graph.getAttribute("aria-label"), "Task dependency flow");
+      assert.equal(root.findAll("g").length, 2);
+      assert.equal(root.findAll("path").length, 2, "arrow marker and dependency edge are rendered");
+      const initialViewBox = graph.getAttribute("viewBox");
+      root.findAll("button").find((button) => button.getAttribute("aria-label") === "Zoom in task flow").click();
+      assert.notEqual(graph.getAttribute("viewBox"), initialViewBox);
+      root.findAll("button").find((button) => button.getAttribute("aria-label") === "Fit task flow to view").click();
+      assert.equal(graph.getAttribute("viewBox"), initialViewBox);
       const phase = root.findAll("select")[0];
       phase.value = "phase-16";
       phase.dispatchEvent({ type: "change", target: phase });
@@ -109,14 +125,36 @@ test("browser smoke serves board assets and route behavior without write methods
       globalThis.window.dispatchEvent({ type: "hashchange" });
       await waitFor(() => root.textContent.includes("Handoff timeline"));
       assert.match(root.textContent, /Handoff timeline/);
+      globalThis.history.back();
+      await waitFor(() => root.findAll("g").length === 2);
+      assert.match(root.textContent, /Phase 17 board/);
+      globalThis.history.forward();
+      await waitFor(() => root.textContent.includes("Handoff timeline"));
+      assert.match(root.textContent, /Handoff timeline/);
       const search = root.findAll("input")[0];
       search.value = "needle";
       search.dispatchEvent({ type: "input", target: search });
       assert.equal(root.findAll("button").filter((button) => button.textContent === "Details").length, 1);
       root.findAll("button").find((button) => button.textContent === "Details").click();
       assert.match(harness.document.body.textContent, /Handoff #1/);
-      harness.document.body.findAll("button").find((button) => button.getAttribute("aria-label") === "Close handoff details").click();
+      const close = harness.document.body.findAll("button").find((button) => button.getAttribute("aria-label") === "Close handoff details");
+      close.click();
       assert.doesNotMatch(harness.document.body.textContent, /Handoff #1/);
+      assert.equal(harness.document.activeElement.textContent, "Details");
+
+      root.findAll("button").find((button) => button.textContent === "Details").click();
+      harness.document.dispatchEvent({ type: "keydown", key: "Escape" });
+      assert.doesNotMatch(harness.document.body.textContent, /Handoff #1/);
+
+      root.findAll("button").find((button) => button.textContent === "Details").click();
+      const dialog = harness.document.body.children.find((child) => child.getAttribute("role") === "dialog");
+      dialog.click();
+      assert.doesNotMatch(harness.document.body.textContent, /Handoff #1/);
+
+      globalThis.window.scrollY = 321;
+      root.findAll("button").find((button) => button.textContent === "Refresh").click();
+      await waitFor(() => harness.scrollCalls.some((value) => value === 321));
+      assert.ok(harness.scrollCalls.some((value) => value === 321));
 
       globalThis.location.hash = "#/tasks/task-0002";
       globalThis.window.dispatchEvent({ type: "hashchange" });
@@ -127,6 +165,14 @@ test("browser smoke serves board assets and route behavior without write methods
       await waitFor(() => root.textContent.includes("Task not found"));
       assert.match(root.textContent, /Task not found/);
 
+      globalThis.location.hash = "";
+      globalThis.window.dispatchEvent({ type: "hashchange" });
+      await waitFor(() => root.findAll("g").length === 2);
+      root.findAll("g")[0].click();
+      assert.equal(globalThis.location.hash, "#/tasks/task-0002");
+      globalThis.window.dispatchEvent({ type: "hashchange" });
+      await waitFor(() => root.textContent.includes("Handoff timeline"));
+      assert.match(root.textContent, /Handoff timeline/);
       globalThis.location.hash = "";
       globalThis.window.dispatchEvent({ type: "hashchange" });
       await waitFor(() => root.findAll("button").some((button) => /theme/i.test(button.textContent)));
