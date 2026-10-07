@@ -33,7 +33,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc && node scripts/build-ui.mjs",
+    "build": "node scripts/clean-dist.mjs && tsc && node scripts/build-ui.mjs",
     "test": "npm run build && node --test",
     "prepublishOnly": "npm test"
   },

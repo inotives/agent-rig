@@ -225,7 +225,7 @@ commands for all workflow changes.
 
 The frontend is packaged as static assets. From a repository checkout,
 `npm run build` compiles TypeScript and then runs Tailwind to generate
-`dist/ui.css`, copies `src/ui.html` to `dist/index.html`, and emits the
+`dist/ui.css`, copies `src/ui/core/ui.html` to `dist/index.html`, and emits the
 frontend bundle used by the server. Run `npm install` before the first build so
 the local Tailwind executable is available; installed packages serve the
 already-built assets and do not build frontend dependencies at runtime.
@@ -314,8 +314,18 @@ agent-rig/
 │   ├── _archived/
 │   └── phases/
 ├── src/
+│   ├── cli/
+│   ├── workspace/
+│   ├── profiles/
+│   ├── workflow/
+│   └── ui/
+│       ├── core/
+│       ├── common/
+│       └── pages/task-board/
 ├── templates/
 ├── test/
+│   ├── ui/
+│   └── integration/
 ├── AGENTS.md
 ├── README.md
 └── LICENSE
