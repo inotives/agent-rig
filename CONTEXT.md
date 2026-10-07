@@ -62,3 +62,26 @@ modules for every visual element.
 A UI DTO is the read-only data shape crossing the UI API seam into browser
 code. It is adapted from workflow records and is not the workflow domain
 model.
+
+## GitHub Issue Request
+
+A GitHub Issue Request is one GitHub Issue selected as the input for a
+planning run. It is an external request, not an implementation task.
+
+## Planning Run
+
+A planning run is the controlled workflow that converts one GitHub Issue
+Request into reviewed planning documents. It ends when the human approves or
+rejects the plan.
+
+## Planning Branch
+
+A planning branch is the issue-specific Git branch that contains the planning
+documents for one planning run. It is separate from the later implementation
+branch unless the workflow explicitly joins them.
+
+## Plan Approval
+
+Plan approval is the explicit human decision that allows a planning run to
+create implementation tasks. Without approval, the implementation loop must
+not start.

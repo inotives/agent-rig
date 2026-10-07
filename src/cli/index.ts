@@ -10,6 +10,7 @@ import { runLoop, runWatch } from "../workflow/loop.js";
 import { runDoctor } from "./doctor.js";
 import { runWorkflow } from "../workflow/migration.js";
 import { runUi } from "../ui/core/server.js";
+import { runPlan } from "./plan.js";
 
 export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   const [command, ...args] = argv;
@@ -39,6 +40,7 @@ export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   if (command === "watch") return runWatch(args, cwd);
   if (command === "workflow") return runWorkflow(args, cwd);
   if (command === "ui") return runUi(args, cwd);
+  if (command === "plan") return runPlan(args, cwd);
 
   console.error(`Unknown command: ${command}`);
   return 1;
@@ -65,12 +67,19 @@ Commands:
   watch      Process one ready shared task with --once
   workflow   Manage workflow storage and migrations
   ui         Serve the local task-board UI
+  plan       Discover issues and manage reviewed issue plans
   version    Print package version
 
 Examples:
   agent-rig init
   agent-rig init --yes
-  agent-rig add api-worker --role worker --tool codex --profile worker`;
+  agent-rig add api-worker --role worker --tool codex --profile worker
+  agent-rig plan github-issue
+  agent-rig plan github-issue 123
+  agent-rig plan branch 123
+  agent-rig plan resume 123
+  agent-rig plan approve 123
+  agent-rig plan tasks 123`;
 }
 
 function packageVersion() {

@@ -233,6 +233,52 @@ OpenCode loop runs use the OpenCode default model configured in the user's envir
 
 Live OpenCode smoke testing remains a manual verification step and is not part of automated CI.
 
+## GitHub Issue Planning
+
+AgentRig can turn one GitHub Issue into a reviewed implementation plan. This
+workflow is separate from normal local task work. Normal local workflows do
+not require GitHub CLI access.
+
+Use the planning commands in this order:
+
+```bash
+# list open issues; this does not create a task
+agent-rig plan github-issue
+
+# select one issue
+agent-rig plan github-issue 123
+
+# create the issue branch and plan
+agent-rig plan branch 123
+
+# continue an existing unapproved plan
+agent-rig plan resume 123
+
+# approve the reviewed plan
+agent-rig plan approve 123
+
+# create dependency-gated workflow tasks after approval
+agent-rig plan tasks 123
+```
+
+Issue discovery lists open issues in the current repository and excludes pull
+requests. It does not create tasks. The planner and human select one issue and
+refine its plan under `docs/plans/`. Planning documents are canonical project
+documents. Workflow tasks are live records in the configured workflow store.
+Do not create workflow tasks before the human approves the plan.
+
+The planning commands that read GitHub need the GitHub CLI (`gh`) and an
+authenticated session (`gh auth login`). The issue branch command also needs a
+clean worktree and GitHub push access. These requirements apply only to the
+GitHub issue planning workflow.
+
+After it pushes the issue branch, AgentRig prints a GitHub compare link and
+stops for human review. AgentRig does not create a pull request automatically.
+The human reviews the plan, approves it with `agent-rig plan approve <number>`,
+and then runs task generation. The final human end-to-end check must verify the
+complete discovery, plan review, approval, task generation, and worker-reviewer
+flow before the work is marked complete.
+
 ## Local Task Board UI
 
 Start the read-only task board from the project whose workflow state you want
