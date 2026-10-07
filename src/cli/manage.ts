@@ -1,15 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { parse } from "@iarna/toml";
 import { addAgent, defaultSkills, installSkill, normalizeInstalledSkill, readAgents, repairCredsGitignore, requireWorkspace, roles, SkillSpec, skillFolderName, tools, validSlug } from "../workspace/workspace.js";
-import { listBuiltinProfiles, listWorkspaceProfiles, loadWorkspaceProfile, roleProfile, skillSpecs } from "../profiles/profiles.js";
+import { listBuiltinProfiles, listWorkspaceProfiles, loadWorkspaceProfile, profileInstructions, roleProfile, seedProfiles, skillSpecs } from "../profiles/profiles.js";
 
 type CredScope = { name: string; file: string; env: string; example: string; scope: string };
 
 export function runAdd(args: string[], cwd: string) {
   try {
     const root = requireWorkspace(cwd);
+    seedProfiles(root);
     const name = args[0];
     const role = flag(args, "--role");
     const tool = flag(args, "--tool") ?? "codex";
@@ -70,10 +71,13 @@ export function runSkills(args: string[], cwd: string) {
 }
 
 export function runProfiles(args: string[], cwd: string) {
-  const [command, name] = args.filter((arg) => arg !== "--json");
+  const command = args[0];
   const json = args.includes("--json");
   try {
+    if (command === "update") return profilesUpdate(args.slice(1), cwd);
+
     if (command === "show") {
+      const name = args[1];
       if (!name) return fail("Usage: agent-rig profiles show <name>");
       const root = existsSync(join(cwd, ".agent-rig")) ? join(cwd, ".agent-rig") : undefined;
       const profile = root ? loadWorkspaceProfile(root, name) : listBuiltinProfiles().profiles.find((item) => item.name === name);
@@ -82,7 +86,7 @@ export function runProfiles(args: string[], cwd: string) {
       return 0;
     }
 
-    if (command && command !== "--json") return fail("Usage: agent-rig profiles [--json] | agent-rig profiles show <name>");
+    if (command && command !== "--json") return fail("Usage: agent-rig profiles [--json] | agent-rig profiles show <name> | agent-rig profiles update <name> (--agent <name>|--all) [--apply]");
     const result = existsSync(join(cwd, ".agent-rig")) ? listWorkspaceProfiles(join(cwd, ".agent-rig")) : listBuiltinProfiles();
     if (json) {
       console.log(JSON.stringify({
@@ -103,6 +107,57 @@ export function runProfiles(args: string[], cwd: string) {
       console.log("name\trole\tsummary");
       for (const profile of result.profiles) console.log(`${profile.name}\t${profile.meta.role ?? ""}\t${profile.meta.summary ?? ""}`);
     }
+    return 0;
+  } catch (cause) {
+    return fail(message(cause));
+  }
+}
+
+function profilesUpdate(args: string[], cwd: string) {
+  try {
+    const root = requireWorkspace(cwd);
+    const name = args[0];
+    const agent = flag(args, "--agent");
+    const all = args.includes("--all");
+    const apply = args.includes("--apply");
+    if (!name || (Boolean(agent) === all)) return fail("Usage: agent-rig profiles update <name> (--agent <name>|--all) [--apply]");
+
+    const profile = listBuiltinProfiles().profiles.find((item) => item.name === name);
+    if (!profile) return fail(`Built-in profile not found: ${name}`);
+
+    const agents = all
+      ? readAgents(root).filter((item) => roleProfile(item.role) === name)
+      : (requireAgent(root, agent!), readAgents(root).filter((item) => item.name === agent));
+    if (!agents.length) return fail(all ? `No agents use profile: ${name}` : `Unknown agent: ${agent}`);
+
+    const profileFile = join(root, "_shared", "profiles", `${name}.md`);
+    const files = [
+      { path: profileFile, content: profile.raw, label: `.agent-rig/_shared/profiles/${name}.md`, backup: `profile-${name}.md` },
+      ...agents.map((item) => ({
+        path: join(root, item.name, "instructions.md"),
+        content: profileInstructions(profile, item.name),
+        label: `.agent-rig/${item.name}/instructions.md`,
+        backup: `${item.name}-instructions.md`
+      }))
+    ];
+
+    console.log(`${apply ? "Updating" : "Would update"} profile ${name}:`);
+    for (const file of files) console.log(`  ${file.label}`);
+    if (!apply) {
+      console.log("No files changed. Add --apply to update these files.");
+      return 0;
+    }
+
+    const backupDir = join(root, "_shared", "profile-backups", new Date().toISOString().replace(/[:.]/g, "-"));
+    const existing = files.filter((file) => existsSync(file.path));
+    if (existing.length) {
+      mkdirSync(backupDir, { recursive: true });
+      for (const file of existing) copyFileSync(file.path, join(backupDir, file.backup));
+    }
+    mkdirSync(join(root, "_shared", "profiles"), { recursive: true });
+    for (const file of files) writeFileSync(file.path, file.content, "utf8");
+    if (existing.length) console.log(`Backed up previous files to ${backupDir}.`);
+    console.log(`Updated profile ${name} for ${agents.map((item) => item.name).join(", ")}.`);
     return 0;
   } catch (cause) {
     return fail(message(cause));

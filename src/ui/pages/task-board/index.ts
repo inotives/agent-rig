@@ -182,7 +182,101 @@ function badge(value: unknown, tone = "neutral") { const result = node("span", `
 function statusLegend() { const legend = node("div", "mb-4 flex flex-wrap items-center gap-2 text-xs"); const label = node("span", "font-semibold"); label.textContent = "Status"; legend.append(label); for (const status of STATUS_COLUMNS) legend.append(badge(status.replaceAll("_", " "), STATUS_TONES[status])); return legend; }
 
 export function openHandoffModal(handoff: Handoff, trigger: HTMLElement | undefined = typeof document !== "undefined" ? document.activeElement as HTMLElement : undefined) { const dialog = node("dialog", "modal"); dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-labelledby", "handoff-dialog-title"); const card = node("div", "card modal-box bg-base-100 shadow-xl"); const top = node("div", "card-title flex items-start justify-between gap-3"); const title = node("h2", "text-lg"); title.setAttribute("id", "handoff-dialog-title"); title.textContent = `Handoff #${handoff.sequence}`; const close = node("button", "btn btn-ghost btn-sm btn-circle"); close.type = "button"; close.setAttribute("aria-label", "Close handoff details"); close.textContent = "×"; top.append(title, close); const details = node("dl", "mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4"); details.append(labelValue("Timestamp", formatDate(handoff.created_at)), labelValue("Sender", handoff.sender), labelValue("Recipient", handoff.recipient), labelValue("Status", handoff.status)); const content = node("div", "prose prose-sm mt-4 max-w-none dark:prose-invert"); content.innerHTML = renderMarkdown(handoff.message); const metadata = document.createElement("details"); metadata.className = "collapse-arrow collapse mt-5 border border-base-300 bg-base-200"; const summary = document.createElement("summary"); summary.className = "collapse-title cursor-pointer text-sm font-medium"; summary.textContent = "Metadata JSON"; const json = node("pre", "collapse-content overflow-x-auto text-xs"); json.textContent = JSON.stringify(handoff.metadata ?? {}, null, 2); metadata.append(summary, json); card.append(top, details, content, metadata); dialog.append(card); document.body.append(dialog); let cleaned = false; const cleanup = () => { if (cleaned) return; cleaned = true; dialog.remove(); document.removeEventListener("keydown", escape); trigger?.focus?.(); }; const escape = (event: KeyboardEvent) => { if (event.key === "Escape") cleanup(); }; close.addEventListener("click", cleanup); dialog.addEventListener("cancel", (event) => { event.preventDefault(); cleanup(); }); dialog.addEventListener("close", cleanup); dialog.addEventListener("click", (event) => { if (event.target === dialog) cleanup(); }); document.addEventListener("keydown", escape); const nativeDialog = dialog as HTMLDialogElement; if (typeof nativeDialog.showModal === "function") nativeDialog.showModal(); else dialog.setAttribute("open", ""); close.focus?.(); }
-function renderTaskDetail(task: TaskDetail, handoffs: Handoff[], onBack: () => void) { const main = node("main", "mx-auto max-w-screen-xl px-4 py-5"); const back = node("a", "mb-4 inline-flex text-sm text-primary hover:underline"); back.href = "#/"; back.textContent = "← Back to board"; back.addEventListener("click", onBack); const heading = node("div", "flex flex-wrap items-start justify-between gap-3"); const title = node("h1", "text-2xl font-bold"); title.textContent = task.title; const id = node("p", "font-mono text-xs opacity-60"); id.textContent = task.id; const headingText = node("div"); headingText.append(title, id); heading.append(headingText, badge(task.status, STATUS_TONES[task.status] ?? "neutral")); const summary = node("section", "card mt-4 bg-base-100 shadow-sm"); const summaryBody = node("div", "card-body"); const summaryTitle = node("h2", "card-title text-lg"); summaryTitle.textContent = "Summary"; const metadata = node("dl", "grid grid-cols-2 gap-3 sm:grid-cols-4"); metadata.append(labelValue("Type", task.type), labelValue("Assignee", task.assigned_to), labelValue("Priority", task.priority), labelValue("Phase", task.phase), labelValue("Created", formatDate(task.created_on)), labelValue("Updated", formatDate(task.updated_on)), labelValue("Dependencies", task.depends_on?.join(", ")), labelValue("Dependency ready", task.dependency_ready ? "Yes" : "No")); summaryBody.append(summaryTitle, metadata); summary.append(summaryBody); const markdown = node("article", "card bg-base-100 shadow-sm"); const markdownBody = node("div", "card-body"); const markdownTitle = node("h2", "card-title text-lg"); markdownTitle.textContent = "Markdown"; const body = node("div", "prose prose-sm max-w-none dark:prose-invert"); body.innerHTML = renderMarkdown(task.body); markdownBody.append(markdownTitle, body); markdown.append(markdownBody); const handoffSection = node("section", "card min-w-0 bg-base-100 shadow-sm"); const handoffBody = node("div", "card-body min-w-0"); const handoffHeading = node("div", "flex flex-wrap items-center justify-between gap-2"); const handoffTitle = node("h2", "card-title text-lg"); handoffTitle.textContent = "Handoff timeline"; const search = node("input", "input input-bordered input-sm w-full sm:w-auto") as HTMLInputElement; search.type = "search"; search.placeholder = "Search handoffs"; search.setAttribute("aria-label", "Search handoffs"); handoffHeading.append(handoffTitle, search); const tableWrap = node("div", "mt-3 min-w-0 overflow-x-auto"); const renderRows = () => { const filtered = filterHandoffs(handoffs, search.value); tableWrap.replaceChildren(); if (!filtered.length) { const empty = node("p", "py-5 text-sm opacity-70"); empty.textContent = handoffs.length ? "No handoffs match your search." : "No handoffs recorded for this task yet."; tableWrap.append(empty); return; } const table = node("table", "table table-zebra w-full table-fixed text-xs sm:text-sm"); const head = node("thead", "hidden sm:table-header-group"); const headerRow = node("tr"); for (const [label, classes] of [["Seq#", "w-20"], ["Sender", "w-1/6"], ["Recipient", "w-1/6"], ["Status", "w-24"], ["Timestamp", "w-36"], ["", "w-20"]] as const) { const cell = node("th", classes); cell.textContent = label; headerRow.append(cell); } head.append(headerRow); const bodyRows = node("tbody"); for (const item of sortHandoffs(filtered)) { const row = node("tr", "block border-b border-base-300 sm:table-row"); const sequence = node("td", "block align-top sm:table-cell"); sequence.append(badge(`#${item.sequence}`)); const sender = node("td", "block min-w-0 align-top break-words sm:table-cell"); sender.textContent = text(item.sender); const recipient = node("td", "block min-w-0 align-top break-words sm:table-cell"); recipient.textContent = text(item.recipient); const status = node("td", "block align-top sm:table-cell"); status.append(badge(item.status)); const timestamp = node("td", "block align-top whitespace-nowrap sm:table-cell"); timestamp.textContent = text(formatDate(item.created_at)); const action = node("td", "block w-20 align-top whitespace-nowrap sm:table-cell"); const detail = node("button", "btn btn-ghost btn-xs"); detail.type = "button"; detail.textContent = "Details"; detail.addEventListener("click", () => openHandoffModal(item)); action.append(detail); row.append(sequence, sender, recipient, status, timestamp, action); bodyRows.append(row); } table.append(head, bodyRows); tableWrap.append(table); }; search.addEventListener("input", renderRows); renderRows(); handoffBody.append(handoffHeading, tableWrap); handoffSection.append(handoffBody); const detailSplit = node("div", "mt-5 grid gap-5 lg:grid-cols-2 lg:items-start"); detailSplit.append(markdown, handoffSection); main.append(back, heading, summary, detailSplit); return main; }
+function renderHandoffTimeline(handoffs: Handoff[]) {
+  const section = node("section", "card min-w-0 bg-base-100 shadow-sm");
+  const body = node("div", "card-body min-w-0");
+  const heading = node("div", "flex flex-wrap items-center justify-between gap-2");
+  const title = node("h2", "card-title text-lg");
+  title.textContent = "Handoff timeline";
+  const search = node("input", "input input-bordered input-sm w-full sm:w-auto") as HTMLInputElement;
+  search.type = "search";
+  search.placeholder = "Search handoffs";
+  search.setAttribute("aria-label", "Search handoffs");
+  heading.append(title, search);
+
+  const timeline = node("div", "relative mt-4 pl-14");
+  const rail = node("div", "absolute bottom-2 left-6 top-2 w-1 bg-base-300");
+  const events = node("div", "relative space-y-1");
+  timeline.append(rail, events);
+
+  const renderEvents = () => {
+    const filtered = sortHandoffs(filterHandoffs(handoffs, search.value));
+    events.replaceChildren();
+    if (!filtered.length) {
+      const empty = node("p", "py-5 text-sm opacity-70");
+      empty.textContent = handoffs.length ? "No handoffs match your search." : "No handoffs recorded for this task yet.";
+      events.append(empty);
+      return;
+    }
+    for (const item of filtered) {
+      const event = node("article", "relative min-h-24 pb-5 last:pb-0");
+      const detail = node("button", "btn btn-primary btn-circle btn-md absolute -left-14 top-0 z-10 border-4 border-base-100 bg-blue-500 text-white shadow-md hover:bg-blue-600");
+      detail.type = "button";
+      detail.textContent = String(item.sequence);
+      detail.setAttribute("aria-label", "Open handoff " + item.sequence + " details");
+      detail.addEventListener("click", () => openHandoffModal(item, detail));
+      const status = node("p", "pt-1 text-sm font-semibold capitalize");
+      status.textContent = item.status.replaceAll("_", " ") + " " + formatDate(item.created_at);
+      const route = node("p", "mt-1 text-sm text-base-content/70");
+      route.textContent = text(item.sender) + " → " + text(item.recipient);
+      event.append(detail, status, route);
+      events.append(event);
+    }
+  };
+  search.addEventListener("input", renderEvents);
+  renderEvents();
+  body.append(heading, timeline);
+  section.append(body);
+  return section;
+}
+
+function renderTaskDetail(task: TaskDetail, handoffs: Handoff[], onBack: () => void) {
+  const main = node("main", "mx-auto max-w-screen-xl px-4 py-5");
+  const back = node("a", "mb-4 inline-flex text-sm text-primary hover:underline");
+  back.href = "#/";
+  back.textContent = "← Back to board";
+  back.addEventListener("click", onBack);
+  const heading = node("div", "flex flex-wrap items-start justify-between gap-3");
+  const title = node("h1", "text-2xl font-bold");
+  title.textContent = task.title;
+  const id = node("p", "font-mono text-xs opacity-60");
+  id.textContent = task.id;
+  const headingText = node("div");
+  headingText.append(title, id);
+  heading.append(headingText, badge(task.status, STATUS_TONES[task.status] ?? "neutral"));
+  const summary = node("section", "card mt-4 bg-base-100 shadow-sm");
+  const summaryBody = node("div", "card-body");
+  const summaryTitle = node("h2", "card-title text-lg");
+  summaryTitle.textContent = "Summary";
+  const metadata = node("dl", "grid grid-cols-2 gap-3 sm:grid-cols-4");
+  metadata.append(
+    labelValue("Type", task.type),
+    labelValue("Assignee", task.assigned_to),
+    labelValue("Priority", task.priority),
+    labelValue("Phase", task.phase),
+    labelValue("Created", formatDate(task.created_on)),
+    labelValue("Updated", formatDate(task.updated_on)),
+    labelValue("Dependencies", task.depends_on?.join(", ")),
+    labelValue("Dependency ready", task.dependency_ready ? "Yes" : "No")
+  );
+  summaryBody.append(summaryTitle, metadata);
+  summary.append(summaryBody);
+
+  const markdown = node("article", "card bg-base-100 shadow-sm");
+  const markdownBody = node("div", "card-body");
+  const markdownTitle = node("h2", "card-title text-lg");
+  markdownTitle.textContent = "Markdown";
+  const content = node("div", "prose prose-sm max-w-none dark:prose-invert");
+  content.innerHTML = renderMarkdown(task.body);
+  markdownBody.append(markdownTitle, content);
+  markdown.append(markdownBody);
+
+  const handoffSection = renderHandoffTimeline(handoffs);
+  const detailSplit = node("div", "mt-5 grid gap-5 lg:grid-cols-2 lg:items-start");
+  detailSplit.append(markdown, handoffSection);
+  main.append(back, heading, summary, detailSplit);
+  return main;
+}
 
 
 export function mountBoard(root: HTMLElement) { let state = createUiState(); const app = node("div", "min-h-screen bg-base-200 text-base-content transition-colors"); const header = node("header", "navbar border-b border-base-300 bg-base-100"); const headerInner = node("div", "mx-auto flex w-full max-w-screen-2xl flex-wrap items-center justify-between gap-3 px-4 py-4"); const brand = node("div"); const title = node("h1", "text-xl font-bold"); title.textContent = "AgentRig task board"; const subtitle = node("p", "text-sm italic opacity-70"); subtitle.textContent = "Read-only workflow visibility"; const project = node("p", "text-xs opacity-70"); brand.append(title, subtitle, project); const controls = node("div", "flex items-center gap-2"); const phase = document.createElement("select"); phase.className = "select select-bordered select-sm"; phase.setAttribute("aria-label", "Filter by phase"); phase.addEventListener("change", () => { state = { ...state, selectedPhase: phase.value }; renderBoard(); }); const refresh = node("button", "btn btn-primary btn-sm"); refresh.type = "button"; refresh.textContent = "Refresh"; const theme = node("button", "btn btn-ghost btn-sm"); theme.type = "button"; theme.addEventListener("click", () => applyTheme(preferredTheme() === "dark" ? "light" : "dark")); controls.append(phase, refresh, theme); headerInner.append(brand, controls); header.append(headerInner); const main = node("main", "mx-auto max-w-screen-2xl px-4 py-5"); const status = node("p", "mb-2 text-sm opacity-70"); const legend = statusLegend(); const board = node("div", "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"); const emptyDetail = node("aside", "card mt-5 bg-base-100 p-5 text-sm opacity-70"); emptyDetail.textContent = "Select a task to view its details."; main.append(status, legend, board, emptyDetail); app.append(header, main); root.replaceChildren(app); setTheme(state.theme, false);

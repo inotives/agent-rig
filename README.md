@@ -33,11 +33,20 @@
 
 AgentRig is a TypeScript CLI tool for scaffolding a filesystem-first agent workspace into any project.
 
-It creates a `.agent-rig/` directory where agents, shared context, Markdown task files, findings notes, handoff logs, credentials, and launch instructions live as ordinary files. AgentRig does not orchestrate AI APIs; users run subscription tools such as Claude, Codex, OpenCode, or custom tools directly.
+It creates a `.agent-rig/` directory where agents, shared context, workflow records, findings notes, handoff logs, credentials, and launch instructions live. Markdown is the default workflow store. SQLite is available for larger projects and becomes the live source of truth after migration. AgentRig does not orchestrate AI APIs; users run subscription tools such as Claude, Codex, OpenCode, or custom tools directly.
+
+The main idea is to provide a controllable and customizable engineering loop
+inside the project folder. You can use your existing Codex or Claude
+subscription to run the planner, worker, and reviewer workflow without moving
+project coordination into a separate hosted system.
+
+<p align="center">
+  <img src="docs/_images/agentrig-loop.svg" alt="Planner, worker, and reviewer engineering loop inside the project folder" width="900">
+</p>
 
 Handoff logs are intended for cross-session resume notes when work stops midstream or a session closes after a meaningful milestone. They are not meant to duplicate normal planner, worker, or reviewer task flow, which should already live in phase docs, task files, code review notes, and task status changes.
 
-The current MVP can scaffold a workspace, manage agents and credentials, install profile-declared skills, create Markdown-backed tasks, run a Codex/OpenCode worker-reviewer loop, and report live status.
+The current MVP can scaffold a workspace, manage agents and credentials, install profile-declared skills, create fully briefed Markdown- or SQLite-backed tasks, run a Codex/OpenCode worker-reviewer loop, report live status, and serve a read-only task board.
 
 ## Core Model
 
@@ -45,7 +54,7 @@ AgentRig workspaces are ordinary project files:
 
 ```text
 .agent-rig/
-├── _shared/        # context, task files, session state, profiles, notes, handoff logs
+├── _shared/        # context, workflow store, profiles, notes, handoff logs
 ├── .creds/         # gitignored local secrets
 ├── <agent>/        # agent.toml, instructions.md, context, skills, tools, runs
 └── human/          # human approval, unblock, and override helpers
@@ -55,7 +64,18 @@ The default `agent-rig init --yes` workspace is a solo `worker` agent using `cod
 
 Fresh workspaces can select SQLite directly with `agent-rig init --yes --workflow-store sqlite`. Markdown remains the default.
 
-Agent instructions start from editable profiles in `.agent-rig/_shared/profiles/`. Built-in profiles are `planner`, `worker`, `reviewer`, `researcher`, and `writer`; custom profiles are plain Markdown files with YAML frontmatter.
+Agent instructions start from editable profiles in `.agent-rig/_shared/profiles/`. Built-in profiles are `planner`, `worker`, `reviewer`, `researcher`, `writer`, and `designer`; custom profiles are plain Markdown files with YAML frontmatter.
+
+Built-in profiles are maintained as templates under `templates/profiles/`. To
+start a new built-in profile in the repository, run:
+
+```bash
+npm run profile:create -- api-specialist
+```
+
+The generator creates the required metadata, standard instruction headings,
+and the default shared skills. Complete the profile before building or
+publishing AgentRig.
 
 In practice, use `_shared/handoff_logs/` for session-end operational context such as current branch, active task or phase, unresolved blockers, and the exact next step. Do not add a handoff after every worker or reviewer task unless the task flow itself failed to capture something important.
 
@@ -139,13 +159,19 @@ AGENT_RIG_SKIP_SKILLS=1 agent-rig init --yes
 Basic task flow:
 
 ```bash
-agent-rig tasks create "Implement X" --assigned-to worker --status ready --type task
+agent-rig tasks create "Implement X" --body-file docs/tasks/implement-x.md --assigned-to worker --status ready --type task
 agent-rig tasks
 agent-rig tasks next --agent worker
 agent-rig tasks next --agent worker --claim
 agent-rig tasks show task-0001
 agent-rig status
 ```
+
+`--body-file` is required for new tasks. The brief must contain non-empty
+`Context`, `Goal`, `Scope`, `Planner Notes`, and `Implementation Plan`
+sections, plus at least one checklist item under `Acceptance Criteria`.
+`Notes` is optional and is used for later worker and reviewer findings. Use
+`agent-rig tasks update-body` to replace a task brief.
 
 Workflow storage defaults to Markdown task and handoff records. The active
 provider is configured in `.agent-rig/_shared/agent-rig.json`; agents mutate
@@ -181,7 +207,7 @@ normal completion then needs a new worker handoff and independent review.
 
 `agent-rig status` is read-only. In Phase 15 it includes a compact `Loop:` section showing lock state, the next default `worker` or `reviewer` action, and the latest default worker/reviewer run summaries. Use `agent-rig status --json` for a top-level `loop` object with the same derived data. Detailed prompt and message artifacts stay in the local run paths under `.agent-rig/worker/runs/` and `.agent-rig/reviewer/runs/`.
 
-Phase 13 worker-reviewer flow:
+Worker-reviewer flow:
 
 ```bash
 # planner and human grill and finalize the phase plan first
@@ -193,7 +219,7 @@ agent-rig loop
 
 The planner and human first hammer out the phase and implementation details in canonical repository documents under `docs/`; those documents are not migrated into the workflow store. Only after the plan is approved are tasks created. Dependency-free foundation tasks become `ready`; downstream tasks remain `blocked`. For each selected task, the manager spawns a worker sub-agent using its AgentRig profile, waits for a worker handoff, then spawns an independent reviewer sub-agent. Review findings return the same task to the worker for fixes and re-review; only a clean review unlocks the next selected dependent task. If implementation reveals a limitation that changes the plan, pause the affected graph, return to planner/human discussion, update `docs/`, and revise tasks before continuing. A final integrated reviewer runs after all implementation tasks pass.
 
-`agent-rig loop` is the Phase 14 execution engine for a configured worker/reviewer pair. It supports agents configured with `tool = "codex"` or `tool = "opencode"`, runs continuously by default, keeps branch creation and manager decisions outside the loop, and uses the existing task lifecycle:
+`agent-rig loop` is the execution engine for a configured worker/reviewer pair. It supports agents configured with `tool = "codex"` or `tool = "opencode"`, runs continuously by default, keeps branch creation and manager decisions outside the loop, and uses the existing task lifecycle:
 
 ```text
 ready -> in_progress -> review -> done
@@ -201,7 +227,7 @@ ready -> in_progress -> review -> done
                         \-> blocked
 ```
 
-Use `agent-rig loop --once` for a deterministic single tick in tests or scripts. `agent-rig watch --once` still exists for the older filesystem-only single-task adapter and is unchanged by the Phase 13 loop work.
+Use `agent-rig loop --once` for a deterministic single tick in tests or scripts. `agent-rig watch --once` still exists for the older filesystem-only single-task adapter.
 
 OpenCode loop runs use the OpenCode default model configured in the user's environment. AgentRig does not pass OpenCode `--model` or `--auto`. Claude loop execution is still unsupported.
 
@@ -223,6 +249,11 @@ does not open a browser automatically. The board reads the active workflow
 provider and never mutates tasks or handoffs. Use the `agent-rig tasks ...`
 commands for all workflow changes.
 
+The single-page board filters tasks by phase and status, opens task details in
+a side panel, shows handoffs in a searchable timeline, and opens handoff
+details in a modal. It supports light and dark themes and preserves the
+selected phase during browser refresh.
+
 The frontend is packaged as static assets. From a repository checkout,
 `npm run build` compiles TypeScript and then runs Tailwind to generate
 `dist/ui.css`, copies `src/ui/core/ui.html` to `dist/index.html`, and emits the
@@ -241,6 +272,9 @@ already-built assets and do not build frontend dependencies at runtime.
 | `agent-rig add <agent-name> --profile worker` | Add an agent from an editable profile. |
 | `agent-rig profiles` | List available agent profiles. |
 | `agent-rig profiles show worker` | Print a profile Markdown template. |
+| `agent-rig profiles update worker --agent worker` | Preview a built-in profile update for one deployed agent. |
+| `agent-rig profiles update worker --all --apply` | Apply a built-in profile update to all matching agents and create backups. |
+| `npm run profile:create -- designer` | Create a partial built-in profile template in `templates/profiles/`. |
 | `agent-rig doctor` | Check local AgentRig environment and workspace health. |
 | `agent-rig agents` | List configured agents and tools. |
 | `agent-rig validate` | Validate workspace files without mutating them. |
@@ -250,7 +284,8 @@ already-built assets and do not build frontend dependencies at runtime.
 | `agent-rig skills` | Install and list shared or agent-local skills. |
 | `agent-rig status` | Show live session state, task counts, loop observability, and recent handoffs. |
 | `agent-rig start --agent <agent-name>` | Print launch guidance plus relevant resume context for a configured agent. |
-| `agent-rig tasks create "<title>"` | Create a shared task in the active store. |
+| `agent-rig tasks create "<title>" --body-file <path>` | Create a fully briefed task in the active store. |
+| `agent-rig tasks update-body <task-id> --body-file <path>` | Replace a task brief through the active store. |
 | `agent-rig tasks` | List shared tasks. |
 | `agent-rig tasks show <task-id>` | Print the canonical task Markdown. |
 | `agent-rig tasks next --agent <agent-name>` | Print the next dependency-ready shared task for an agent. |
@@ -270,7 +305,8 @@ already-built assets and do not build frontend dependencies at runtime.
 
 ## Implementation Phases
 
-The current implementation history is split into completed archived phases plus the active Phase 17 task-board UI work:
+The current implementation history is split into completed archived phases plus
+the capability-based structure work from Phase 20:
 
 ```text
 1. CLI scaffold
@@ -285,6 +321,9 @@ The current implementation history is split into completed archived phases plus 
 15. Loop observability
 16. Pluggable workflow storage
 17. Task board UI
+18. SPA task board UI
+19. DaisyUI task board refresh
+20. Capability-based source structure
 ```
 
 See [docs/phases](docs/phases/).
@@ -300,7 +339,8 @@ npm --cache /tmp/agent-rig-npm-cache pack --dry-run
 ```
 
 `npm run build` is required when changing the UI source or packaging a release:
-it runs `tsc` and the Tailwind/static-asset build in `scripts/build-ui.mjs`.
+it runs `tsc` and the Tailwind/DaisyUI static-asset build in
+`scripts/build-ui.mjs`.
 
 For future phases, follow the planning and manager workflow in [AGENTS.md](AGENTS.md): grill with the human, finalize the plan, create dependency-gated tasks, and drive each task through an independent worker/reviewer handoff loop.
 
@@ -319,9 +359,9 @@ agent-rig/
 │   ├── profiles/
 │   ├── workflow/
 │   └── ui/
-│       ├── core/
-│       ├── common/
-│       └── pages/task-board/
+│       ├── core/               # routing, server, API, contracts, config
+│       ├── common/             # shared UI components and helpers
+│       └── pages/task-board/   # task board page and task detail behavior
 ├── templates/
 ├── test/
 │   ├── ui/

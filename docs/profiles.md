@@ -15,21 +15,42 @@ Built-in profiles:
 - `reviewer`
 - `researcher`
 - `writer`
+- `designer`
 
-`verifier` and `tester` use the `reviewer` profile by default. `supervisor` uses the `planner` profile. `researcher` and `writer` use their matching profiles by default. Unknown custom roles use the `worker` profile unless `--profile` is provided.
+`verifier` and `tester` use the `reviewer` profile by default. `supervisor` uses the `planner` profile. `researcher`, `writer`, and `designer` use their matching profiles by default. Unknown custom roles use the `worker` profile unless `--profile` is provided.
 
 ## Commands
 
 ```bash
+npm run profile:create -- api-specialist
 agent-rig profiles
 agent-rig profiles --json
 agent-rig profiles show worker
+agent-rig profiles update worker --agent worker
+agent-rig profiles update worker --all --apply
 agent-rig add api-worker --role worker --tool codex --profile worker
 agent-rig add research --role researcher --tool claude
 agent-rig add docs-writer --role writer --tool claude
+agent-rig add ui-designer --role designer --tool codex
 ```
 
+`npm run profile:create -- <name>` is a repository development command. It
+creates a partial `templates/profiles/<name>.md` file for a new built-in
+profile. The file contains the required frontmatter and standard instruction
+headings. It also includes the standard shared skills used by AgentRig. Fill
+in the summary, agent-specific skills, and instructions before building or
+publishing AgentRig. The command refuses to overwrite an existing template.
+
 Outside a workspace, `agent-rig profiles` lists packaged built-ins. Inside a workspace, it lists editable files from `.agent-rig/_shared/profiles/`.
+
+`profiles update` refreshes a workspace profile and the instructions for one
+agent or all agents that use the built-in profile. It previews the files by
+default. Add `--apply` to write the update. Before writing, AgentRig copies
+the existing files to `.agent-rig/_shared/profile-backups/<timestamp>/`.
+
+The update uses the built-in profile shipped with the installed AgentRig
+version. It does not install or update skills. Use `agent-rig skills add` for
+skill changes.
 
 ## File Format
 
@@ -94,4 +115,10 @@ Writer:
 ```bash
 npx skills add https://github.com/blader/humanizer --skill humanizer
 npx skills add https://github.com/getsentry/skills --skill blog-writing-guide
+```
+
+Designer:
+
+```bash
+npx skills add https://github.com/anthropics/skills --skill frontend-design
 ```

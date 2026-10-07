@@ -13,7 +13,7 @@ Canonical task files live in:
 ## Create
 
 ```bash
-agent-rig tasks create "Fix login timeout" --assigned-to worker
+agent-rig tasks create "Fix login timeout" --body-file docs/tasks/task-0001.md --assigned-to worker
 ```
 
 Supported metadata flags:
@@ -29,7 +29,23 @@ Supported metadata flags:
 `--depends-on` can be repeated:
 
 ```bash
-agent-rig tasks create "Add checkout" --depends-on task-0001 --depends-on task-0002
+agent-rig tasks create "Add checkout" --body-file docs/tasks/task-0002.md --depends-on task-0001 --depends-on task-0002
+```
+
+Every new task must include a complete brief with `--body-file`. AgentRig
+validates these sections before it creates the task:
+
+- `Context`
+- `Goal`
+- `Scope`
+- `Planner Notes`
+- `Implementation Plan`
+- `Acceptance Criteria` with at least one checklist item
+
+Update a task brief through AgentRig when the plan changes:
+
+```bash
+agent-rig tasks update-body task-0001 --body-file docs/tasks/task-0001.md
 ```
 
 ## List And Show
@@ -66,17 +82,27 @@ depends_on: []
 
 ## Context
 
+Why this task exists and what problem it solves.
+
 ## Goal
+
+The result this task must produce.
 
 ## Scope
 
+The files, behavior, and boundaries included in the task.
+
 ## Planner Notes
+
+Decisions, constraints, and trade-offs from the planning discussion.
 
 ## Implementation Plan
 
+The steps the worker should follow.
+
 ## Acceptance Criteria
 
-- [ ] First verifiable criterion.
+- [ ] The task result is verifiable.
 
 ## Notes
 ```

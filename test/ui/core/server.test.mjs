@@ -145,9 +145,10 @@ test("browser smoke serves board assets and route behavior without write methods
        await waitFor(() => root.findAll("g").length === 2);
        assert.equal(drawer.getAttribute("inert"), "");
        assert.equal(scrim.getAttribute("inert"), "");
-      const handoffTable = root.findAll("table")[0];
-      assert.deepEqual(handoffTable.findAll("th").map((cell) => cell.textContent), ["Seq#", "Sender", "Recipient", "Status", "Timestamp", ""]);
-      assert.equal(handoffTable.findAll("dt").length, 0);
+      const timeline = root.findAll("article").find((article) => article.textContent.includes("review"));
+      assert.ok(timeline);
+      assert.match(timeline.textContent, /worker.*reviewer/);
+      assert.equal(root.findAll("button").filter((button) => button.getAttribute("aria-label") === "Open handoff 1 details").length, 1);
       globalThis.history.back();
       await waitFor(() => root.findAll("g").length === 2);
       assert.match(root.textContent, /Phase 17 board/);
@@ -157,8 +158,8 @@ test("browser smoke serves board assets and route behavior without write methods
       const search = root.findAll("input")[0];
       search.value = "needle";
       search.dispatchEvent({ type: "input", target: search });
-      assert.equal(root.findAll("button").filter((button) => button.textContent === "Details").length, 1);
-      root.findAll("button").find((button) => button.textContent === "Details").click();
+      assert.equal(root.findAll("button").filter((button) => button.getAttribute("aria-label") === "Open handoff 1 details").length, 1);
+      root.findAll("button").find((button) => button.getAttribute("aria-label") === "Open handoff 1 details").click();
       assert.match(harness.document.body.textContent, /Handoff #1/);
       const dialog = harness.document.body.children.find((child) => child.getAttribute("role") === "dialog");
       assert.equal(dialog.getAttribute("aria-labelledby"), "handoff-dialog-title");
@@ -166,13 +167,13 @@ test("browser smoke serves board assets and route behavior without write methods
       const close = harness.document.body.findAll("button").find((button) => button.getAttribute("aria-label") === "Close handoff details");
       close.click();
       assert.doesNotMatch(harness.document.body.textContent, /Handoff #1/);
-      assert.equal(harness.document.activeElement.textContent, "Details");
+      assert.equal(harness.document.activeElement.textContent, "1");
 
-      root.findAll("button").find((button) => button.textContent === "Details").click();
+      root.findAll("button").find((button) => button.getAttribute("aria-label") === "Open handoff 1 details").click();
       harness.document.dispatchEvent({ type: "keydown", key: "Escape" });
       assert.doesNotMatch(harness.document.body.textContent, /Handoff #1/);
 
-      root.findAll("button").find((button) => button.textContent === "Details").click();
+      root.findAll("button").find((button) => button.getAttribute("aria-label") === "Open handoff 1 details").click();
       const backdropDialog = harness.document.body.children.find((child) => child.getAttribute("role") === "dialog");
       backdropDialog.click();
       assert.doesNotMatch(harness.document.body.textContent, /Handoff #1/);

@@ -63,6 +63,24 @@ Use `agent-rig tasks --status ready` to find ready writing tasks and `agent-rig 
 
 Ask the human when audience, voice, claims, source material, or approval requirements are unclear.
 
+## Technical English
+
+Use ASD-STE100 (Simplified Technical English) principles when you write or
+rewrite planning documents, tasks, handoffs, ADRs, instructions, and other
+agent-facing text.
+
+- Use short, direct sentences and one instruction per step.
+- Prefer common words, active voice, and imperative instructions.
+- Use one term for one concept. Do not switch between synonyms.
+- Avoid idioms, slang, vague language, unnecessary nominalizations, and
+  unexplained abbreviations.
+- State conditions, actions, and expected results clearly.
+- Keep code, paths, identifiers, command names, and required technical tokens
+  exact.
+- Review text for ambiguity before you save a document or write a handoff.
+
 ## Output
+
+
 
 Produce concise drafts or edits that match the requested format. Note source gaps, assumptions, and any claims that need human approval. Use shared handoff guidance when writing handoff logs under `.agent-rig/_shared/handoff_logs/`.

@@ -34,6 +34,7 @@
   ],
   "scripts": {
     "build": "node scripts/clean-dist.mjs && tsc && node scripts/build-ui.mjs",
+    "profile:create": "node scripts/create-profile.mjs",
     "test": "npm run build && node --test",
     "prepublishOnly": "npm test"
   },

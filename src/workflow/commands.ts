@@ -57,6 +57,7 @@ export function runTasks(args: string[], cwd: string) {
   if (!command || command === "--help" || command === "-h" || command === "help") return tasksHelp();
   if (command === "create") return tasksCreate(rest, cwd);
   if (command === "show") return tasksShow(rest, cwd);
+  if (command === "update-body") return tasksUpdateBody(rest, cwd);
   if (command === "set-status") return tasksSetStatus(rest, cwd);
   if (command === "assign") return tasksAssign(rest, cwd);
   if (command === "set-type") return tasksSetType(rest, cwd);
@@ -74,8 +75,9 @@ function tasksHelp() {
   console.log(`Usage: agent-rig tasks [command] [options]
 
 Commands:
-  create <title>              Create a shared workflow task
+  create <title>              Create a shared workflow task with --body-file
   show <task-id>              Print the task as Markdown
+  update-body <task-id>       Replace the full task brief with --body-file
   set-status <task-id> <status> [--admin-override]
   assign <task-id> <agent-name>
   set-type <task-id> <type>
@@ -101,10 +103,13 @@ function tasksCreate(args: string[], cwd: string) {
   try {
     const root = requireWorkspace(cwd);
     const title = args[0];
-    if (!title || title.startsWith("--")) return fail("Usage: agent-rig tasks create <title> [--assigned-to <agent>] [--status <status>] [--type <type>] [--priority <priority>] [--phase <phase>] [--parent <task-id>] [--depends-on <task-id[,task-id]>] [--created-by <name>]");
+    if (!title || title.startsWith("--")) return fail("Usage: agent-rig tasks create <title> --body-file <path> [--assigned-to <agent>] [--status <status>] [--type <type>] [--priority <priority>] [--phase <phase>] [--parent <task-id>] [--depends-on <task-id[,task-id]>] [--created-by <name>]");
 
-    const allowed = new Set(["--assigned-to", "--status", "--type", "--priority", "--phase", "--parent", "--depends-on", "--created-by"]);
+    const allowed = new Set(["--body-file", "--assigned-to", "--status", "--type", "--priority", "--phase", "--parent", "--depends-on", "--created-by"]);
     const options = parseOptions(args.slice(1), allowed);
+    const bodyFile = option(options, "--body-file");
+    if (!bodyFile) return fail("Task creation requires --body-file with Context, Goal, Scope, Planner Notes, Implementation Plan, and Acceptance Criteria sections.");
+    const body = readTaskBrief(resolve(cwd, bodyFile));
     const status = option(options, "--status") ?? "todo";
     const type = option(options, "--type") ?? "task";
     const priority = option(options, "--priority") ?? "normal";
@@ -132,10 +137,27 @@ function tasksCreate(args: string[], cwd: string) {
       dependsOn: dependsOn(options),
       dependencyReady: true,
       blockedBy: [],
-      body: defaultTaskBody(),
+      body,
       metadata: {}
     });
     console.log(`Created ${created.id}${readWorkspaceProvider(cwd) === "markdown" ? `: ${relative(cwd, join(sharedTasksDir(root), `${created.id}_${slug(title)}.md`))}` : ""}`);
+    return 0;
+  } catch (cause) {
+    return fail(message(cause));
+  }
+}
+
+function tasksUpdateBody(args: string[], cwd: string) {
+  try {
+    const id = args[0];
+    if (!id) return fail("Usage: agent-rig tasks update-body <task-id> --body-file <path>");
+    const options = parseOptions(args.slice(1), new Set(["--body-file"]));
+    const bodyFile = option(options, "--body-file");
+    if (!bodyFile || args.length !== 3) return fail("Usage: agent-rig tasks update-body <task-id> --body-file <path>");
+    const task = requireSharedTask(cwd, id);
+    const body = readTaskBrief(resolve(cwd, bodyFile));
+    updateSharedTask(task, { updated_on: dateStamp(new Date()) }, body);
+    console.log(`Updated ${id} task brief.`);
     return 0;
   } catch (cause) {
     return fail(message(cause));
@@ -1081,6 +1103,27 @@ function sharedTaskMarkdown(meta: Record<string, unknown>, body?: string) {
 
 function defaultTaskBody() {
   return "# Task\n\n## Context\n\n\n## Goal\n\n\n## Scope\n\n\n## Planner Notes\n\n\n## Implementation Plan\n\n\n## Acceptance Criteria\n\n- [ ] First verifiable criterion.\n\n## Notes\n\n";
+}
+
+function readTaskBrief(file: string) {
+  if (!existsSync(file)) throw new Error(`Task brief not found: ${file}`);
+  const body = readFileSync(file, "utf8");
+  const required = ["Context", "Goal", "Scope", "Planner Notes", "Implementation Plan", "Acceptance Criteria"];
+  const missing = required.filter((section) => {
+    const content = taskBriefSection(body, section);
+    return !content.trim() || (section === "Acceptance Criteria" && !/^- \[[ xX]\] .+/m.test(content));
+  });
+  if (missing.length) throw new Error(`Task brief is incomplete. Add non-empty sections and acceptance checkboxes: ${missing.join(", ")}`);
+  return body;
+}
+
+function taskBriefSection(body: string, section: string) {
+  const heading = `## ${section}`;
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start < 0) return "";
+  const end = lines.findIndex((line, index) => index > start && line.startsWith("## "));
+  return lines.slice(start + 1, end < 0 ? lines.length : end).join("\n");
 }
 
 function orderedFrontmatter(meta: Record<string, unknown>) {

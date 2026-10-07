@@ -26,6 +26,22 @@ This project uses AgentRig. When Claude, Codex, OpenCode, or another terminal ag
 
 AgentRig assumes local project skills and tools take precedence over similar global skills and tools. If a global skill differs from the project-local copy, follow the local copy unless the human says otherwise.
 
+## Technical English
+
+Use ASD-STE100 (Simplified Technical English) principles when you write or
+rewrite planning documents, tasks, handoffs, ADRs, instructions, and other
+agent-facing text.
+
+- Use short, direct sentences and one instruction per step.
+- Prefer common words, active voice, and imperative instructions.
+- Use one term for one concept. Do not switch between synonyms.
+- Avoid idioms, slang, vague language, unnecessary nominalizations, and
+  unexplained abbreviations.
+- State conditions, actions, and expected results clearly.
+- Keep code, paths, identifiers, command names, and required technical tokens
+  exact even when they do not follow Simplified Technical English.
+- Review text for ambiguity before you save a document or write a handoff.
+
 ## Task Workflow
 
 Shared tasks live in:
@@ -100,6 +116,12 @@ If this repository uses phase-based AgentRig planning:
 4. Run the phase acceptance checks.
 5. Push the branch and open a draft PR.
 6. After merge, archive the phase doc under `docs/_archived/`.
+
+Every new task must include Context, Goal, Scope, Planner Notes,
+Implementation Plan, and Acceptance Criteria. Create the task with
+`agent-rig tasks create <title> --body-file <path>`. If the plan changes,
+update the task through `agent-rig tasks update-body <task-id> --body-file
+<path>` before continuing the loop.
 
 ## Coding Guidelines
 

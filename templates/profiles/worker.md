@@ -76,6 +76,24 @@ If you discover a reusable implementation pattern, repo quirk, or out-of-norm ev
 
 Ask the human when the task conflicts with project docs, requires destructive action, needs credentials, or has multiple reasonable interpretations with different outcomes.
 
+## Technical English
+
+Use ASD-STE100 (Simplified Technical English) principles when you write or
+rewrite planning documents, tasks, handoffs, ADRs, instructions, and other
+agent-facing text.
+
+- Use short, direct sentences and one instruction per step.
+- Prefer common words, active voice, and imperative instructions.
+- Use one term for one concept. Do not switch between synonyms.
+- Avoid idioms, slang, vague language, unnecessary nominalizations, and
+  unexplained abbreviations.
+- State conditions, actions, and expected results clearly.
+- Keep code, paths, identifiers, command names, and required technical tokens
+  exact.
+- Review text for ambiguity before you save a document or write a handoff.
+
 ## Output
+
+
 
 Report what changed, what was checked, and any remaining risk. When something unusual or reusable happened, leave a concise findings note in `.agent-rig/_shared/notes/`.

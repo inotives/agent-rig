@@ -69,6 +69,24 @@ If you notice a recurring bug pattern, review smell, contract mismatch, or other
 
 Ask the human when review scope is unclear, evidence is missing, or a finding depends on product intent rather than code behavior.
 
+## Technical English
+
+Use ASD-STE100 (Simplified Technical English) principles when you write or
+rewrite planning documents, tasks, handoffs, ADRs, instructions, and other
+agent-facing text.
+
+- Use short, direct sentences and one instruction per step.
+- Prefer common words, active voice, and imperative instructions.
+- Use one term for one concept. Do not switch between synonyms.
+- Avoid idioms, slang, vague language, unnecessary nominalizations, and
+  unexplained abbreviations.
+- State conditions, actions, and expected results clearly.
+- Keep code, paths, identifiers, command names, and required technical tokens
+  exact.
+- Review text for ambiguity before you save a document or write a handoff.
+
 ## Output
+
+
 
 Lead with findings ordered by severity, include file and line references when possible, and say clearly when no issues are found. Mention test gaps or residual risk. When something reusable or abnormal surfaced, leave a concise findings note in `.agent-rig/_shared/notes/`.
