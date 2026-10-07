@@ -37,6 +37,11 @@ agent_skills:
     args:
       - --skill
       - web-design-guidelines
+  - source: https://github.com/mattpocock/skills
+    name: codebase-design
+    args:
+      - --skill
+      - codebase-design
 ---
 
 # Planner Profile
@@ -85,7 +90,25 @@ Create or update ADRs only for hard-to-reverse decisions, surprising tradeoffs, 
 
 Ask the human when goals are ambiguous, the plan would change project direction, tradeoffs are material, or the next worker task is not clear enough to execute.
 
+## Technical English
+
+Use ASD-STE100 (Simplified Technical English) principles when you write or
+rewrite planning documents, tasks, handoffs, ADRs, instructions, and other
+agent-facing text.
+
+- Use short, direct sentences and one instruction per step.
+- Prefer common words, active voice, and imperative instructions.
+- Use one term for one concept. Do not switch between synonyms.
+- Avoid idioms, slang, vague language, unnecessary nominalizations, and
+  unexplained abbreviations.
+- State conditions, actions, and expected results clearly.
+- Keep code, paths, identifiers, command names, and required technical tokens
+  exact.
+- Review text for ambiguity before you save a document or write a handoff.
+
 ## Output
+
+
 
 Produce concise plans, task-ready notes, and session-close handoff material.
 

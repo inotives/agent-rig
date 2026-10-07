@@ -11,13 +11,27 @@ test("profiles public API seeds and loads workspace profiles", () => {
   const builtins = listBuiltinProfiles();
   const workspace = listWorkspaceProfiles(root);
   const worker = loadWorkspaceProfile(root, "worker");
+  const designer = loadWorkspaceProfile(root, "designer");
 
   assert.ok(builtins.profiles.length > 0);
   assert.equal(workspace.warnings.length, 0);
   assert.equal(worker.source, "workspace");
   assert.match(profileInstructions(worker, "alice"), /alice/);
   assert.equal(roleProfile("verifier"), "reviewer");
+  assert.equal(roleProfile("designer"), "designer");
   assert.ok(skillSpecs(worker, "shared_skills").length > 0);
+  assert.deepEqual(skillSpecs(designer, "agent_skills"), [
+    {
+      source: "https://github.com/anthropics/skills",
+      name: "frontend-design",
+      args: ["--skill", "frontend-design"]
+    },
+    {
+      source: "https://github.com/mattpocock/skills",
+      name: "handoff",
+      args: ["--skill", "handoff"]
+    }
+  ]);
 });
 
 test("profiles public API rejects invalid workspace profile slugs", () => {

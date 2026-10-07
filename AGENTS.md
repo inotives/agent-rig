@@ -26,6 +26,22 @@ This project uses AgentRig. When Claude, Codex, OpenCode, or another terminal ag
 
 AgentRig assumes local project skills and tools take precedence over similar global skills and tools. If a global skill differs from the project-local copy, follow the local copy unless the human says otherwise.
 
+## Technical English
+
+Use ASD-STE100 (Simplified Technical English) principles when you write or
+rewrite planning documents, tasks, handoffs, ADRs, instructions, and other
+agent-facing text.
+
+- Use short, direct sentences and one instruction per step.
+- Prefer common words, active voice, and imperative instructions.
+- Use one term for one concept. Do not switch between synonyms.
+- Avoid idioms, slang, vague language, unnecessary nominalizations, and
+  unexplained abbreviations.
+- State conditions, actions, and expected results clearly.
+- Keep code, paths, identifiers, command names, and required technical tokens
+  exact even when they do not follow Simplified Technical English.
+- Review text for ambiguity before you save a document or write a handoff.
+
 ## Task Workflow
 
 With the default Markdown provider, shared tasks live in:
@@ -51,6 +67,7 @@ agent-rig tasks
 agent-rig tasks next --agent <agent-name>
 agent-rig tasks next --agent <agent-name> --claim
 agent-rig tasks show <task-id>
+agent-rig tasks update-body <task-id> --body-file <path>
 agent-rig tasks set-status <task-id> <status>
 agent-rig tasks done <task-id> --message "<summary>"
 agent-rig tasks block <task-id> --reason "<reason>"
@@ -124,6 +141,8 @@ For each new phase:
 3. Break the approved plan into tasks.
    - The planner and human turn the finalized phase into small, independently
      verifiable AgentRig task files.
+   - Every new task must include Context, Goal, Scope, Planner Notes, Implementation Plan, and Acceptance Criteria. Create it with `agent-rig tasks create <title> --body-file <path>`.
+   - If the plan changes, update the task brief through `agent-rig tasks update-body <task-id> --body-file <path>` before continuing the loop.
    - Add explicit `depends_on` edges and one final integrated-review task.
    - Set only dependency-free foundation tasks to `ready`.
    - Keep downstream tasks `blocked`; dependency metadata alone does not

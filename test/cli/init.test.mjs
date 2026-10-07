@@ -14,7 +14,13 @@ function tempProject() {
 }
 
 function run(args, cwd, input = "", env = {}) {
-  return spawnSync(process.execPath, [cli, ...args], { cwd, input, encoding: "utf8", env: { ...process.env, ...env, AGENT_RIG_SKIP_SKILLS: "1" } });
+  const effectiveArgs = [...args];
+  if (args[0] === "tasks" && args[1] === "create" && !args.includes("--body-file")) {
+    const bodyFile = join(cwd, ".test-task-brief.md");
+    writeFileSync(bodyFile, `# Task\n\n## Context\n\nTest context.\n\n## Goal\n\nTest goal.\n\n## Scope\n\nTest scope.\n\n## Planner Notes\n\nTest planner notes.\n\n## Implementation Plan\n\n1. Run the test.\n\n## Acceptance Criteria\n\n- [ ] First verifiable criterion.\n\n## Notes\n`, "utf8");
+    effectiveArgs.push("--body-file", bodyFile);
+  }
+  return spawnSync(process.execPath, [cli, ...effectiveArgs], { cwd, input, encoding: "utf8", env: { ...process.env, ...env, AGENT_RIG_SKIP_SKILLS: "1" } });
 }
 
 function fakeGh(cwd, issues) {
@@ -452,7 +458,38 @@ Hello <agent>.
   assert.match(readFileSync(join(cwd, ".agent-rig", "researcher", "instructions.md"), "utf8"), /Hello researcher\./);
 });
 
-test("researcher and writer roles use matching built-in profiles", () => {
+test("profiles update previews and safely refreshes deployed instructions", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  const profile = join(cwd, ".agent-rig", "_shared", "profiles", "worker.md");
+  const instructions = join(cwd, ".agent-rig", "worker", "instructions.md");
+  writeFileSync(profile, "stale profile\n", "utf8");
+  writeFileSync(instructions, "stale instructions\n", "utf8");
+
+  const preview = run(["profiles", "update", "worker", "--agent", "worker"], cwd);
+  assert.equal(preview.status, 0, preview.stderr);
+  assert.match(preview.stdout, /No files changed/);
+  assert.equal(readFileSync(profile, "utf8"), "stale profile\n");
+  assert.equal(readFileSync(instructions, "utf8"), "stale instructions\n");
+
+  const applied = run(["profiles", "update", "worker", "--agent", "worker", "--apply"], cwd);
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.match(readFileSync(profile, "utf8"), /name: worker/);
+  assert.match(readFileSync(instructions, "utf8"), /Technical English/);
+  const backups = readdirSync(join(cwd, ".agent-rig", "_shared", "profile-backups"));
+  assert.equal(backups.length, 1);
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "profile-backups", backups[0], "profile-worker.md")));
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "profile-backups", backups[0], "worker-instructions.md")));
+
+  assert.equal(run(["add", "worker-two", "--role", "worker", "--tool", "codex"], cwd).status, 0);
+  const secondInstructions = join(cwd, ".agent-rig", "worker-two", "instructions.md");
+  writeFileSync(secondInstructions, "stale second instructions\n", "utf8");
+  const all = run(["profiles", "update", "worker", "--all", "--apply"], cwd);
+  assert.equal(all.status, 0, all.stderr);
+  assert.match(readFileSync(secondInstructions, "utf8"), /Technical English/);
+});
+
+test("researcher, writer, and designer roles use matching built-in profiles", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
 
@@ -466,6 +503,11 @@ test("researcher and writer roles use matching built-in profiles", () => {
   assert.match(readFileSync(join(cwd, ".agent-rig", "docs-writer", "instructions.md"), "utf8"), /# Writer Profile/);
   assert.ok(existsSync(join(cwd, ".agent-rig", "docs-writer", "skills", "humanizer")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "docs-writer", "skills", "blog-writing-guide")));
+
+  const designer = run(["add", "designer", "--role", "designer", "--tool", "codex"], cwd);
+  assert.equal(designer.status, 0, designer.stderr);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "designer", "instructions.md"), "utf8"), /# Designer Profile/);
+  assert.ok(existsSync(join(cwd, ".agent-rig", "designer", "skills", "frontend-design")));
 });
 
 test("add defaults tool to codex when omitted", () => {
@@ -809,6 +851,24 @@ test("tasks create lists, filters, shows, and emits json", () => {
   const show = run(["tasks", "show", "task-0001"], cwd);
   assert.equal(show.status, 0, show.stderr);
   assert.match(show.stdout, /^---\nid: task-0001/);
+});
+
+test("task briefs are required and can be updated through AgentRig", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes", "--workflow-store", "sqlite"], cwd).status, 0);
+  const missing = spawnSync(process.execPath, [cli, "tasks", "create", "Missing brief"], { cwd, encoding: "utf8", env: { ...process.env, AGENT_RIG_SKIP_SKILLS: "1" } });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /requires --body-file/);
+
+  const brief = join(cwd, "task-brief.md");
+  writeFileSync(brief, `# Task\n\n## Context\n\nInitial context.\n\n## Goal\n\nInitial goal.\n\n## Scope\n\nInitial scope.\n\n## Planner Notes\n\nInitial planner notes.\n\n## Implementation Plan\n\n1. Implement the task.\n\n## Acceptance Criteria\n\n- [ ] Initial criterion passes.\n\n## Notes\n`, "utf8");
+  assert.equal(run(["tasks", "create", "Briefed task", "--body-file", brief], cwd).status, 0);
+  assert.match(run(["tasks", "show", "task-0001"], cwd).stdout, /Initial context/);
+
+  writeFileSync(brief, `# Task\n\n## Context\n\nUpdated context.\n\n## Goal\n\nUpdated goal.\n\n## Scope\n\nUpdated scope.\n\n## Planner Notes\n\nUpdated planner notes.\n\n## Implementation Plan\n\n1. Apply the updated plan.\n\n## Acceptance Criteria\n\n- [ ] Updated criterion passes.\n\n## Notes\n`, "utf8");
+  const updated = run(["tasks", "update-body", "task-0001", "--body-file", brief], cwd);
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.match(run(["tasks", "show", "task-0001"], cwd).stdout, /Updated context/);
 });
 
 test("SQLite provider routes task commands, status, show, and watch through the store", () => {

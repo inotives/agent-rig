@@ -20,7 +20,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(here, "..", "..");
 const builtinSkillsDir = join(packageRoot, "templates", "skills");
 
-export const roles = new Set(["supervisor", "planner", "worker", "verifier", "reviewer", "tester", "researcher", "writer", "custom"]);
+export const roles = new Set(["supervisor", "planner", "worker", "verifier", "reviewer", "tester", "researcher", "writer", "designer", "custom"]);
 export const tools = new Set(["claude", "codex", "opencode", "custom"]);
 export const defaultSkills: SkillSpec[] = [
   { source: "vercel-labs/skills@find-skills", name: "find-skills" },

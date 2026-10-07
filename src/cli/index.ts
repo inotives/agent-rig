@@ -52,7 +52,7 @@ Usage: agent-rig <command> [options]
 Commands:
   init       Scaffold .agent-rig/ in the current project
   add        Add an agent to an existing workspace
-  profiles   List or show editable agent profiles
+  profiles   List, show, or update editable agent profiles
   doctor     Check local AgentRig environment and workspace health
   validate   Validate workspace files
   agents     List configured agents
