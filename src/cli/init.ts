@@ -1,0 +1,265 @@
+import { createInterface } from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { addAgent, Agent, installSkill, normalizeInstalledSkill, repairCredsGitignore, SkillSpec, skillFolderName, workspaceRoot } from "../workspace/workspace.js";
+import { dedupeSkills, loadWorkspaceProfile, roleProfile, seedProfiles, skillSpecs } from "../profiles/profiles.js";
+import { createWorkflowStore, isProjectIdentifier, isWorkflowStoreProvider, projectIdentifierFromDirectory } from "../workflow/index.js";
+
+type Pattern = "solo" | "coder-reviewer" | "trinity" | "supervisor-worker" | "swarm" | "testing-reviewer" | "custom";
+
+const SCAFFOLD_VERSION = "0.0.1";
+const templateRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "templates");
+
+const patternAgents: Record<Pattern, Agent[]> = {
+  solo: [{ name: "worker", role: "worker", tool: "codex" }],
+  "coder-reviewer": [
+    { name: "worker", role: "worker", tool: "codex" },
+    { name: "reviewer", role: "reviewer", tool: "claude" }
+  ],
+  trinity: [
+    { name: "planner", role: "planner", tool: "claude" },
+    { name: "worker", role: "worker", tool: "codex" },
+    { name: "verifier", role: "verifier", tool: "opencode" }
+  ],
+  "supervisor-worker": [
+    { name: "supervisor", role: "supervisor", tool: "claude" },
+    { name: "worker", role: "worker", tool: "codex" }
+  ],
+  swarm: [
+    { name: "researcher", role: "custom", tool: "claude" },
+    { name: "builder", role: "worker", tool: "codex" }
+  ],
+  "testing-reviewer": [
+    { name: "worker", role: "worker", tool: "codex" },
+    { name: "tester", role: "tester", tool: "opencode" }
+  ],
+  custom: [{ name: "agent", role: "custom", tool: "codex" }]
+};
+
+export async function runInit(args: string[], cwd: string) {
+  if (args.includes("--pattern") || args.some((arg) => arg.startsWith("--pattern=")) || args.includes("--agents") || args.some((arg) => arg.startsWith("--agents="))) {
+    console.error("--pattern and --agents are not implemented in Phase 1. Run interactive `agent-rig init` instead.");
+    return 1;
+  }
+
+  if (existsSync(join(cwd, ".agent-rig"))) {
+    console.error("A .agent-rig/ workspace already exists. Use `agent-rig add` to add agents.");
+    return 1;
+  }
+
+  const projectIdentifier = initOption(args, "--project-identifier");
+  if (projectIdentifier && !isProjectIdentifier(projectIdentifier)) {
+    console.error("--project-identifier must be a lowercase slug starting with a letter (max 40 characters).");
+    return 1;
+  }
+
+  const workflowStore = initOption(args, "--workflow-store") ?? "markdown";
+  if (!isWorkflowStoreProvider(workflowStore)) {
+    console.error("--workflow-store must be markdown or sqlite.");
+    return 1;
+  }
+
+  if (args.includes("--yes")) {
+    scaffold(cwd, {
+      agents: patternAgents.solo,
+      addProjectGitignore: true,
+      projectIdentifier: projectIdentifier ?? projectIdentifierFromDirectory(cwd),
+      workflowStore
+    });
+    console.log("Scaffolded .agent-rig/ with 1 agent.");
+    return 0;
+  }
+
+  return runInteractiveInit(cwd, projectIdentifier, workflowStore);
+}
+
+async function runInteractiveInit(cwd: string, projectIdentifier?: string, workflowStore: "markdown" | "sqlite" = "markdown") {
+  const prompt = makePrompt();
+  const project = detectProject(cwd);
+
+  console.log(`Detected: ${project.type}`);
+  console.log(`Project name: ${project.name}`);
+  await prompt.ask(`Seed context.md with a README reference? ${project.hasReadme ? "(Y/n)" : "(y/N)"}`, project.hasReadme ? "y" : "n");
+
+  const pattern = parsePattern(await prompt.ask("Setup pattern [solo/coder-reviewer/trinity/supervisor-worker/swarm/testing-reviewer/custom] (solo)", "solo"));
+  const agents: Agent[] = [];
+
+  for (const defaults of patternAgents[pattern]) {
+    console.log(`\nAgent ${agents.length + 1}`);
+    const name = await prompt.ask(`Name (${defaults.name})`, defaults.name);
+    const role = await prompt.ask(`Role template (${defaults.role})`, defaults.role);
+    const tool = await prompt.ask(`Subscription tool (${defaults.tool})`, defaults.tool);
+    agents.push({ name, role, tool });
+  }
+
+  console.log("\nReady to scaffold:");
+  for (const agent of agents) {
+    console.log(`  .agent-rig/${agent.name}/  role: ${agent.role}  tool: ${agent.tool}`);
+  }
+
+  const addProjectGitignore = yes(await prompt.ask("Add .agent-rig/ to .gitignore? (Y/n)", "y"));
+  const shouldScaffold = yes(await prompt.ask("Scaffold? (Y/n)", "y"));
+  prompt.close();
+
+  if (!shouldScaffold) {
+    console.log("Cancelled.");
+    return 0;
+  }
+
+  scaffold(cwd, { agents, addProjectGitignore, projectIdentifier: projectIdentifier ?? projectIdentifierFromDirectory(cwd), workflowStore });
+  console.log(`Scaffolded .agent-rig/ with ${agents.length} ${agents.length === 1 ? "agent" : "agents"}.`);
+  return 0;
+}
+
+function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: boolean; projectIdentifier: string; workflowStore: "markdown" | "sqlite" }) {
+  const root = workspaceRoot(cwd);
+  mkdirSync(join(root, "_shared"), { recursive: true });
+  mkdirSync(join(root, "_shared", "tools"), { recursive: true });
+  mkdirSync(join(root, "_shared", "handoff_logs"), { recursive: true });
+  mkdirSync(join(root, "_shared", "notes"), { recursive: true });
+  mkdirSync(join(root, "_shared", "tasks"), { recursive: true });
+  mkdirSync(join(root, "human"), { recursive: true });
+  writeFileSync(join(root, "_shared", "notes", ".gitkeep"), "", "utf8");
+  writeFileSync(join(root, "_shared", "tools", ".gitkeep"), "", "utf8");
+  writeFileSync(join(root, "_shared", "tasks", ".gitkeep"), "", "utf8");
+  seedProfiles(root);
+
+  repairCredsGitignore(root);
+  writeJson(join(root, "_shared", "agent-rig.json"), {
+    workspace_version: 1,
+    scaffold_version: SCAFFOLD_VERSION,
+    created_by: { name: "agent-rig", version: SCAFFOLD_VERSION },
+    workflow_store: { provider: options.workflowStore },
+    project_identifier: options.projectIdentifier
+  });
+  if (options.workflowStore === "sqlite") {
+    const { store } = createWorkflowStore(cwd);
+    if ("close" in store && typeof store.close === "function") store.close();
+  }
+  writeJson(join(root, "_shared", "session.json"), {
+    version: 1,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    agents: Object.fromEntries(options.agents.map((agent) => [agent.name, { role: agent.role, tool: agent.tool, status: "idle", last_seen_at: null }])),
+    current_task_id: null,
+    blockers: []
+  });
+  writeFileSync(join(root, "_shared", "context.md"), contextMarkdown(cwd), "utf8");
+  writeFileSync(join(root, "_shared", "workflow.md"), readFileSync(join(templateRoot, "workflow.md"), "utf8"), "utf8");
+  writeFileSync(join(root, "human", "README.md"), "# Human\n\nUse this folder for approval, unblock, and override notes.\n", "utf8");
+
+  const profileByAgent = options.agents.map((agent) => ({ agent, profile: loadWorkspaceProfile(root, roleProfile(agent.role)) }));
+
+  for (const item of profileByAgent) {
+    addAgent(root, item.agent, item.profile.name);
+  }
+  installSkills("shared", join(root, "_shared", "skills"), dedupeSkills(profileByAgent.flatMap((item) => skillSpecs(item.profile, "shared_skills"))));
+  for (const item of profileByAgent) installSkills(`${item.agent.name}`, join(root, item.agent.name, "skills"), skillSpecs(item.profile, "agent_skills"));
+
+  if (options.addProjectGitignore) {
+    addGitignoreEntry(cwd, ".agent-rig/");
+  }
+}
+
+function initOption(args: string[], name: string) {
+  const prefix = `${name}=`;
+  const inline = args.find((arg) => arg.startsWith(prefix));
+  if (inline) return inline.slice(prefix.length);
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+function contextMarkdown(cwd: string) {
+  const project = detectProject(cwd);
+  const readme = project.hasReadme ? "\nREADME: ./README.md\n" : "";
+  return `# Project Context\n\nProject: ${project.name}\nType: ${project.type}\n${readme}`;
+}
+
+function addGitignoreEntry(cwd: string, entry: string) {
+  const file = join(cwd, ".gitignore");
+  const current = existsSync(file) ? readFileSync(file, "utf8") : "";
+  if (current.split(/\r?\n/).includes(entry)) return;
+  const prefix = current && !current.endsWith("\n") ? "\n" : "";
+  writeFileSync(file, `${current}${prefix}${entry}\n`, "utf8");
+}
+
+function writeJson(path: string, value: unknown) {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function installSkills(group: string, dir: string, skills: SkillSpec[]) {
+  mkdirSync(dir, { recursive: true });
+  if (skills.length) console.log(`Installing ${group} skills...`);
+  for (const skill of skills) {
+    if (installSkill(dir, skill)) continue;
+    if (process.env.AGENT_RIG_SKIP_SKILLS === "1") {
+      mkdirSync(join(dir, skillFolderName(skill)), { recursive: true });
+      continue;
+    }
+    const result = spawnSync("npx", ["skills", "add", skill.source, ...(skill.args ?? []), "--yes"], { cwd: dir, stdio: "inherit" });
+    if (result.status) throw new Error(`Failed to install ${group} skill: ${skill.name}`);
+    normalizeInstalledSkill(dir, skill);
+  }
+}
+
+function detectProject(cwd: string) {
+  const packageJson = join(cwd, "package.json");
+  const hasReadme = existsSync(join(cwd, "README.md"));
+  if (existsSync(packageJson)) {
+    try {
+      const data = JSON.parse(readFileSync(packageJson, "utf8"));
+      return { name: data.name ?? "unknown", type: "Node.js project", hasReadme };
+    } catch {
+      return { name: "unknown", type: "Node.js project", hasReadme };
+    }
+  }
+  return { name: cwd.split(/[\\/]/).pop() ?? "unknown", type: "unknown project", hasReadme };
+}
+
+function parsePattern(value: string): Pattern {
+  const byNumber: Record<string, Pattern> = {
+    "1": "solo",
+    "2": "coder-reviewer",
+    "3": "trinity",
+    "4": "supervisor-worker",
+    "5": "swarm",
+    "6": "testing-reviewer",
+    "7": "custom"
+  };
+  const pattern = byNumber[value] ?? value;
+  if (pattern in patternAgents) return pattern as Pattern;
+  return "solo";
+}
+
+function makePrompt() {
+  if (!input.isTTY) {
+    const answers = readFileSync(0, "utf8").split(/\r?\n/);
+    let index = 0;
+    return {
+      async ask(question: string, defaultValue: string) {
+        console.log(`${question}\n> `);
+        const answer = (answers[index++] ?? "").trim();
+        return answer || defaultValue;
+      },
+      close() {}
+    };
+  }
+
+  const rl = createInterface({ input, output });
+  return {
+    async ask(question: string, defaultValue: string) {
+      const answer = (await rl.question(`${question}\n> `)).trim();
+      return answer || defaultValue;
+    },
+    close() {
+      rl.close();
+    }
+  };
+}
+
+function yes(value: string) {
+  return !/^n(o)?$/i.test(value.trim());
+}

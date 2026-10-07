@@ -49,3 +49,16 @@ The task flow graph is a read-only native SVG view of task dependencies. Its
 layout is deterministic and separate from the UI component layer; graph
 libraries are deferred until the current layout cannot represent real project
 workflows.
+
+## UI Page
+
+A UI page is a coherent navigable read-only application surface. The current
+task-board page includes its task-flow canvas, task detail drawer, previews, and
+handoff timeline; future pages are sibling surfaces rather than separate
+modules for every visual element.
+
+## UI DTO
+
+A UI DTO is the read-only data shape crossing the UI API seam into browser
+code. It is adapted from workflow records and is not the workflow domain
+model.

@@ -1,0 +1,258 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  isProjectIdentifier,
+  MarkdownWorkflowStore,
+  SQLiteWorkflowStore,
+  projectIdentifierFromDirectory,
+  readWorkspaceWorkflowConfig,
+  resolveWorkspaceWorkflowConfig,
+  resolveTaskPhase
+} from "../../dist/workflow/index.js";
+
+test("workflow configuration defaults legacy workspaces to Markdown", () => {
+  const cwd = "/tmp/example-project";
+  assert.deepEqual(resolveWorkspaceWorkflowConfig(cwd, {}), {
+    workflow_store: { provider: "markdown" },
+    project_identifier: "example-project"
+  });
+});
+
+test("workflow configuration rejects unknown providers and invalid identifiers", () => {
+  assert.throws(() => resolveWorkspaceWorkflowConfig("/tmp/project", { workflow_store: { provider: "postgres" } }), /Unknown workflow store provider/);
+  assert.throws(() => resolveWorkspaceWorkflowConfig("/tmp/project", { project_identifier: "Bad_Name" }), /Invalid project_identifier/);
+});
+
+test("workflow configuration can be read from the workspace file", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "agent-rig-config-"));
+  mkdirSync(join(cwd, ".agent-rig", "_shared"), { recursive: true });
+  writeFileSync(join(cwd, ".agent-rig", "_shared", "agent-rig.json"), JSON.stringify({ workspace_version: 1 }), "utf8");
+  assert.equal(readWorkspaceWorkflowConfig(cwd).workflow_store.provider, "markdown");
+});
+
+test("project identifier defaults to a stable slug", () => {
+  assert.equal(projectIdentifierFromDirectory("/tmp/My Project"), "my-project");
+  assert.equal(isProjectIdentifier("project-123"), true);
+  assert.equal(isProjectIdentifier("123-project"), false);
+});
+
+function storeFixture() {
+  const cwd = mkdtempSync(join(tmpdir(), "agent-rig-store-"));
+  const root = join(cwd, ".agent-rig");
+  mkdirSync(join(root, "_shared", "tasks"), { recursive: true });
+  return { cwd, root, store: new MarkdownWorkflowStore(root, "fixture") };
+}
+
+test("Markdown tasks preserve unknown frontmatter and opaque bodies", () => {
+  const { root, store } = storeFixture();
+  const body = "# Task\n\nA body with **rich Markdown**.\n\n  preserved spacing\n";
+  writeFileSync(join(root, "_shared", "tasks", "task-0001_rich.md"), `---\nid: task-0001\ntitle: Rich\ntype: task\nstatus: ready\nassigned_to: worker\ncreated_by: human\ncreated_on: 2026-10-04\nupdated_on: 2026-10-04\npriority: normal\nparent: \"\"\ndepends_on: []\ncustom_field: retained\n---\n${body}`, "utf8");
+
+  const task = store.getTask("fixture", "task-0001");
+  assert.equal(task.body, body);
+  assert.equal(task.metadata.custom_field, "retained");
+  store.updateTask("fixture", "task-0001", { status: "in_progress" });
+  const updated = store.getTask("fixture", "task-0001");
+  assert.equal(updated.status, "in_progress");
+  assert.equal(updated.body, body);
+  assert.equal(updated.metadata.custom_field, "retained");
+});
+
+test("Task phases round-trip explicitly and legacy phase inference stays display-only", () => {
+  const { root, store } = storeFixture();
+  writeFileSync(join(root, "_shared", "tasks", "task-0001_phase-17.md"), "---\nid: task-0001\ntitle: Legacy task\ntype: task\nstatus: ready\nassigned_to: worker\ncreated_by: human\ncreated_on: 2026-10-04\nupdated_on: 2026-10-04\npriority: normal\nparent: \"\"\ndepends_on: []\n---\n# Task\n", "utf8");
+  const legacy = store.getTask("fixture", "task-0001");
+  assert.equal(legacy.phase, undefined);
+  assert.equal(resolveTaskPhase(legacy, "task-0001_phase-17.md"), "phase-17");
+  store.createTask({ projectIdentifier: "fixture", id: "task-0002", title: "Explicit", type: "task", status: "ready", assignedTo: "worker", priority: "normal", parent: "", phase: "phase-99", dependsOn: [], dependencyReady: true, blockedBy: [], createdBy: "human", createdOn: "2026-10-04", updatedOn: "2026-10-04", body: "# Task\n", metadata: {} });
+  assert.equal(store.getTask("fixture", "task-0002").phase, "phase-99");
+  assert.equal(resolveTaskPhase(store.getTask("fixture", "task-0002"), "task-0002_explicit.md"), "phase-99");
+});
+
+test("Markdown dependencies are ready only when every dependency is done", () => {
+  const { root, store } = storeFixture();
+  const task = (id, status, depends = []) => `---\nid: ${id}\ntitle: ${id}\ntype: task\nstatus: ${status}\nassigned_to: worker\ncreated_by: human\ncreated_on: 2026-10-04\nupdated_on: 2026-10-04\npriority: normal\nparent: \"\"\ndepends_on: [${depends.join(", ")}]\n---\n# Task\n`;
+  writeFileSync(join(root, "_shared", "tasks", "task-0001_done.md"), task("task-0001", "done"), "utf8");
+  writeFileSync(join(root, "_shared", "tasks", "task-0002_blocked.md"), task("task-0002", "ready", ["task-0001", "task-9999"]), "utf8");
+  assert.deepEqual(store.listDependencies("fixture", "task-0002"), ["task-0001", "task-9999"]);
+  const blockedTask = store.getTask("fixture", "task-0002");
+  assert.equal(blockedTask.dependsOn.length, 2);
+  assert.equal(blockedTask.dependencyReady, false);
+  assert.deepEqual(blockedTask.blockedBy, ["task-9999"]);
+  assert.equal(store.listTasks("fixture", { status: "ready" }).length, 1);
+});
+
+test("Markdown dependencies expose incomplete dependencies as blockers", () => {
+  const { root, store } = storeFixture();
+  const task = (id, status, depends = []) => `---\nid: ${id}\ntitle: ${id}\ntype: task\nstatus: ${status}\nassigned_to: worker\ncreated_by: human\ncreated_on: 2026-10-04\nupdated_on: 2026-10-04\npriority: normal\nparent: \"\"\ndepends_on: [${depends.join(", ")}]\n---\n# Task\n`;
+  writeFileSync(join(root, "_shared", "tasks", "task-0001_ready.md"), task("task-0001", "ready"), "utf8");
+  writeFileSync(join(root, "_shared", "tasks", "task-0002_ready.md"), task("task-0002", "ready", ["task-0001"]), "utf8");
+
+  const dependent = store.getTask("fixture", "task-0002");
+  assert.equal(dependent.dependencyReady, false);
+  assert.deepEqual(dependent.blockedBy, ["task-0001"]);
+});
+
+test("Markdown task completion requires a worker and reviewer trail unless overridden", () => {
+  const { root, store } = storeFixture();
+  const file = join(root, "_shared", "tasks", "task-0001_completion.md");
+  writeFileSync(file, "---\nid: task-0001\ntitle: Completion\ntype: task\nstatus: ready\nassigned_to: worker\ncreated_by: human\ncreated_on: 2026-10-04\nupdated_on: 2026-10-04\npriority: normal\nparent: \"\"\ndepends_on: []\n---\n# Task\n", "utf8");
+  assert.throws(() => store.completeTask("fixture", "task-0001"), /requires worker and reviewer/);
+  assert.equal(store.getTask("fixture", "task-0001").status, "ready");
+  store.completeTask("fixture", "task-0001", true);
+  assert.equal(store.getTask("fixture", "task-0001").status, "done");
+});
+
+test("Malformed Markdown records fail with a useful error", () => {
+  const { root, store } = storeFixture();
+  writeFileSync(join(root, "_shared", "tasks", "broken.md"), "# no frontmatter\n", "utf8");
+  assert.throws(() => store.listTasks("fixture"), /missing frontmatter/);
+});
+
+test("Handoffs retain message bodies and historical filename chronology", () => {
+  const { root, store } = storeFixture();
+  const dir = join(root, "_shared", "handoff_logs");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "2026-10-04-1001_run-a_codex_worker.md"), "---\ntask: task-0001\nagent: worker\nstatus: review\n---\n\nfirst message\n", "utf8");
+  writeFileSync(join(dir, "2026-10-04-1002_run-b_codex_reviewer.md"), "---\ntask: task-0001\nagent: reviewer\nstatus: done\n---\n\nsecond message\n", "utf8");
+  const handoffs = store.listHandoffs("fixture", "task-0001");
+  assert.deepEqual(handoffs.map((handoff) => handoff.sequence), [1, 2]);
+  assert.equal(handoffs[0].message, "\nfirst message\n");
+  assert.equal(handoffs[1].metadata.filename, "2026-10-04-1002_run-b_codex_reviewer.md");
+});
+
+test("Historical handoff filenames remain chronological when run IDs contain numbers", () => {
+  const { root, store } = storeFixture();
+  const dir = join(root, "_shared", "handoff_logs");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "2026-10-04-1001_run-7_codex_worker.md"), "---\ntask: task-0001\nagent: worker\nstatus: review\ncustom_field: first\n---\nfirst\n", "utf8");
+  writeFileSync(join(dir, "2026-10-04-1002_run-8_codex_reviewer.md"), "---\ntask: task-0001\nagent: reviewer\nstatus: done\ncustom_field: second\n---\nsecond\n", "utf8");
+
+  const handoffs = store.listHandoffs("fixture", "task-0001");
+  assert.deepEqual(handoffs.map((handoff) => handoff.sequence), [1, 2]);
+  assert.deepEqual(handoffs.map((handoff) => handoff.metadata.custom_field), ["first", "second"]);
+  assert.equal(handoffs[0].metadata.agent, undefined);
+});
+
+test("Markdown handoffs round-trip opaque messages and custom metadata", () => {
+  const { store } = storeFixture();
+  const message = "\n# Review\n\nKeep **this** formatting.\n";
+  store.addHandoff({
+    projectIdentifier: "fixture",
+    taskId: "task-0001",
+    sequence: 1,
+    sender: "worker",
+    recipient: "reviewer",
+    status: "review",
+    message,
+    createdAt: "2026-10-04T10:03:00.000Z",
+    metadata: { custom_field: { retained: true } }
+  });
+
+  const [handoff] = store.listHandoffs("fixture", "task-0001");
+  assert.equal(handoff.message, message);
+  assert.deepEqual(handoff.metadata.custom_field, { retained: true });
+  assert.match(handoff.metadata.filename, /^2026-10-04-\d{4}_task-0001-1_markdown_worker\.md$/);
+});
+
+function sqliteFixture() {
+  const cwd = mkdtempSync(join(tmpdir(), "agent-rig-sqlite-"));
+  const store = new SQLiteWorkflowStore(join(cwd, "workflow.sqlite"), "fixture");
+  return { cwd, store };
+}
+
+function sqliteTask(id = "", status = "ready") {
+  return {
+    projectIdentifier: "fixture", id, title: "SQLite task", type: "task", status,
+    assignedTo: "worker", priority: "normal", parent: "", phase: "phase-16", dependsOn: [],
+    dependencyReady: true, blockedBy: [], createdBy: "human", createdOn: "2026-10-04",
+    updatedOn: "2026-10-04", body: "# Rich **body**\n", metadata: { source_filename: "legacy.md" }
+  };
+}
+
+function handoff(sender, taskId = "task-0001", sequence) {
+  return { projectIdentifier: "fixture", taskId, ...(typeof sequence === "undefined" ? {} : { sequence }),
+    sender, recipient: sender === "worker" ? "reviewer" : "worker", status: "done",
+    message: `${sender} message`, createdAt: "2026-10-04T00:00:00Z", metadata: { run_id: `${sender}-run` } };
+}
+
+test("SQLite bootstraps schema, allocates task IDs, and preserves records", () => {
+  const { store } = sqliteFixture();
+  try {
+    store.createTask(sqliteTask());
+    store.createTask(sqliteTask());
+    const task = store.getTask("fixture", "task-0001");
+    assert.equal(task.body, "# Rich **body**\n");
+    assert.equal(task.phase, "phase-16");
+    store.updateTask("fixture", "task-0001", { phase: "phase-17" });
+    assert.equal(store.getTask("fixture", "task-0001").phase, "phase-17");
+    assert.equal(task.metadata.source_filename, "legacy.md");
+    assert.deepEqual(store.listDependencies("fixture", "task-0001"), []);
+    assert.deepEqual(store.allocateTaskId("fixture"), "task-0003");
+  } finally { store.close(); }
+});
+
+test("SQLite allocation and handoff sequencing are shared across store instances", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "agent-rig-sqlite-shared-"));
+  const databasePath = join(cwd, "nested", "workflow.sqlite");
+  const first = new SQLiteWorkflowStore(databasePath, "fixture");
+  const second = new SQLiteWorkflowStore(databasePath, "fixture");
+  try {
+    first.createTask(sqliteTask());
+    second.createTask(sqliteTask());
+    first.addHandoff(handoff("worker", "task-0001"));
+    second.addHandoff(handoff("reviewer", "task-0001"));
+    assert.equal(first.getTask("fixture", "task-0002").id, "task-0002");
+    assert.deepEqual(second.listHandoffs("fixture", "task-0001").map((item) => item.sequence), [1, 2]);
+  } finally {
+    second.close();
+    first.close();
+  }
+});
+
+test("SQLite handoffs are append-only with monotonic per-task sequences", () => {
+  const { store } = sqliteFixture();
+  try {
+    store.createTask(sqliteTask("task-0001"));
+    store.addHandoff(handoff("worker"));
+    store.addHandoff(handoff("reviewer"));
+    assert.deepEqual(store.listHandoffs("fixture", "task-0001").map((item) => item.sequence), [1, 2]);
+  } finally { store.close(); }
+});
+
+test("SQLite task completion and handoff insertion roll back together", () => {
+  const { store } = sqliteFixture();
+  try {
+    store.createTask(sqliteTask("task-0001"));
+    assert.throws(() => store.updateTaskWithHandoff("fixture", "task-0001", { status: "done" }, handoff("worker")), /requires worker and reviewer/);
+    assert.equal(store.getTask("fixture", "task-0001").status, "ready");
+    assert.deepEqual(store.listHandoffs("fixture", "task-0001"), []);
+    store.updateTaskWithHandoff("fixture", "task-0001", { status: "in_progress" }, handoff("worker"));
+    store.updateTaskWithHandoff("fixture", "task-0001", { status: "done" }, handoff("reviewer"));
+    assert.equal(store.getTask("fixture", "task-0001").status, "done");
+  } finally { store.close(); }
+});
+
+test("SQLite imports legacy incomplete trails and supports explicit override", () => {
+  const { store } = sqliteFixture();
+  try {
+    store.importTask(sqliteTask("task-0001", "done"), [handoff("worker")]);
+    const task = store.getTask("fixture", "task-0001");
+    assert.equal(task.status, "done");
+    assert.equal(task.metadata.imported_handoff_count, 1);
+    assert.equal(task.metadata.incomplete_handoff_trail, true);
+    assert.throws(() => store.completeTask("fixture", "task-0001"), /requires worker and reviewer/);
+    store.completeTask("fixture", "task-0001", true);
+  } finally { store.close(); }
+});
+
+test("Markdown task lookup accepts YAML scalar identifiers", () => {
+  const { root, store } = storeFixture();
+  writeFileSync(join(root, "_shared", "tasks", "task-0001_scalar.md"), "---\nid: 1\ntitle: Scalar\ntype: task\nstatus: ready\nassigned_to: worker\ncreated_by: human\ncreated_on: 2026-10-04\nupdated_on: 2026-10-04\npriority: normal\nparent: \"\"\ndepends_on: []\n---\n# Task\n", "utf8");
+  assert.equal(store.getTask("fixture", "1").title, "Scalar");
+  store.updateTask("fixture", "1", { status: "done" });
+  assert.equal(store.getTask("fixture", "1").status, "done");
+});
