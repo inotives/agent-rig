@@ -23,6 +23,8 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 17. [Phase 17: Task Board UI](phase-17-task-board-ui.md) — draft
 18. [Phase 18: SPA Task Board UI](phase-18-spa-task-board-ui.md) — completed
 19. Phase 19: DaisyUI Task Board Refresh — active
+20. [Phase 20: Capability-Based Structure](phase-20-capability-based-structure.md) — active
+21. [Phase 21: GitHub Issue Planning Workflow](phase-21-github-issue-planning-workflow.md) — active
 
 ## Workflow
 
@@ -36,6 +38,8 @@ For each phase:
 4. Add ADRs only for hard-to-reverse tradeoffs.
 5. After the human-approved plan is final, split it into dependency-gated
    AgentRig tasks and one final integrated-review task.
+   Planning documents under `docs/` are not workflow tasks. For GitHub issue
+   planning, use `agent-rig plan tasks <number>` only after approval.
 6. Set only dependency-free foundation tasks to `ready`; keep downstream
    tasks `blocked`.
 7. Drive each selected task through a worker sub-agent, an independent
@@ -47,3 +51,4 @@ For each phase:
    docs, and revise or create tasks only after acceptance.
 10. Commit, push, or open a pull request only when explicitly requested.
 11. After merge, archive the completed phase document under `docs/_archived/`.
+12. Complete the final human end-to-end check for the complete workflow.

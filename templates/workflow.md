@@ -26,6 +26,21 @@ Use this workflow for phase and feature work.
 - Do not migrate planning documents into the workflow store; SQLite is for live
   operational tasks and handoff conversations only.
 
+For GitHub Issue planning, use this sequence:
+
+1. `agent-rig plan github-issue` lists open issues. Discovery does not create
+   workflow tasks.
+2. `agent-rig plan github-issue <number>` selects one issue.
+3. `agent-rig plan branch <number>` creates the issue branch and plan.
+4. Review the plan with the human. AgentRig prints a GitHub compare link and
+   does not create a pull request automatically.
+5. `agent-rig plan approve <number>` records human approval.
+6. `agent-rig plan tasks <number>` creates workflow tasks only after approval.
+
+GitHub planning requires the GitHub CLI (`gh`) and authentication. Normal
+local workflows do not require GitHub CLI access. Use
+`agent-rig plan resume <number>` for an existing unapproved plan.
+
 ## 2. Create Dependency-Gated Tasks
 
 - Break the approved plan into small, independently verifiable tasks.
@@ -72,3 +87,6 @@ For each selected task:
   checks.
 - Write a planner handoff with verification evidence and resolved findings.
 - Commit, push, or open a pull request only when the human explicitly asks.
+- Complete the final human end-to-end check for discovery, plan review,
+  approval, task generation, and the worker-reviewer flow before marking the
+  phase complete.

@@ -138,6 +138,19 @@ For each new phase:
    - Do not create implementation tasks until the human-approved plan is
      clear.
 
+   For a GitHub Issue planning run, use the project-local planning commands:
+
+   - `agent-rig plan github-issue` lists open issues. It does not create tasks.
+   - `agent-rig plan github-issue <number>` selects one issue.
+   - `agent-rig plan branch <number>` creates the issue branch and plan.
+   - `agent-rig plan resume <number>` resumes an unapproved plan.
+   - `agent-rig plan approve <number>` records explicit human approval.
+   - `agent-rig plan tasks <number>` creates workflow tasks only after approval.
+
+   GitHub planning requires `gh` and authentication. Normal local workflows do
+   not require GitHub CLI access. AgentRig prints a compare link after it pushes
+   the issue branch. It does not create a pull request automatically.
+
 3. Break the approved plan into tasks.
    - The planner and human turn the finalized phase into small, independently
      verifiable AgentRig task files.
@@ -183,6 +196,8 @@ For each new phase:
    - Commit, push, or open a pull request only when the human explicitly asks.
    - After merge, archive the completed phase document under `docs/_archived/`
      before beginning the next phase.
+   - Complete the final human end-to-end check for the full workflow before
+     marking the phase complete.
 
 ## Coding Guidelines
 
