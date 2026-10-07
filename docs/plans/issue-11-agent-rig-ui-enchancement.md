@@ -2,7 +2,7 @@
 issue: 11
 source_url: https://github.com/inotives/agent-rig/issues/11
 branch: issue/11-agent-rig-ui-enchancement
-status: draft
+status: pushed
 created_at: 2026-10-07T23:43:23.072Z
 ---
 # Issue #11: Agent-rig UI enchancement
