@@ -29,6 +29,16 @@ test("top-level help lists the reviewed issue planning commands", () => {
   }
 });
 
+test("README documents the issue planning approval boundary", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  assert.match(readme, /plan github-issue.*does not create tasks/i);
+  assert.match(readme, /docs\/plans/);
+  assert.match(readme, /human approves the plan/i);
+  assert.match(readme, /prints a GitHub compare link/i);
+  assert.match(readme, /does not create a pull request automatically/i);
+  assert.match(readme, /final human end-to-end check/i);
+});
+
 function fakeGh(cwd, issues, { authenticated = true } = {}) {
   const bin = join(cwd, "fake-bin");
   mkdirSync(bin, { recursive: true });

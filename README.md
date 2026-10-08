@@ -341,6 +341,11 @@ already-built assets and do not build frontend dependencies at runtime.
 | `agent-rig tasks block <task-id> --reason <reason>` | Mark a task blocked and record the blocker. |
 | `agent-rig tasks done <task-id>` | Mark a task done. |
 | `agent-rig tasks handoff <task-id> ...` | Record a manual handoff in the active store. |
+| `agent-rig plan github-issue [<number>]` | Discover open GitHub Issues or select one for planning. Discovery does not create tasks. |
+| `agent-rig plan branch <number>` | Create and publish the issue planning branch and print its compare link. |
+| `agent-rig plan resume <number>` | Resume an existing unapproved issue plan. |
+| `agent-rig plan approve <number>` | Record explicit human approval for an issue plan. |
+| `agent-rig plan tasks <number>` | Create dependency-gated workflow tasks after plan approval. |
 | `agent-rig workflow migrate --to sqlite` | Validate and migrate the Markdown workflow store to SQLite. |
 | `agent-rig workflow import --from markdown` | Import new unmarked Markdown records without overwriting SQLite. |
 | `agent-rig workflow backup [--output <path>]` | Create and validate a consistent read-only SQLite snapshot. |
