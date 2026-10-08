@@ -189,6 +189,33 @@ agent-rig tasks next --json
 
 `tasks next --claim` sets the selected task to `in_progress`. It does not add separate claim metadata; `assigned_to` remains the ownership field.
 
+## GitHub Issue Planning
+
+Issue planning and GitHub issue import are different workflows.
+
+Use issue planning when one GitHub Issue needs a reviewed implementation plan:
+
+```bash
+agent-rig plan github-issue
+agent-rig plan github-issue 123
+agent-rig plan branch 123
+agent-rig plan resume 123
+agent-rig plan approve 123
+agent-rig plan tasks 123
+```
+
+Issue discovery only lists eligible open issues. It does not create workflow
+tasks. The planner and human keep the reviewed plan under `docs/plans/`.
+AgentRig creates workflow tasks only after the human runs `plan approve`.
+The planning commands that read GitHub require the GitHub CLI (`gh`) and an
+authenticated session. Normal local task workflows do not require GitHub CLI
+access. After the issue branch is pushed, AgentRig prints a GitHub compare
+link and stops for human review. It does not create a pull request
+automatically.
+
+The final human end-to-end check must cover issue discovery, plan review,
+approval, task generation, and the worker-reviewer flow.
+
 ## GitHub Issue Import
 
 GitHub issue import is optional. It requires the GitHub CLI only when sync is invoked:

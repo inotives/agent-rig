@@ -233,3 +233,34 @@ test("mountBoard preserves a task route from the current location", async () => 
     Object.assign(globalThis, previous);
   }
 });
+
+test("mountBoard renders and refreshes the project heading", async () => {
+  class Element {
+    constructor(tag) { this.tagName = tag; this.children = []; this.dataset = {}; this.classList = { toggle() {} }; }
+    append(...children) { this.children.push(...children); }
+    replaceChildren(...children) { this.children = children; }
+    setAttribute() {}
+    addEventListener() {}
+    querySelector() { return null; }
+  }
+  const previous = { document: globalThis.document, fetch: globalThis.fetch, location: globalThis.location, Option: globalThis.Option, window: globalThis.window };
+  const summaries = ["first-project", "updated-project"];
+  globalThis.document = { createElement: (tag) => new Element(tag), documentElement: new Element("html") };
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ project_identifier: summaries.shift(), phases: [], tasks: [] }) });
+  globalThis.location = { hash: "#/" };
+  globalThis.Option = class extends Element { constructor(text, value) { super("option"); this.textContent = text; this.value = value; } };
+  globalThis.window = { matchMedia: () => ({ matches: false }), scrollY: 0, addEventListener() {}, scrollTo() {} };
+  try {
+    const root = new Element("div");
+    const board = mountBoard(root);
+    await new Promise((resolve) => setImmediate(resolve));
+    const brand = root.children[0].children[0].children[0].children[0];
+    assert.equal(brand.children[0].textContent, "AgentRig: first-project");
+    assert.equal(brand.children[1].textContent, "Read-only workflow visibility");
+    await board.refresh();
+    assert.equal(brand.children[0].textContent, "AgentRig: updated-project");
+    assert.equal(brand.children.length, 2);
+  } finally {
+    Object.assign(globalThis, previous);
+  }
+});
