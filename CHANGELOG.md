@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.8 - 2026-10-10
 
 - Upgraded `better-sqlite3` to `^13.0.3` to fix a native crash on Node.js 24 (see ADR 0008).
 - Raised the minimum Node.js version from 20 to 22.
