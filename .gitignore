@@ -32,3 +32,6 @@ temp/
 .agent-rig/.creds/
 .agent-rig/*/logs/
 .agent-rig/*/runs/
+
+# workflow store runtime files (SQLite WAL mode)
+.agent-rig/_shared/workflow.sqlite-*
