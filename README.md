@@ -48,6 +48,9 @@ Handoff logs are intended for cross-session resume notes when work stops midstre
 
 The current MVP can scaffold a workspace, manage agents and credentials, install profile-declared skills, create fully briefed Markdown- or SQLite-backed tasks, run a Codex/OpenCode worker-reviewer loop, report live status, and serve a read-only task board.
 
+Detailed maintainer and agent workflow instructions are in
+[INSTRUCTIONS.md](INSTRUCTIONS.md).
+
 ## Core Model
 
 AgentRig workspaces are ordinary project files:
@@ -76,10 +79,6 @@ npm run profile:create -- api-specialist
 The generator creates the required metadata, standard instruction headings,
 and the default shared skills. Complete the profile before building or
 publishing AgentRig.
-
-In practice, use `_shared/handoff_logs/` for session-end operational context such as current branch, active task or phase, unresolved blockers, and the exact next step. Do not add a handoff after every worker or reviewer task unless the task flow itself failed to capture something important.
-
-Use `_shared/notes/` for short worker or reviewer findings that are worth carrying forward across sessions: reusable implementation patterns, repo quirks, recurring review findings, or out-of-norm events. Do not use it for routine progress logs.
 
 ## Dependencies
 
@@ -156,128 +155,8 @@ AgentRig installs default shared skills during setup. To skip network skill inst
 AGENT_RIG_SKIP_SKILLS=1 agent-rig init --yes
 ```
 
-Basic task flow:
-
-```bash
-agent-rig tasks create "Implement X" --body-file docs/tasks/implement-x.md --assigned-to worker --status ready --type task
-agent-rig tasks
-agent-rig tasks next --agent worker
-agent-rig tasks next --agent worker --claim
-agent-rig tasks show task-0001
-agent-rig status
-```
-
-`--body-file` is required for new tasks. The brief must contain non-empty
-`Context`, `Goal`, `Scope`, `Planner Notes`, and `Implementation Plan`
-sections, plus at least one checklist item under `Acceptance Criteria`.
-`Notes` is optional and is used for later worker and reviewer findings. Use
-`agent-rig tasks update-body` to replace a task brief.
-
-Workflow storage defaults to Markdown task and handoff records. The active
-provider is configured in `.agent-rig/_shared/agent-rig.json`; agents mutate
-workflow state through `agent-rig tasks ...` and never edit SQLite directly.
-To make SQLite canonical, finish Markdown-backed implementation work and run:
-
-```bash
-agent-rig workflow migrate --to sqlite
-```
-
-Migration validates and verifies a new database before switching the provider,
-refuses unsafe reruns, leaves `docs/` and run artifacts outside the store, and
-marks the original Markdown records as historical. After migration, `tasks`,
-`tasks show`, `tasks next`, `status`, and the worker-reviewer loop use SQLite;
-the Markdown files remain reference material rather than dual-written live
-records.
-
-For recovery and incremental synchronization, use `workflow import --from
-markdown` (locked, non-destructive, and JSON-capable), `workflow backup
-[--output <path>]`, or `workflow rebuild --replace --confirm "REPLACE SQLITE"`.
-Rebuild is a dry run unless explicitly confirmed; it creates a timestamped
-backup and keeps SQLite records on same-ID conflicts.
-
-In SQLite mode, `tasks done` and `tasks set-status <id> done` require a worker
-handoff followed by a reviewer handoff. Manual runs can record these with
-`tasks handoff`; a human can explicitly use `--admin-override` for an
-exceptional completion. `tasks handoff <id> --source-file <path>` reconciles a
-handoff file created just after migration and marks that file historical. A
-late import keeps its original timestamp as audit metadata while its SQLite
-sequence records when it joined the live conversation. `status --json` shows
-`source_order_conflict` when that timestamp predates the preceding handoff;
-normal completion then needs a new worker handoff and independent review.
-
-`agent-rig status` is read-only. In Phase 15 it includes a compact `Loop:` section showing lock state, the next default `worker` or `reviewer` action, and the latest default worker/reviewer run summaries. Use `agent-rig status --json` for a top-level `loop` object with the same derived data. Detailed prompt and message artifacts stay in the local run paths under `.agent-rig/worker/runs/` and `.agent-rig/reviewer/runs/`.
-
-Worker-reviewer flow:
-
-```bash
-# planner and human grill and finalize the phase plan first
-# then split the approved plan into dependency-gated tasks
-git switch -c feat/my-phase-work
-# manager loop: spawn the assigned worker, then an independent reviewer
-agent-rig loop
-```
-
-The planner and human first hammer out the phase and implementation details in canonical repository documents under `docs/`; those documents are not migrated into the workflow store. Only after the plan is approved are tasks created. Dependency-free foundation tasks become `ready`; downstream tasks remain `blocked`. For each selected task, the manager spawns a worker sub-agent using its AgentRig profile, waits for a worker handoff, then spawns an independent reviewer sub-agent. Review findings return the same task to the worker for fixes and re-review; only a clean review unlocks the next selected dependent task. If implementation reveals a limitation that changes the plan, pause the affected graph, return to planner/human discussion, update `docs/`, and revise tasks before continuing. A final integrated reviewer runs after all implementation tasks pass.
-
-`agent-rig loop` is the execution engine for a configured worker/reviewer pair. It supports agents configured with `tool = "codex"` or `tool = "opencode"`, runs continuously by default, keeps branch creation and manager decisions outside the loop, and uses the existing task lifecycle:
-
-```text
-ready -> in_progress -> review -> done
-                        \-> ready
-                        \-> blocked
-```
-
-Use `agent-rig loop --once` for a deterministic single tick in tests or scripts. `agent-rig watch --once` still exists for the older filesystem-only single-task adapter.
-
-OpenCode loop runs use the OpenCode default model configured in the user's environment. AgentRig does not pass OpenCode `--model` or `--auto`. Claude loop execution is still unsupported.
-
-Live OpenCode smoke testing remains a manual verification step and is not part of automated CI.
-
-## GitHub Issue Planning
-
-AgentRig can turn one GitHub Issue into a reviewed implementation plan. This
-workflow is separate from normal local task work. Normal local workflows do
-not require GitHub CLI access.
-
-Use the planning commands in this order:
-
-```bash
-# list open issues; this does not create a task
-agent-rig plan github-issue
-
-# select one issue
-agent-rig plan github-issue 123
-
-# create the issue branch and plan
-agent-rig plan branch 123
-
-# continue an existing unapproved plan
-agent-rig plan resume 123
-
-# approve the reviewed plan
-agent-rig plan approve 123
-
-# create dependency-gated workflow tasks after approval
-agent-rig plan tasks 123
-```
-
-Issue discovery lists open issues in the current repository and excludes pull
-requests. It does not create tasks. The planner and human select one issue and
-refine its plan under `docs/plans/`. Planning documents are canonical project
-documents. Workflow tasks are live records in the configured workflow store.
-Do not create workflow tasks before the human approves the plan.
-
-The planning commands that read GitHub need the GitHub CLI (`gh`) and an
-authenticated session (`gh auth login`). The issue branch command also needs a
-clean worktree and GitHub push access. These requirements apply only to the
-GitHub issue planning workflow.
-
-After it pushes the issue branch, AgentRig prints a GitHub compare link and
-stops for human review. AgentRig does not create a pull request automatically.
-The human reviews the plan, approves it with `agent-rig plan approve <number>`,
-and then runs task generation. The final human end-to-end check must verify the
-complete discovery, plan review, approval, task generation, and worker-reviewer
-flow before the work is marked complete.
+For task lifecycle, workflow storage, worker-reviewer operation, and GitHub
+issue planning, see [INSTRUCTIONS.md](INSTRUCTIONS.md).
 
 ## Local Task Board UI
 
@@ -397,7 +276,8 @@ npm --cache /tmp/agent-rig-npm-cache pack --dry-run
 it runs `tsc` and the Tailwind/DaisyUI static-asset build in
 `scripts/build-ui.mjs`.
 
-For future phases, follow the planning and manager workflow in [AGENTS.md](AGENTS.md): grill with the human, finalize the plan, create dependency-gated tasks, and drive each task through an independent worker/reviewer handoff loop.
+For future phases, follow the planning and manager workflow in
+[INSTRUCTIONS.md](INSTRUCTIONS.md) and [AGENTS.md](AGENTS.md).
 
 ## Repository Layout
 
