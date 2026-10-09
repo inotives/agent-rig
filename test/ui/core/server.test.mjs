@@ -25,6 +25,7 @@ class FakeElement {
   dispatchEvent(event) { for (const listener of this.listeners.get(event.type) ?? []) listener(event); }
   click() { this.focus(); this.dispatchEvent({ type: "click", target: this }); }
   focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+  querySelectorAll(selector) { return this.findAll(selector); }
   querySelector(selector) { if (selector === "main > aside") return this.findAll("main")[0]?.children.find((child) => child.tagName === "ASIDE") ?? null; return this.findAll(selector)[0] ?? null; }
   findAll(selector) {
     const matches = (element) => selector === "[data-workflow-alert]"
@@ -64,8 +65,14 @@ function installBrowserHarness() {
   return { document, scrollCalls, restore: () => Object.assign(globalThis, previous) };
 }
 
-const tick = () => new Promise((resolve) => setImmediate(resolve));
-async function waitFor(predicate) { for (let attempt = 0; attempt < 50; attempt += 1) { if (predicate()) return; await tick(); } }
+// Poll until the condition holds or the time limit passes. The next assertion reports a real failure.
+async function waitFor(predicate, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 test("browser smoke serves board assets and route behavior without write methods", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "agent-rig-ui-browser-"));
@@ -118,8 +125,8 @@ test("browser smoke serves board assets and route behavior without write methods
       assert.equal(scrim.getAttribute("tabindex"), "-1");
       const graph = root.findAll("svg")[0];
       assert.equal(graph.getAttribute("aria-label"), "Task dependency flow");
-      assert.equal(root.findAll("g").length, 2);
-      assert.equal(root.findAll("path").length, 2, "arrow marker and dependency edge are rendered");
+      assert.equal(root.findAll("[data-task-id]").length, 2, "two task node groups are rendered");
+      assert.equal(root.findAll("[data-edge-from]").length, 1, "one dependency edge is rendered");
       const initialViewBox = graph.getAttribute("viewBox");
       root.findAll("button").find((button) => button.getAttribute("aria-label") === "Zoom in task flow").click();
       assert.notEqual(graph.getAttribute("viewBox"), initialViewBox);
@@ -142,7 +149,7 @@ test("browser smoke serves board assets and route behavior without write methods
        closeTask.dispatchEvent({ type: "keydown", key: "Escape", preventDefault: () => {} });
        assert.equal(globalThis.location.hash, "#/?phase=phase-16");
        globalThis.window.dispatchEvent({ type: "hashchange" });
-       await waitFor(() => root.findAll("g").length === 2);
+       await waitFor(() => root.findAll("[data-task-id]").length === 1);
        assert.equal(drawer.getAttribute("inert"), "");
        assert.equal(scrim.getAttribute("inert"), "");
       const timeline = root.findAll("article").find((article) => article.textContent.includes("review"));
@@ -150,7 +157,7 @@ test("browser smoke serves board assets and route behavior without write methods
       assert.match(timeline.textContent, /worker.*reviewer/);
       assert.equal(root.findAll("button").filter((button) => button.getAttribute("aria-label") === "Open handoff 1 details").length, 1);
       globalThis.history.back();
-      await waitFor(() => root.findAll("g").length === 2);
+      await waitFor(() => root.findAll("[data-task-id]").length === 1);
       assert.match(root.textContent, /Phase 17 board/);
       globalThis.history.forward();
       await waitFor(() => root.textContent.includes("Handoff timeline"));
@@ -194,8 +201,8 @@ test("browser smoke serves board assets and route behavior without write methods
 
       globalThis.location.hash = "";
       globalThis.window.dispatchEvent({ type: "hashchange" });
-      await waitFor(() => root.findAll("g").length === 2);
-      root.findAll("g")[0].click();
+      await waitFor(() => root.findAll("[data-task-id]").length === 1);
+      root.findAll("[data-task-id]")[0].click();
        assert.equal(globalThis.location.hash, "#/tasks/task-0002?phase=phase-16");
       globalThis.window.dispatchEvent({ type: "hashchange" });
       await waitFor(() => root.textContent.includes("Handoff timeline"));

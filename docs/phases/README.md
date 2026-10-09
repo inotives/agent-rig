@@ -25,6 +25,10 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 19. Phase 19: DaisyUI Task Board Refresh — active
 20. [Phase 20: Capability-Based Structure](phase-20-capability-based-structure.md) — active
 21. [Phase 21: GitHub Issue Planning Workflow](phase-21-github-issue-planning-workflow.md) — active
+22. [Phase 22: Lineage Graph Redesign](phase-22-lineage-graph-redesign.md) — active
+23. [Phase 23: Graph Polish and Filtering](phase-23-graph-polish-and-filtering.md) — active
+24. [Phase 24: Native Crash and Edge Routing Fixes](phase-24-native-crash-and-edge-routing-fixes.md) — active
+25. [Phase 25: Handoff Timeline Redesign](phase-25-handoff-timeline-redesign.md) — active
 
 ## Workflow
 

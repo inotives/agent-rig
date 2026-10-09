@@ -431,6 +431,8 @@ test("version, help, profiles, and doctor commands work", () => {
   const doctor = run(["doctor", "--json"], cwd);
   assert.equal(doctor.status, 0, doctor.stderr);
   assert.equal(JSON.parse(doctor.stdout).ok, true);
+  const nodeCheck = JSON.parse(doctor.stdout).checks.find((check) => check.name === "node");
+  assert.match(nodeCheck.message, /satisfies >=22\./);
 });
 
 test("add --profile copies custom profile instructions", () => {

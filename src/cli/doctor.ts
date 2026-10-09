@@ -44,9 +44,9 @@ function doctorChecks(cwd: string) {
 
 function nodeCheck(): Check {
   const version = Number(process.versions.node.split(".")[0]);
-  return version >= 20
-    ? { name: "node", status: "pass", message: `Node ${process.versions.node} satisfies >=20.` }
-    : { name: "node", status: "fail", message: `Node ${process.versions.node} does not satisfy >=20.` };
+  return version >= 22
+    ? { name: "node", status: "pass", message: `Node ${process.versions.node} satisfies >=22.` }
+    : { name: "node", status: "fail", message: `Node ${process.versions.node} does not satisfy >=22.` };
 }
 
 function commandCheck(command: string): Check {
