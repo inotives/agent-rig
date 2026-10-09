@@ -300,6 +300,10 @@ a side panel, shows handoffs in a searchable timeline, and opens handoff
 details in a modal. It supports light and dark themes and preserves the
 selected phase during browser refresh.
 
+<p align="center">
+  <img src="docs/_images/agent-rig-ui-ss.png" alt="AgentRig task board in the dark theme: the task-flow graph highlights the lineage of the selected task, and the task details are open in a side panel" width="900">
+</p>
+
 The frontend is packaged as static assets. From a repository checkout,
 `npm run build` compiles TypeScript and then runs Tailwind to generate
 `dist/ui.css`, copies `src/ui/core/ui.html` to `dist/index.html`, and emits the
