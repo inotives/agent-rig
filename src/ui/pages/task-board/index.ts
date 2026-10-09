@@ -1,4 +1,13 @@
 import { HandoffDto, TaskDetailDto, TaskSummaryDto, WorkflowSummaryDto } from "../../core/contracts.js";
+import { collapseDoneDefault, compactTaskIds } from "./graph/compact.js";
+import { layoutTaskGraph } from "./graph/layout.js";
+import { applyGraphFocus, computeGraphFocus, focusTarget } from "./graph/focus.js";
+import { EMPTY_FILTER, GraphFilter, agentOptions, computeFilterMatch } from "./graph/filter.js";
+import { renderGraphSvg } from "./graph/render.js";
+import { renderGraphToolbar } from "./graph/toolbar.js";
+import { GraphPoint, GraphSize, GraphView, ZOOM_STEP, exceedsDragThreshold, fitView, panBy, viewBoxOf, viewForRect, zoomAt, zoomLabel } from "./graph/viewport.js";
+export { computeLineage, countEdgeCrossings, layoutTaskGraph } from "./graph/layout.js";
+export type { TaskGraphEdge, TaskGraphLayout, TaskGraphNode, TaskLineage } from "./graph/layout.js";
 
 export const STATUS_COLUMNS = ["todo", "ready", "in_progress", "blocked", "review", "done"] as const;
 export type StatusColumn = (typeof STATUS_COLUMNS)[number];
@@ -49,77 +58,22 @@ function text(value: unknown, fallback = "—") { return value === null || typeo
 function labelValue(label: string, value: unknown) { const wrapper = node("div", "min-w-0"); const name = node("dt", "text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400"); name.textContent = label; const content = node("dd", "truncate text-xs text-slate-700 dark:text-slate-200"); content.textContent = text(value); wrapper.append(name, content); return wrapper; }
 function formatDate(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString(); }
 
-export type TaskGraphNode = { task: TaskSummary; layer: number; row: number; x: number; y: number; width: number; height: number };
-export type TaskGraphEdge = { from: string; to: string };
-export type TaskGraphLayout = { nodes: TaskGraphNode[]; edges: TaskGraphEdge[]; width: number; height: number; hasCycle: boolean };
 export type TaskPreviewRect = { left: number; top: number; width: number; height: number };
 export type TaskPreviewPosition = { left: number; top: number };
 
+/** Place the preview beside the task: right, left, below, then above. Use the first spot that stays inside the wrapper and does not cover the task. */
 export function positionTaskPreview(taskRect: TaskPreviewRect, wrapperRect: TaskPreviewRect, previewWidth: number, previewHeight: number, gap = 12): TaskPreviewPosition {
   const relativeLeft = taskRect.left - wrapperRect.left;
   const relativeTop = taskRect.top - wrapperRect.top;
   const wrapperWidth = Math.max(0, wrapperRect.width);
   const wrapperHeight = Math.max(0, wrapperRect.height);
-  const maxLeft = Math.max(0, wrapperWidth - previewWidth);
-  const maxTop = Math.max(0, wrapperHeight - previewHeight);
-  const rightPosition = relativeLeft + taskRect.width + gap;
-  const leftPosition = relativeLeft - previewWidth - gap;
-  const left = rightPosition + previewWidth <= wrapperWidth ? rightPosition : leftPosition;
-  return { left: Math.min(maxLeft, Math.max(0, left)), top: Math.min(maxTop, Math.max(0, relativeTop)) };
+  const clamp = (position: TaskPreviewPosition): TaskPreviewPosition => ({ left: Math.min(Math.max(0, wrapperWidth - previewWidth), Math.max(0, position.left)), top: Math.min(Math.max(0, wrapperHeight - previewHeight), Math.max(0, position.top)) });
+  const covers = (position: TaskPreviewPosition) => position.left < relativeLeft + taskRect.width && position.left + previewWidth > relativeLeft && position.top < relativeTop + taskRect.height && position.top + previewHeight > relativeTop;
+  const sides = [{ left: relativeLeft + taskRect.width + gap, top: relativeTop }, { left: relativeLeft - previewWidth - gap, top: relativeTop }].filter((position) => position.left >= 0 && position.left + previewWidth <= wrapperWidth).map(clamp);
+  const stacked = [{ left: relativeLeft, top: relativeTop + taskRect.height + gap }, { left: relativeLeft, top: relativeTop - previewHeight - gap }].map(clamp);
+  return [...sides, ...stacked].find((position) => !covers(position)) ?? clamp({ left: relativeLeft + taskRect.width + gap, top: relativeTop });
 }
 
-/** Deterministic left-to-right layout. Cyclic components are placed in a warning row. */
-export function layoutTaskGraph(tasks: readonly TaskSummary[]): TaskGraphLayout {
-  const ordered = [...tasks].sort((a, b) => a.id.localeCompare(b.id));
-  const byId = new Map(ordered.map((task) => [task.id, task]));
-  const dependencies = new Map(ordered.map((task) => [task.id, (task.depends_on ?? []).filter((id) => byId.has(id)).sort()]));
-  const dependents = new Map(ordered.map((task) => [task.id, [] as string[]]));
-  for (const [id, deps] of dependencies) for (const dependency of deps) dependents.get(dependency)?.push(id);
-  for (const children of dependents.values()) children.sort();
-  const remaining = new Set(ordered.map((task) => task.id));
-  const layers = new Map<string, number>();
-  while (remaining.size) {
-    const ready = [...remaining].filter((id) => (dependencies.get(id) ?? []).every((dependency) => !remaining.has(dependency))).sort();
-    if (!ready.length) break;
-    for (const id of ready) { layers.set(id, Math.max(0, ...(dependencies.get(id) ?? []).map((dependency) => (layers.get(dependency) ?? 0) + 1))); remaining.delete(id); }
-  }
-  const hasCycle = remaining.size > 0;
-  const components: string[][] = [];
-  const unvisited = new Set(ordered.filter((task) => !remaining.has(task.id)).map((task) => task.id));
-  while (unvisited.size) {
-    const start = [...unvisited].sort()[0]; const component: string[] = []; const queue = [start]; unvisited.delete(start);
-    while (queue.length) { const id = queue.shift()!; component.push(id); const neighbours = [...(dependencies.get(id) ?? []), ...(dependents.get(id) ?? [])].sort(); for (const neighbour of neighbours) if (unvisited.delete(neighbour)) queue.push(neighbour); }
-    components.push(component.sort());
-  }
-  const columns = new Map<number, string[]>();
-  for (const id of [...layers.keys()].sort()) { const layer = layers.get(id)!; columns.set(layer, [...(columns.get(layer) ?? []), id]); }
-  for (const ids of columns.values()) ids.sort();
-  const width = 220; const height = 86; const gapX = 48; const gapY = 34; const rowGap = 34;
-  const positions = new Map<string, { x: number; y: number; row: number }>();
-  let maxWidth = width;
-  let rowY = 18;
-  let row = 0;
-  for (const component of components.sort((a, b) => a[0].localeCompare(b[0]))) {
-    const componentColumns = new Map<number, string[]>();
-    for (const id of component) { const layer = layers.get(id) ?? 0; componentColumns.set(layer, [...(componentColumns.get(layer) ?? []), id]); }
-    for (const ids of componentColumns.values()) ids.sort();
-    let componentHeight = height;
-    for (const [layer, ids] of [...componentColumns.entries()].sort(([a], [b]) => a - b)) {
-      ids.forEach((id, index) => positions.set(id, { x: layer * (width + gapX) + 18, y: rowY + index * (height + gapY), row }));
-      componentHeight = Math.max(componentHeight, ids.length * height + Math.max(0, ids.length - 1) * gapY);
-    }
-    maxWidth = Math.max(maxWidth, Math.max(0, ...[...componentColumns.keys()]) * (width + gapX) + width + 36);
-    rowY += componentHeight + rowGap;
-    row += 1;
-  }
-  if (hasCycle) { const cycleIds = [...remaining].sort(); const cycleRow = Math.max(1, row); cycleIds.forEach((id, index) => positions.set(id, { x: index * (width + gapX) + 18, y: rowY + 18, row: cycleRow })); maxWidth = Math.max(maxWidth, cycleIds.length * (width + gapX) + 36); rowY += height + rowGap; row = cycleRow + 1; }
-  const nodes = ordered.map((task) => { const position = positions.get(task.id)!; return { task, layer: layers.get(task.id) ?? 0, row: position.row, x: position.x, y: position.y, width, height }; });
-  const edges = ordered.flatMap((task) => (dependencies.get(task.id) ?? []).map((from) => ({ from, to: task.id })));
-  const maxY = Math.max(0, ...nodes.map((node) => node.y + node.height));
-  return { nodes, edges, width: maxWidth, height: Math.max(height, maxY + 18), hasCycle };
-}
-
-const STATUS_RAILS: Record<string, string> = { todo: "#64748b", ready: "#3b82f6", in_progress: "#f59e0b", blocked: "#ef4444", review: "#8b5cf6", done: "#22c55e" };
 const STATUS_TONES: Record<string, string> = { todo: "neutral", ready: "info", in_progress: "warning", blocked: "error", review: "secondary", done: "success" };
 const STATUS_PREVIEW_CLASSES: Record<string, string> = {
   todo: "bg-neutral text-neutral-content",
@@ -155,19 +109,68 @@ export function renderTaskPreview(preview: HTMLElement, task: TaskSummary) {
   body.append(details);
   preview.append(header, body);
 }
-function svg<K extends keyof SVGElementTagNameMap>(tag: K) { return document.createElementNS("http://www.w3.org/2000/svg", tag); }
-function graphCanvas(tasks: readonly TaskSummary[], selectedTaskId: string | null, onSelect: (id: string) => void) {
-  const layout = layoutTaskGraph(tasks); const wrapper = node("section", "card relative mt-5 bg-base-100 p-3 shadow-sm");
-  const heading = node("div", "mb-2 flex items-center justify-between gap-2"); const title = node("h2", "text-lg font-bold"); title.textContent = "Task flow"; const hint = node("p", "text-xs text-slate-500 dark:text-slate-400"); hint.textContent = "Dependencies flow left to right. Cards are not draggable."; heading.append(title, hint); wrapper.append(heading);
-  const controls = node("div", "join mb-2"); const fit = node("button", "btn btn-ghost btn-sm join-item"); fit.type = "button"; fit.textContent = "Fit to view"; fit.setAttribute("aria-label", "Fit task flow to view"); const zoomOut = node("button", "btn btn-ghost btn-sm join-item"); zoomOut.type = "button"; zoomOut.textContent = "−"; zoomOut.setAttribute("aria-label", "Zoom out task flow"); const zoomIn = node("button", "btn btn-ghost btn-sm join-item"); zoomIn.type = "button"; zoomIn.textContent = "+"; zoomIn.setAttribute("aria-label", "Zoom in task flow"); controls.append(fit, zoomOut, zoomIn); wrapper.append(controls);
+/** Add pan, zoom, and the corner toolbar to a graph viewport. A drag starts only after a small move, so a click on a card still selects it. */
+function attachGraphViewport(viewport: HTMLElement, svgRoot: SVGElement, layout: { width: number; height: number }, onPanStart: () => void) {
+  const content: GraphSize = { width: layout.width, height: layout.height };
+  let view: GraphView = { scale: 1, tx: 0, ty: 0 };
+  const size = (): GraphSize => { const width = viewport.clientWidth; const height = viewport.clientHeight; return width > 0 && height > 0 ? { width, height } : content; };
+  const apply = (next: GraphView) => { view = next; svgRoot.setAttribute("viewBox", viewBoxOf(view, size())); level.textContent = zoomLabel(view.scale); };
+  const fit = () => apply(fitView(content, size(), viewport.clientWidth > 0 ? 16 : 0));
+  const zoomCentre = (factor: number) => { const { width, height } = size(); apply(zoomAt(view, factor, { x: width / 2, y: height / 2 })); };
+  const button = (label: string, textContent: string, onClick: () => void) => { const item = node("button", "btn btn-ghost btn-xs join-item"); item.type = "button"; item.textContent = textContent; item.setAttribute("aria-label", label); item.addEventListener("click", onClick); return item; };
+  const level = node("span", "join-item flex min-w-[3.5rem] items-center justify-center bg-base-100 px-2 text-xs tabular-nums"); level.setAttribute("role", "status"); level.setAttribute("aria-label", "Zoom level"); level.textContent = zoomLabel(view.scale);
+  const toolbar = node("div", "join absolute right-2 top-2 z-10 border border-base-300 bg-base-100 shadow-sm"); toolbar.setAttribute("role", "toolbar"); toolbar.setAttribute("aria-label", "Task flow view controls");
+  toolbar.append(button("Fit task flow to view", "Fit", fit), button("Zoom out task flow", "−", () => zoomCentre(1 / ZOOM_STEP)), level, button("Zoom in task flow", "+", () => zoomCentre(ZOOM_STEP)));
+  toolbar.addEventListener("pointerdown", (event) => event.stopPropagation());
+
+  let drag: { id: number; startX: number; startY: number; lastX: number; lastY: number; active: boolean } | null = null;
+  viewport.addEventListener("pointerdown", (event) => { if (event.button !== 0 || !event.isPrimary) return; drag = { id: event.pointerId, startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, active: false }; });
+  viewport.addEventListener("pointermove", (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    if (!drag.active) {
+      if (!exceedsDragThreshold(drag.startX, drag.startY, event.clientX, event.clientY)) return;
+      drag.active = true; drag.lastX = drag.startX; drag.lastY = drag.startY; onPanStart(); viewport.classList.add("cursor-grabbing");
+      try { viewport.setPointerCapture(event.pointerId); } catch { /* capture is optional */ }
+    }
+    apply(panBy(view, event.clientX - drag.lastX, event.clientY - drag.lastY)); drag.lastX = event.clientX; drag.lastY = event.clientY;
+  });
+  const end = (event: PointerEvent) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const moved = drag.active; drag = null; viewport.classList.remove("cursor-grabbing");
+    if (moved) { const swallow = (click: Event) => { click.stopPropagation(); click.preventDefault(); }; viewport.addEventListener("click", swallow, { capture: true, once: true }); setTimeout(() => viewport.removeEventListener("click", swallow, { capture: true }), 0); }
+  };
+  viewport.addEventListener("pointerup", end); viewport.addEventListener("pointercancel", end);
+  viewport.addEventListener("wheel", (event) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const rect = viewport.getBoundingClientRect();
+    apply(zoomAt(view, Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.002)), { x: event.clientX - rect.left, y: event.clientY - rect.top }));
+  }, { passive: false });
+  viewport.append(toolbar);
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(fit);
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => fit()).observe(viewport);
+  return { jumpTo: (rect: GraphPoint & GraphSize) => apply(viewForRect(rect, size())) };
+}
+function graphCanvas(tasks: readonly TaskSummary[], selectedTaskId: string | null, onSelect: (id: string) => void, initialFilter: GraphFilter, onFilterChange: (filter: GraphFilter) => void, collapseDone: boolean, onCollapseChange: (value: boolean) => void) {
+  const layout = layoutTaskGraph(tasks, collapseDone ? compactTaskIds(tasks) : new Set()); const wrapper = node("section", "card relative mt-5 bg-base-100 p-3 shadow-sm");
+  const heading = node("div", "mb-2 flex items-center justify-between gap-2"); const title = node("h2", "text-lg font-bold"); title.textContent = "Task flow"; const hint = node("p", "text-xs text-slate-500 dark:text-slate-400"); hint.textContent = "Dependencies flow left to right. Drag to pan. Ctrl or Cmd plus wheel to zoom."; heading.append(title, hint); wrapper.append(heading);
   if (layout.hasCycle) { const warning = node("div", "alert alert-warning mb-2 py-2 text-xs"); warning.textContent = "Dependency cycle detected; cyclic tasks are shown in the fallback row."; wrapper.append(warning); }
   const preview = node("div", "card card-compact pointer-events-none absolute z-10 hidden w-72 max-w-xs overflow-hidden bg-base-100 text-xs shadow-xl"); preview.dataset.taskPreview = "true"; preview.setAttribute("role", "status"); wrapper.append(preview);
-  const viewport = node("div", "overflow-x-auto"); const svgRoot = svg("svg"); svgRoot.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`); svgRoot.setAttribute("role", "group"); svgRoot.setAttribute("aria-label", "Task dependency flow"); svgRoot.classList.add("min-w-[48rem]");
-  let zoom = 1; const setZoom = (next: number) => { zoom = Math.max(1, Math.min(2.5, next)); const viewWidth = layout.width / zoom; const viewHeight = layout.height / zoom; svgRoot.setAttribute("viewBox", `${(layout.width - viewWidth) / 2} ${(layout.height - viewHeight) / 2} ${viewWidth} ${viewHeight}`); }; fit.addEventListener("click", () => setZoom(1)); zoomOut.addEventListener("click", () => setZoom(zoom - 0.25)); zoomIn.addEventListener("click", () => setZoom(zoom + 0.25));
-  const defs = svg("defs"); const marker = svg("marker"); marker.id = "task-flow-arrow"; marker.setAttribute("viewBox", "0 0 10 10"); marker.setAttribute("refX", "9"); marker.setAttribute("refY", "5"); marker.setAttribute("markerWidth", "6"); marker.setAttribute("markerHeight", "6"); marker.setAttribute("orient", "auto-start-reverse"); const arrow = svg("path"); arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z"); arrow.setAttribute("fill", "currentColor"); marker.append(arrow); defs.append(marker); svgRoot.append(defs);
-  const byId = new Map(layout.nodes.map((item) => [item.task.id, item])); for (const edge of layout.edges) { const from = byId.get(edge.from)!; const to = byId.get(edge.to)!; const path = svg("path"); path.setAttribute("d", `M ${from.x + from.width} ${from.y + from.height / 2} C ${from.x + from.width + 24} ${from.y + from.height / 2}, ${to.x - 24} ${to.y + to.height / 2}, ${to.x} ${to.y + to.height / 2}`); path.setAttribute("fill", "none"); path.setAttribute("stroke", "currentColor"); path.setAttribute("opacity", "0.35"); path.setAttribute("marker-end", "url(#task-flow-arrow)"); svgRoot.append(path); }
-  for (const item of layout.nodes) { const task = item.task; const group = svg("g"); group.setAttribute("tabindex", "0"); group.setAttribute("role", "button"); group.setAttribute("aria-label", `${task.id}: ${task.title}; status ${task.status}`); group.setAttribute("transform", `translate(${item.x},${item.y})`); if (selectedTaskId === task.id) group.classList.add("[&>rect]:stroke-blue-500"); const card = svg("rect"); card.setAttribute("width", String(item.width)); card.setAttribute("height", String(item.height)); card.setAttribute("rx", "10"); card.setAttribute("fill", "currentColor"); card.setAttribute("class", "text-white/95 dark:text-slate-800"); const rail = svg("rect"); rail.setAttribute("width", "7"); rail.setAttribute("height", String(item.height)); rail.setAttribute("rx", "4"); rail.setAttribute("fill", STATUS_RAILS[task.status] ?? STATUS_RAILS.todo); const id = svg("text"); id.setAttribute("x", "18"); id.setAttribute("y", "23"); id.setAttribute("fill", "currentColor"); id.setAttribute("class", "text-[11px] font-mono text-slate-500 dark:text-slate-300"); id.textContent = task.id; const label = svg("text"); label.setAttribute("x", "18"); label.setAttribute("y", "45"); label.setAttribute("fill", "currentColor"); label.setAttribute("class", "text-[13px] font-semibold text-slate-900 dark:text-white"); label.textContent = task.title.length > 25 ? `${task.title.slice(0, 24)}…` : task.title; const status = svg("text"); status.setAttribute("x", "18"); status.setAttribute("y", "68"); status.setAttribute("fill", "currentColor"); status.setAttribute("class", "text-[11px] text-slate-600 dark:text-slate-300"); status.textContent = task.status.replaceAll("_", " "); group.append(card, rail, id, label, status); const select = () => onSelect(task.id); const showPreview = () => { renderTaskPreview(preview, task); preview.classList.remove("hidden"); const position = positionTaskPreview(group.getBoundingClientRect(), wrapper.getBoundingClientRect(), preview.offsetWidth, preview.offsetHeight); preview.style.left = `${position.left}px`; preview.style.top = `${position.top}px`; }; const hidePreview = () => preview.classList.add("hidden"); group.addEventListener("click", select); group.addEventListener("mouseenter", showPreview); group.addEventListener("mouseleave", hidePreview); group.addEventListener("focus", showPreview); group.addEventListener("blur", hidePreview); group.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); } }); svgRoot.append(group); }
-  viewport.append(svgRoot); wrapper.append(viewport); return wrapper;
+  const viewport = node("div", "relative h-[60vh] min-h-[20rem] cursor-grab touch-none select-none overflow-hidden rounded-box border border-base-300");
+  let hoveredId: string | null = null; let svgRoot: SVGElement | null = null;
+  let match = computeFilterMatch(layout, initialFilter);
+  const refreshFocus = () => { if (svgRoot) applyGraphFocus(svgRoot, computeGraphFocus(layout, focusTarget(selectedTaskId, hoveredId)), match.ids); };
+  const hidePreview = () => { preview.classList.add("hidden"); if (hoveredId !== null) { hoveredId = null; refreshFocus(); } };
+  const showPreview = (element: Element, task: TaskSummary) => { if (hoveredId !== task.id) { hoveredId = task.id; refreshFocus(); } renderTaskPreview(preview, task); preview.classList.remove("hidden"); const position = positionTaskPreview(element.getBoundingClientRect(), wrapper.getBoundingClientRect(), preview.offsetWidth, preview.offsetHeight); preview.style.left = `${position.left}px`; preview.style.top = `${position.top}px`; };
+  const graph = renderGraphSvg(layout, selectedTaskId, { onSelect, onPreview: showPreview, onPreviewEnd: hidePreview }); svgRoot = graph; refreshFocus();
+  const view = attachGraphViewport(viewport, graph, layout, hidePreview);
+  const toolbar = renderGraphToolbar(initialFilter, agentOptions(layout), {
+    onChange: (next) => { match = computeFilterMatch(layout, next); toolbar.showMatch(match); onFilterChange(next); refreshFocus(); },
+    onJump: () => { const first = layout.nodes.find((item) => item.task.id === match.first); if (first) view.jumpTo({ x: first.x, y: first.y, width: first.width, height: first.height }); }
+  }, { value: collapseDone, onChange: onCollapseChange });
+  match = computeFilterMatch(layout, toolbar.filter()); toolbar.showMatch(match); refreshFocus();
+  wrapper.append(toolbar.element);
+  viewport.append(graph); wrapper.append(viewport); return wrapper;
 }
 
 function taskCard(task: TaskSummary) { const card = node("article", "card card-compact bg-base-100 shadow-sm"); const body = node("div", "card-body"); const heading = node("div", "flex items-start justify-between gap-2"); const title = node("h3", "card-title line-clamp-2 text-sm"); title.textContent = text(task.title); const id = node("a", "link link-primary shrink-0 font-mono text-[11px]"); id.href = `#/tasks/${encodeURIComponent(task.id)}`; id.textContent = task.id; heading.append(title, id); const details = node("dl", "mt-3 grid grid-cols-2 gap-x-3 gap-y-2"); details.append(labelValue("Priority", task.priority), labelValue("Assignee", task.assigned_to), labelValue("Phase", task.phase), labelValue("Handoffs", task.handoff_count), labelValue("Updated", formatDate(task.updated_on))); body.append(heading, details); card.append(body); return card; }
@@ -179,10 +182,61 @@ async function loadSummary() { return getJson<WorkflowSummary>("/api/workflow");
 /** Escape first, then apply a small Markdown subset. Raw HTML is never interpreted. */
 export function renderMarkdown(markdown: string): string { const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"); const inline = (value: string) => value.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => /^(?:https?:\/\/|mailto:)/i.test(href) ? `<a href="${href}" rel="noreferrer">${label}</a>` : label); const lines = escape(markdown || "").split("\n"); const output: string[] = []; let list = false; let code = false; for (const line of lines) { if (line.trimStart().startsWith("```")) { code = !code; output.push(code ? "<pre><code>" : "</code></pre>"); continue; } if (code) { output.push(line); continue; } const heading = line.match(/^(#{1,3})\s+(.+)$/); const bullet = line.match(/^\s*[-*]\s+(.+)$/); if (!line.trim()) { if (list) { output.push("</ul>"); list = false; } continue; } if (bullet) { if (!list) { output.push("<ul>"); list = true; } output.push(`<li>${inline(bullet[1])}</li>`); continue; } if (list) { output.push("</ul>"); list = false; } if (heading) output.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`); else output.push(`<p>${inline(line)}</p>`); } if (list) output.push("</ul>"); if (code) output.push("</code></pre>"); return output.join(""); }
 function badge(value: unknown, tone = "neutral") { const result = node("span", `badge badge-${tone} badge-sm`); result.textContent = text(value); return result; }
-function statusLegend() { const legend = node("div", "mb-4 flex flex-wrap items-center gap-2 text-xs"); const label = node("span", "font-semibold"); label.textContent = "Status"; legend.append(label); for (const status of STATUS_COLUMNS) legend.append(badge(status.replaceAll("_", " "), STATUS_TONES[status])); return legend; }
 
 export function openHandoffModal(handoff: Handoff, trigger: HTMLElement | undefined = typeof document !== "undefined" ? document.activeElement as HTMLElement : undefined) { const dialog = node("dialog", "modal"); dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-labelledby", "handoff-dialog-title"); const card = node("div", "card modal-box bg-base-100 shadow-xl"); const top = node("div", "card-title flex items-start justify-between gap-3"); const title = node("h2", "text-lg"); title.setAttribute("id", "handoff-dialog-title"); title.textContent = `Handoff #${handoff.sequence}`; const close = node("button", "btn btn-ghost btn-sm btn-circle"); close.type = "button"; close.setAttribute("aria-label", "Close handoff details"); close.textContent = "×"; top.append(title, close); const details = node("dl", "mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4"); details.append(labelValue("Timestamp", formatDate(handoff.created_at)), labelValue("Sender", handoff.sender), labelValue("Recipient", handoff.recipient), labelValue("Status", handoff.status)); const content = node("div", "prose prose-sm mt-4 max-w-none dark:prose-invert"); content.innerHTML = renderMarkdown(handoff.message); const metadata = document.createElement("details"); metadata.className = "collapse-arrow collapse mt-5 border border-base-300 bg-base-200"; const summary = document.createElement("summary"); summary.className = "collapse-title cursor-pointer text-sm font-medium"; summary.textContent = "Metadata JSON"; const json = node("pre", "collapse-content overflow-x-auto text-xs"); json.textContent = JSON.stringify(handoff.metadata ?? {}, null, 2); metadata.append(summary, json); card.append(top, details, content, metadata); dialog.append(card); document.body.append(dialog); let cleaned = false; const cleanup = () => { if (cleaned) return; cleaned = true; dialog.remove(); document.removeEventListener("keydown", escape); trigger?.focus?.(); }; const escape = (event: KeyboardEvent) => { if (event.key === "Escape") cleanup(); }; close.addEventListener("click", cleanup); dialog.addEventListener("cancel", (event) => { event.preventDefault(); cleanup(); }); dialog.addEventListener("close", cleanup); dialog.addEventListener("click", (event) => { if (event.target === dialog) cleanup(); }); document.addEventListener("keydown", escape); const nativeDialog = dialog as HTMLDialogElement; if (typeof nativeDialog.showModal === "function") nativeDialog.showModal(); else dialog.setAttribute("open", ""); close.focus?.(); }
-function renderHandoffTimeline(handoffs: Handoff[]) {
+const HANDOFF_TONES: Record<string, string> = { done: "success", review: "secondary", ready: "info", blocked: "error", changes_requested: "warning", fixes_required: "warning", findings: "accent", handoff: "primary" };
+// Full class names, so Tailwind can find them.
+const HANDOFF_NODE_CLASSES: Record<string, string> = { success: "btn-success", secondary: "btn-secondary", info: "btn-info", error: "btn-error", warning: "btn-warning", accent: "btn-accent", primary: "btn-primary", neutral: "btn-neutral" };
+const HANDOFF_BADGE_CLASSES: Record<string, string> = { success: "badge-success", secondary: "badge-secondary", info: "badge-info", error: "badge-error", warning: "badge-warning", accent: "badge-accent", primary: "badge-primary", neutral: "badge-neutral" };
+
+/** Map a handoff status to a DaisyUI color token. An unknown status is neutral. */
+export function handoffStatusTone(status: string) { return Object.prototype.hasOwnProperty.call(HANDOFF_TONES, status) ? HANDOFF_TONES[status] : "neutral"; }
+
+/** Short English time since `value`. After 30 days, show the date. */
+export function relativeTime(value: string, now: number = Date.now()) {
+  const time = new Date(value).getTime();
+  if (!value) return "—";
+  if (Number.isNaN(time)) return value;
+  const seconds = Math.floor((now - time) / 1000);
+  if (seconds < 60) return "just now";
+  const unit = (amount: number, name: string) => `${amount} ${name}${amount === 1 ? "" : "s"} ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return unit(minutes, "minute");
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return unit(hours, "hour");
+  const days = Math.floor(hours / 24);
+  return days <= 30 ? unit(days, "day") : new Date(time).toLocaleDateString();
+}
+
+/** Plain one-line text from a Markdown message. */
+export function handoffPreviewText(markdown: string) {
+  // The preview shows 2 lines. A short slice keeps the regex chain fast on any input.
+  return String(markdown ?? "").slice(0, 1000)
+    .replace(/[\uD800-\uDBFF]$/, "")
+    .replace(/```[^\n]*\n?/g, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-*+]|\d+\.)\s+/gm, "")
+    .replace(/~~(?=\S)([^\n]*?\S)~~/g, "$1")
+    .replace(/`+([^`\n]*)`+/g, "$1")
+    .replace(/\*\*(?=\S)([^\n]*?\S)\*\*/g, "$1")
+    .replace(/(?<!\w)__(?=\S)([^\n]*?\S)__(?!\w|\.\w)/g, "$1")
+    .replace(/(?<![\w*])\*(?=[^\s*])([^\n]*?[^\s*])\*(?!\w)/g, "$1")
+    .replace(/(?<![\w_])_(?=[^\s_])([^\n]*?[^\s_])_(?!\w|\.\w)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const STAGGER_STEP_MS = 60;
+const STAGGER_CAP_MS = 600;
+
+/** Start delay in ms for entry `index` of `count`. The last delay is at most 600 ms in total. */
+export function handoffStaggerDelay(index: number, count: number) {
+  if (!(count > 1) || !(index > 0)) return 0;
+  const step = Math.min(STAGGER_STEP_MS, STAGGER_CAP_MS / (count - 1));
+  return Math.round(Math.min(index, count - 1) * step);
+}
+
+export function renderHandoffTimeline(handoffs: Handoff[]) {
   const section = node("section", "card min-w-0 bg-base-100 shadow-sm");
   const body = node("div", "card-body min-w-0");
   const heading = node("div", "flex flex-wrap items-center justify-between gap-2");
@@ -195,12 +249,22 @@ function renderHandoffTimeline(handoffs: Handoff[]) {
   heading.append(title, search);
 
   const timeline = node("div", "relative mt-4 pl-14");
-  const rail = node("div", "absolute bottom-2 left-6 top-2 w-1 bg-base-300");
+  const rail = node("div", "absolute bottom-2 left-6 top-2 w-1 origin-top bg-base-300 motion-safe:animate-timeline-rail");
   const events = node("div", "relative space-y-1");
   timeline.append(rail, events);
 
+  const chip = (value: unknown, classes = "badge-ghost") => { const el = node("span", `badge badge-sm max-w-full ${classes}`); const label = node("span", "truncate"); label.textContent = text(value); el.append(label); return el; };
+  // Motion: the first render animates every entry. A later render (search) animates only entries that were not shown before.
+  let shown = new Set<number>();
+  let firstRender = true;
+  const newestSequence = handoffs.reduce((max, item) => Math.max(max, item.sequence), -Infinity);
   const renderEvents = () => {
     const filtered = sortHandoffs(filterHandoffs(handoffs, search.value));
+    const previouslyShown = shown;
+    shown = new Set(filtered.map((item) => item.sequence));
+    const fresh = filtered.filter((item) => !previouslyShown.has(item.sequence));
+    const animateNewest = firstRender;
+    firstRender = false;
     events.replaceChildren();
     if (!filtered.length) {
       const empty = node("p", "py-5 text-sm opacity-70");
@@ -208,18 +272,52 @@ function renderHandoffTimeline(handoffs: Handoff[]) {
       events.append(empty);
       return;
     }
+    const now = Date.now();
     for (const item of filtered) {
-      const event = node("article", "relative min-h-24 pb-5 last:pb-0");
-      const detail = node("button", "btn btn-primary btn-circle btn-md absolute -left-14 top-0 z-10 border-4 border-base-100 bg-blue-500 text-white shadow-md hover:bg-blue-600");
+      const tone = handoffStatusTone(item.status);
+      const freshIndex = fresh.indexOf(item);
+      const isFresh = freshIndex >= 0;
+      const isNewest = animateNewest && item.sequence === newestSequence;
+      const event = node("article", `group relative min-w-0 pb-4 last:pb-0${isFresh ? " motion-safe:animate-timeline-entry" : ""}`);
+      if (isFresh) event.setAttribute("style", `--stagger: ${handoffStaggerDelay(freshIndex, fresh.length)}ms`);
+      // DaisyUI sets "animation" on .btn:active:hover and .btn:active:focus (3 classes). Repeat the same
+      // animation under those states, so a press does not change it and a release does not restart it.
+      // Write each class in full, so Tailwind can find it.
+      const nodeMotion = isNewest
+        ? " motion-safe:animate-timeline-node-newest motion-safe:active:hover:animate-timeline-node-newest motion-safe:active:focus:animate-timeline-node-newest"
+        : isFresh
+          ? " motion-safe:animate-timeline-node motion-safe:active:hover:animate-timeline-node motion-safe:active:focus:animate-timeline-node"
+          : " motion-safe:animate-none motion-safe:active:hover:animate-none motion-safe:active:focus:animate-none";
+      const detail = node("button", `btn btn-circle btn-md absolute -left-14 top-0 z-10 border-4 border-base-100 shadow-md ${HANDOFF_NODE_CLASSES[tone]}${nodeMotion}`);
       detail.type = "button";
       detail.textContent = String(item.sequence);
       detail.setAttribute("aria-label", "Open handoff " + item.sequence + " details");
       detail.addEventListener("click", () => openHandoffModal(item, detail));
-      const status = node("p", "pt-1 text-sm font-semibold capitalize");
-      status.textContent = item.status.replaceAll("_", " ") + " " + formatDate(item.created_at);
-      const route = node("p", "mt-1 text-sm text-base-content/70");
-      route.textContent = text(item.sender) + " → " + text(item.recipient);
-      event.append(detail, status, route);
+      const card = node("div", "min-w-0 cursor-pointer rounded-box border border-base-300 bg-base-200 p-3 hover:shadow-md group-has-[:focus-visible]:shadow-md motion-safe:transition-[transform,box-shadow] motion-safe:duration-200 motion-safe:hover:-translate-y-0.5 motion-safe:group-has-[:focus-visible]:-translate-y-0.5");
+      card.addEventListener("click", () => { if (typeof window !== "undefined" && window.getSelection?.()?.toString()) return; openHandoffModal(item, detail); });
+      const top = node("div", "flex flex-wrap items-center gap-x-2 gap-y-1");
+      const status = node("span", `badge badge-sm max-w-full capitalize ${HANDOFF_BADGE_CLASSES[tone]}`);
+      status.title = item.status;
+      const statusLabel = node("span", "truncate");
+      statusLabel.textContent = item.status.replaceAll("_", " ");
+      status.append(statusLabel);
+      const fullDate = item.created_at ? formatDate(item.created_at) : "Unknown time";
+      const time = node("span", "text-xs text-base-content/70");
+      time.title = fullDate;
+      time.textContent = relativeTime(item.created_at, now);
+      const hidden = node("span", "sr-only");
+      hidden.textContent = fullDate;
+      top.append(status, time, hidden);
+      const route = node("div", "mt-2 flex min-w-0 flex-wrap items-center gap-1 text-xs");
+      const arrow = node("span", "text-base-content/60");
+      arrow.textContent = "→";
+      arrow.setAttribute("aria-label", "to");
+      route.append(chip(item.sender), arrow, chip(item.recipient));
+      if (item.answers_sequence !== undefined && item.answers_sequence !== null) { const answers = chip("answers #" + item.answers_sequence, "badge-outline"); route.append(answers); }
+      const preview = node("p", "mt-2 line-clamp-2 break-words text-sm text-base-content/80");
+      preview.textContent = handoffPreviewText(item.message);
+      card.append(top, route, preview);
+      event.append(detail, card);
       events.append(event);
     }
   };
@@ -272,16 +370,16 @@ function renderTaskDetail(task: TaskDetail, handoffs: Handoff[], onBack: () => v
   markdown.append(markdownBody);
 
   const handoffSection = renderHandoffTimeline(handoffs);
-  const detailSplit = node("div", "mt-5 grid gap-5 lg:grid-cols-2 lg:items-start");
+  const detailSplit = node("div", "mt-5 grid gap-5");
   detailSplit.append(markdown, handoffSection);
   main.append(back, heading, summary, detailSplit);
   return main;
 }
 
 
-export function mountBoard(root: HTMLElement) { let state = createUiState(); const app = node("div", "min-h-screen bg-base-200 text-base-content transition-colors"); const header = node("header", "navbar border-b border-base-300 bg-base-100"); const headerInner = node("div", "mx-auto flex w-full max-w-screen-2xl flex-wrap items-center justify-between gap-3 px-4 py-4"); const brand = node("div"); const title = node("h1", "text-xl font-bold"); const subtitle = node("p", "text-sm italic opacity-70"); subtitle.textContent = "Read-only workflow visibility"; brand.append(title, subtitle); const controls = node("div", "flex items-center gap-2"); const phase = document.createElement("select"); phase.className = "select select-bordered select-sm"; phase.setAttribute("aria-label", "Filter by phase"); phase.addEventListener("change", () => { state = { ...state, selectedPhase: phase.value }; renderBoard(); }); const refresh = node("button", "btn btn-primary btn-sm"); refresh.type = "button"; refresh.textContent = "Refresh"; const theme = node("button", "btn btn-ghost btn-sm"); theme.type = "button"; theme.addEventListener("click", () => applyTheme(preferredTheme() === "dark" ? "light" : "dark")); controls.append(phase, refresh, theme); headerInner.append(brand, controls); header.append(headerInner); const main = node("main", "mx-auto max-w-screen-2xl px-4 py-5"); const status = node("p", "mb-2 text-sm opacity-70"); const legend = statusLegend(); const board = node("div", "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"); const emptyDetail = node("aside", "card mt-5 bg-base-100 p-5 text-sm opacity-70"); emptyDetail.textContent = "Select a task to view its details."; main.append(status, legend, board, emptyDetail); app.append(header, main); root.replaceChildren(app); setTheme(state.theme, false);
-  function renderBoard() { const current = state.data ?? state.lastGoodData; if (!current) return; title.textContent = `AgentRig: ${current.project_identifier}`; const phases = [...new Set([...current.phases, UNASSIGNED_PHASE])].sort((a, b) => a.localeCompare(b)); phase.replaceChildren(new Option("All phases", "__all__")); for (const value of phases) phase.append(new Option(value, value)); phase.value = phases.includes(state.selectedPhase) ? state.selectedPhase : "__all__"; state = { ...state, selectedPhase: phase.value }; const filtered = filterTasks(current.tasks, state.selectedPhase); if (typeof document.createElementNS === "function") { board.className = "overflow-x-auto"; board.replaceChildren(graphCanvas(sortTasks(filtered), state.selectedTaskId, (id) => { location.hash = routeHash({ kind: "task", taskId: id }, state.selectedPhase); })); } else { board.className = "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"; const grouped = new Map<string, TaskSummary[]>(); for (const task of filtered) grouped.set(task.status, [...(grouped.get(task.status) ?? []), task]); board.replaceChildren(...STATUS_COLUMNS.map((name) => column(name, sortTasks(grouped.get(name) ?? [])))); } status.textContent = `${filtered.length} task${filtered.length === 1 ? "" : "s"}${state.selectedPhase === "__all__" ? "" : ` in ${state.selectedPhase}`}`; theme.textContent = preferredTheme() === "dark" ? "Light theme" : "Dark theme"; }
-  async function renderRoute() { const id = state.selectedTaskId; main.replaceChildren(status, legend, board, emptyDetail); if (!id) { if (state.data || state.lastGoodData) renderBoard(); else board.replaceChildren(skeleton()); return; } renderBoard(); emptyDetail.replaceChildren(skeleton()); try { const [taskResponse, handoffResponse] = await Promise.all([getJson<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(id)}`), getJson<{ handoffs: Handoff[] }>(`/api/tasks/${encodeURIComponent(id)}/handoffs`)]); const detail = renderTaskDetail(taskResponse.task, handoffResponse.handoffs, () => history.back()); const taskMetadata = document.createElement("details"); taskMetadata.className = "mt-5 rounded-lg border border-slate-200 bg-white p-4 text-sm dark:border-slate-700 dark:bg-slate-800"; const taskMetadataSummary = document.createElement("summary"); taskMetadataSummary.className = "cursor-pointer font-medium"; taskMetadataSummary.textContent = "Task metadata"; const taskMetadataJson = node("pre", "mt-3 overflow-x-auto text-xs"); taskMetadataJson.textContent = JSON.stringify(taskResponse.task.metadata ?? {}, null, 2); taskMetadata.append(taskMetadataSummary, taskMetadataJson); detail.append(taskMetadata); emptyDetail.replaceChildren(detail); } catch (error) { const empty = node("div", "rounded-lg border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"); empty.textContent = error instanceof Error && error.message === "Task not found" ? "Task not found." : error instanceof Error ? error.message : "Unable to load task."; const back = node("a", "mt-3 inline-block underline"); back.href = "#/"; back.textContent = "Return to board"; empty.append(document.createElement("br"), back); emptyDetail.replaceChildren(empty); } }
+export function mountBoard(root: HTMLElement) { let state = createUiState(); let graphFilter: GraphFilter = EMPTY_FILTER; let collapseChoice: boolean | null = null; let filterPhase = state.selectedPhase; const app = node("div", "min-h-screen bg-base-200 text-base-content transition-colors"); const header = node("header", "navbar border-b border-base-300 bg-base-100"); const headerInner = node("div", "mx-auto flex w-full max-w-screen-2xl flex-wrap items-center justify-between gap-3 px-4 py-4"); const brand = node("div"); const title = node("h1", "text-xl font-bold"); const subtitle = node("p", "text-sm italic opacity-70"); subtitle.textContent = "Read-only workflow visibility"; brand.append(title, subtitle); const controls = node("div", "flex items-center gap-2"); const phase = document.createElement("select"); phase.className = "select select-bordered select-sm"; phase.setAttribute("aria-label", "Filter by phase"); phase.addEventListener("change", () => { state = { ...state, selectedPhase: phase.value }; renderBoard(); }); const refresh = node("button", "btn btn-primary btn-sm"); refresh.type = "button"; refresh.textContent = "Refresh"; const theme = node("button", "btn btn-ghost btn-sm"); theme.type = "button"; theme.addEventListener("click", () => applyTheme(preferredTheme() === "dark" ? "light" : "dark")); controls.append(phase, refresh, theme); headerInner.append(brand, controls); header.append(headerInner); const main = node("main", "mx-auto max-w-screen-2xl px-4 py-5"); const status = node("p", "mb-2 text-sm opacity-70"); const board = node("div", "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"); const emptyDetail = node("aside", "card mt-5 bg-base-100 p-5 text-sm opacity-70"); emptyDetail.textContent = "Select a task to view its details."; main.append(status, board, emptyDetail); app.append(header, main); root.replaceChildren(app); setTheme(state.theme, false);
+  function renderBoard() { const current = state.data ?? state.lastGoodData; if (!current) return; title.textContent = `AgentRig: ${current.project_identifier}`; const phases = [...new Set([...current.phases, UNASSIGNED_PHASE])].sort((a, b) => a.localeCompare(b)); phase.replaceChildren(new Option("All phases", "__all__")); for (const value of phases) phase.append(new Option(value, value)); phase.value = phases.includes(state.selectedPhase) ? state.selectedPhase : "__all__"; state = { ...state, selectedPhase: phase.value }; const filtered = filterTasks(current.tasks, state.selectedPhase); if (filterPhase !== state.selectedPhase) { filterPhase = state.selectedPhase; graphFilter = EMPTY_FILTER; collapseChoice = null; } if (typeof document.createElementNS === "function") { board.className = "overflow-x-auto"; board.replaceChildren(graphCanvas(sortTasks(filtered), state.selectedTaskId, (id) => { location.hash = routeHash({ kind: "task", taskId: id }, state.selectedPhase); }, graphFilter, (next) => { graphFilter = next; }, collapseChoice ?? collapseDoneDefault(filtered.length), (value) => { collapseChoice = value; renderBoard(); })); } else { board.className = "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"; const grouped = new Map<string, TaskSummary[]>(); for (const task of filtered) grouped.set(task.status, [...(grouped.get(task.status) ?? []), task]); board.replaceChildren(...STATUS_COLUMNS.map((name) => column(name, sortTasks(grouped.get(name) ?? [])))); } status.textContent = `${filtered.length} task${filtered.length === 1 ? "" : "s"}${state.selectedPhase === "__all__" ? "" : ` in ${state.selectedPhase}`}`; theme.textContent = preferredTheme() === "dark" ? "Light theme" : "Dark theme"; }
+  async function renderRoute() { const id = state.selectedTaskId; main.replaceChildren(status, board, emptyDetail); if (!id) { if (state.data || state.lastGoodData) renderBoard(); else board.replaceChildren(skeleton()); return; } renderBoard(); emptyDetail.replaceChildren(skeleton()); try { const [taskResponse, handoffResponse] = await Promise.all([getJson<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(id)}`), getJson<{ handoffs: Handoff[] }>(`/api/tasks/${encodeURIComponent(id)}/handoffs`)]); const detail = renderTaskDetail(taskResponse.task, handoffResponse.handoffs, () => history.back()); const taskMetadata = document.createElement("details"); taskMetadata.className = "mt-5 rounded-lg border border-slate-200 bg-white p-4 text-sm dark:border-slate-700 dark:bg-slate-800"; const taskMetadataSummary = document.createElement("summary"); taskMetadataSummary.className = "cursor-pointer font-medium"; taskMetadataSummary.textContent = "Task metadata"; const taskMetadataJson = node("pre", "mt-3 overflow-x-auto text-xs"); taskMetadataJson.textContent = JSON.stringify(taskResponse.task.metadata ?? {}, null, 2); taskMetadata.append(taskMetadataSummary, taskMetadataJson); detail.append(taskMetadata); emptyDetail.replaceChildren(detail); } catch (error) { const empty = node("div", "rounded-lg border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"); empty.textContent = error instanceof Error && error.message === "Task not found" ? "Task not found." : error instanceof Error ? error.message : "Unable to load task."; const back = node("a", "mt-3 inline-block underline"); back.href = "#/"; back.textContent = "Return to board"; empty.append(document.createElement("br"), back); emptyDetail.replaceChildren(empty); } }
   async function fetchAndRender(showLoading = false) { const scrollY = window.scrollY; state = beginUiLoad(state); if (showLoading && !state.lastGoodData) board.replaceChildren(skeleton()); refresh.disabled = true; try { state = completeUiLoad(state, await loadSummary()); main.querySelector("[data-workflow-alert]")?.remove(); if (state.route.kind === "board") renderBoard(); else await renderRoute(); } catch (error) { const message = error instanceof Error ? error.message : "Unable to load workflow data"; state = failUiLoad(state, message); const alert = node("div", "alert alert-error mb-4 p-4 text-sm"); alert.dataset.workflowAlert = "true"; alert.textContent = state.lastGoodData ? `${message}. Showing last successful data.` : `${message}.`; const retry = node("button", "btn btn-link btn-sm"); retry.textContent = "Retry"; retry.addEventListener("click", () => void fetchAndRender(true)); main.querySelector("[data-workflow-alert]")?.remove(); if (state.lastGoodData) { if (typeof main.insertBefore === "function") main.insertBefore(alert, board); else main.append(alert); renderBoard(); } else board.replaceChildren(alert); status.textContent = state.lastGoodData ? status.textContent : message; } finally { refresh.disabled = false; window.scrollTo?.(0, scrollY); } }
   phase.addEventListener("change", () => { location.hash = routeHash(state.route, phase.value); });
   const onHashChange = () => { state = setUiRoute(state, location.hash); void (state.data || state.lastGoodData ? renderRoute() : fetchAndRender()); }; window.addEventListener("hashchange", onHashChange); refresh.addEventListener("click", () => void fetchAndRender(true)); board.replaceChildren(skeleton()); void fetchAndRender(); return { refresh: fetchAndRender }; }
@@ -292,23 +390,29 @@ export function mountSlidingBoard(root: HTMLElement) {
   const drawer = root.querySelector<HTMLElement>("main > aside");
   if (!app || !drawer) return;
   const trigger = { element: undefined as HTMLElement | undefined };
-  const close = node("button", "btn btn-ghost btn-sm btn-circle fixed right-4 top-4 z-50 hidden");
+  const close = node("button", "btn btn-ghost btn-sm btn-circle fixed right-4 top-4 z-50 hidden lg:left-[min(25rem,calc(40vw-3rem))] lg:right-auto");
   close.type = "button";
   close.setAttribute("aria-label", "Close task details");
   close.textContent = "×";
-  const scrim = node("button", "pointer-events-none fixed inset-0 z-30 bg-black/40 opacity-0 transition-opacity duration-300");
+  const scrim = node("button", "pointer-events-none fixed inset-0 z-30 bg-black/40 opacity-0 transition-opacity duration-300 lg:hidden");
   scrim.type = "button";
   scrim.setAttribute("aria-label", "Close task details");
   scrim.setAttribute("tabindex", "-1");
   drawer.setAttribute("role", "dialog");
-  drawer.setAttribute("aria-modal", "true");
+  const wide = typeof matchMedia === "function" ? matchMedia("(min-width: 1024px)") : null;
+  const syncModal = () => { if (wide?.matches) drawer.removeAttribute("aria-modal"); else drawer.setAttribute("aria-modal", "true"); };
+  syncModal();
+  wide?.addEventListener?.("change", syncModal);
   drawer.setAttribute("aria-label", "Task details");
   drawer.tabIndex = -1;
   drawer.classList.remove("opacity-70");
   drawer.classList.add("fixed", "inset-y-0", "left-0", "z-40", "m-0", "w-[80vw]", "max-w-[calc(100vw-1rem)]", "overflow-y-auto", "bg-base-100", "opacity-100", "shadow-2xl", "transition-transform", "duration-300", "ease-out");
+  drawer.classList.add("lg:w-[28rem]", "lg:max-w-[40vw]");
+  const focusTrigger = () => { const id = trigger.element?.getAttribute?.("data-task-id"); const target = trigger.element?.isConnected === false && id ? Array.from(root.querySelectorAll<HTMLElement>("[data-task-id]")).find((item) => item.getAttribute("data-task-id") === id) : trigger.element; target?.focus?.(); trigger.element = undefined; };
   const setOpen = (open: boolean) => {
     drawer.classList.toggle("-translate-x-full", !open);
     drawer.classList.toggle("translate-x-0", open);
+    app.classList.toggle("lg:pl-[min(28rem,40vw)]", open);
      drawer.setAttribute("aria-hidden", String(!open));
      if (open) drawer.removeAttribute("inert"); else drawer.setAttribute("inert", "");
      close.classList.toggle("hidden", !open);
@@ -317,16 +421,18 @@ export function mountSlidingBoard(root: HTMLElement) {
     scrim.classList.toggle("opacity-0", !open);
     scrim.classList.toggle("pointer-events-auto", open);
     scrim.classList.toggle("opacity-100", open);
-    if (open) close.focus(); else trigger.element?.focus?.();
+    if (open) close.focus(); else focusTrigger();
   };
   const closeRoute = () => { const state = createUiState(location.hash); location.hash = routeHash({ kind: "board" }, state.selectedPhase); };
   close.addEventListener("click", closeRoute);
   scrim.addEventListener("click", closeRoute);
   const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); closeRoute(); } };
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && parseRoute().kind === "task" && !document.querySelector("dialog")) closeOnEscape(event); });
   close.addEventListener("keydown", closeOnEscape);
   drawer.addEventListener("keydown", closeOnEscape);
   app.append(scrim, close);
-  const syncRoute = () => { const open = parseRoute().kind === "task"; if (open) trigger.element = document.activeElement as HTMLElement; setOpen(open); };
+  root.addEventListener("focusin", (event) => { const item = (event.target as HTMLElement | null)?.closest?.("[data-task-id]") as HTMLElement | null | undefined; if (item) trigger.element = item; });
+  const syncRoute = () => { const open = parseRoute().kind === "task"; setOpen(open); };
   window.addEventListener("hashchange", syncRoute);
   syncRoute();
 }

@@ -5,6 +5,12 @@
 - Upgraded `better-sqlite3` to `^13.0.3` to fix a native crash on Node.js 24 (see ADR 0008).
 - Raised the minimum Node.js version from 20 to 22.
 - Made the wait in the UI server test stable.
+- Redesigned the task-flow graph with flat DaisyUI nodes (ID, wrapped title, status badge, agent, priority, handoff count), drag to pan, Ctrl/Cmd+wheel zoom, a Fit button, and lineage focus that highlights the ancestors and descendants of a task.
+- Routed long dependency edges in lanes around cards, so every edge stays visible. Arrowheads follow the focus state.
+- Added graph search and status and agent filters, with Enter to jump to the first match.
+- Added compact done nodes and a Collapse done toggle that is on by default for graphs with more than 30 tasks.
+- Task details open in a side panel beside the graph on wide screens and stay a modal drawer on narrow screens. Only one status legend is shown.
+- Redesigned the handoff timeline with status-colored nodes, sender and recipient chips, a status badge, a message preview, relative time, and CSS-only motion that respects `prefers-reduced-motion`.
 
 ## 0.1.4 - 2026-10-06
 

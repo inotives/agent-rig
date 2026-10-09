@@ -264,3 +264,37 @@ test("mountBoard renders and refreshes the project heading", async () => {
     Object.assign(globalThis, previous);
   }
 });
+
+test("task preview never covers the hovered card when there is room beside or above or below it", () => {
+  const wrapper = { left: 0, top: 0, width: 300, height: 400 };
+  const covers = (card, position, w, h) => position.left < card.left + card.width && position.left + w > card.left && position.top < card.top + card.height && position.top + h > card.top;
+  // Wide card in a narrow wrapper: neither side has room, so the preview moves below.
+  const wide = { left: 20, top: 40, width: 260, height: 100 };
+  const below = positionTaskPreview(wide, wrapper, 200, 80);
+  assert.ok(!covers(wide, below, 200, 80));
+  assert.deepEqual(below, { left: 20, top: 152 });
+  // Near the bottom edge the preview moves above.
+  const low = { left: 20, top: 290, width: 260, height: 100 };
+  const above = positionTaskPreview(low, wrapper, 200, 80);
+  assert.ok(!covers(low, above, 200, 80));
+  assert.deepEqual(above, { left: 20, top: 198 });
+});
+
+test("task drawer is a non-modal side panel on lg and a modal drawer below lg", () => {
+  const source = readFileSync(new URL("../../../src/ui/pages/task-board/index.ts", import.meta.url), "utf8");
+  assert.match(source, /"lg:w-\[28rem\]", "lg:max-w-\[40vw\]"/, "wide panel is 28rem, at most 40vw");
+  assert.match(source, /node\("button", "pointer-events-none fixed inset-0 z-30 [^"]*lg:hidden/, "scrim is hidden on lg");
+  assert.match(source, /"lg:pl-\[min\(28rem,40vw\)\]"/, "graph area leaves room for the panel on lg");
+  assert.match(source, /matchMedia\("\(min-width: 1024px\)"\)/, "wide check uses the lg breakpoint");
+  assert.match(source, /removeAttribute\("aria-modal"\)/, "wide panel is not modal");
+  assert.match(source, /setAttribute\("aria-modal", "true"\)/, "narrow drawer stays modal");
+  assert.match(source, /new ResizeObserver/, "graph fits again when its area changes size");
+});
+
+test("board has one status legend, inside the graph", () => {
+  const source = readFileSync(new URL("../../../src/ui/pages/task-board/index.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /statusLegend\(/, "no page-level legend");
+  const toolbar = readFileSync(new URL("../../../src/ui/pages/task-board/graph/toolbar.ts", import.meta.url), "utf8");
+  assert.equal(source.match(/renderGraphToolbar\(/g).length, 1, "graph toolbar is rendered once");
+  assert.equal(toolbar.match(/renderGraphLegend\(/g).length, 1, "the toolbar renders the one legend");
+});
