@@ -28,6 +28,8 @@ directory and optionally overridden with `agent-rig init --project-identifier`.
 
 ## SQLite driver
 
+Note: ADR 0008 raised the Node.js range to `>=22`. The `>=20` text below is the original decision.
+
 The planned SQLite adapter will use `better-sqlite3`. It supports the declared
 Node.js `>=20` floor and ships native prebuilt binaries for common Node and
 platform combinations, while retaining a synchronous API that matches the

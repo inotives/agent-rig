@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Upgraded `better-sqlite3` to `^13.0.3` to fix a native crash on Node.js 24 (see ADR 0008).
+- Raised the minimum Node.js version from 20 to 22.
+- Made the wait in the UI server test stable.
+
 ## 0.1.4 - 2026-10-06
 
 - Added pluggable SQLite workflow storage with task and handoff migration support.
