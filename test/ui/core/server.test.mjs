@@ -217,3 +217,41 @@ test("browser smoke serves board assets and route behavior without write methods
     } finally { harness.restore(); }
   } finally { server.close(); }
 });
+
+test("HTTP server passes the phase query to the API and keeps write methods closed", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "agent-rig-ui-phases-http-"));
+  const shared = join(cwd, ".agent-rig", "_shared");
+  mkdirSync(shared, { recursive: true });
+  writeFileSync(join(shared, "agent-rig.json"), JSON.stringify({ workflow_store: { provider: "sqlite" }, project_identifier: "fixture" }));
+  const store = new SQLiteWorkflowStore(join(shared, "workflow.sqlite"), "fixture");
+  const base = { projectIdentifier: "fixture", type: "task", status: "ready", assignedTo: "worker", priority: "normal", parent: "", dependsOn: [], dependencyReady: true, blockedBy: [], createdBy: "planner", createdOn: "2026-10-05", updatedOn: "2026-10-06", body: "Body", metadata: {} };
+  store.createTask({ ...base, id: "task-0001", title: "A", phase: "26" });
+  store.createTask({ ...base, id: "task-0002", title: "B", phase: "phase-27" });
+  store.createTask({ ...base, id: "task-0003", title: "C", phase: "" });
+  store.close();
+  const server = createUiServer(cwd);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  try {
+    const url = `http://127.0.0.1:${port}`;
+    const phases = await fetch(`${url}/api/phases`);
+    assert.equal(phases.status, 200);
+    assert.match(phases.headers.get("content-type"), /application\/json/);
+    const phasesBody = await phases.json();
+    assert.deepEqual(phasesBody.phases.map((entry) => entry.phase), ["26", "phase-27", "Unassigned"].sort((a, b) => a.localeCompare(b)));
+    assert.equal("tasks" in phasesBody, false);
+    const filtered = await (await fetch(`${url}/api/workflow?phase=26`)).json();
+    assert.deepEqual(filtered.tasks.map((task) => task.id), ["task-0001"]);
+    assert.deepEqual((await (await fetch(`${url}/api/workflow?phase=Unassigned`)).json()).tasks.map((task) => task.id), ["task-0003"]);
+    assert.equal((await (await fetch(`${url}/api/workflow`)).json()).tasks.length, 3);
+    const unknown = await fetch(`${url}/api/workflow?phase=nope`);
+    assert.equal(unknown.status, 404);
+    assert.deepEqual(await unknown.json(), { error: "Phase not found", phase: "nope" });
+    assert.equal((await fetch(`${url}/api/workflow?phase=%E0%A4%A`)).status, 404);
+    assert.equal((await fetch(`${url}/api/workflow?phase=26&phase=26`)).status, 400);
+    assert.equal((await fetch(`${url}/api/workflow?phase=`)).status, 404);
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      for (const path of ["/api/phases", "/api/workflow?phase=26"]) assert.equal((await fetch(`${url}${path}`, { method })).status, 405, `${method} ${path}`);
+    }
+  } finally { server.close(); }
+});

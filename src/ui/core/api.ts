@@ -1,5 +1,5 @@
 import { createWorkflowStore, resolveTaskPhase, WorkflowHandoff, WorkflowStore, WorkflowTask } from "../../workflow/index.js";
-import { HandoffDto, TaskDetailDto, TaskSummaryDto, WorkflowApiHandler, WorkflowApiResponse, WorkflowSummaryDto } from "./contracts.js";
+import { HandoffDto, PhasesResponseDto, TaskDetailDto, TaskSummaryDto, WorkflowApiHandler, WorkflowApiResponse, WorkflowSummaryDto } from "./contracts.js";
 
 export type { WorkflowApiHandler, WorkflowApiResponse } from "./contracts.js";
 
@@ -10,9 +10,21 @@ export function createWorkflowApi(cwd: string): WorkflowApiHandler {
   return (method, pathname) => {
     if (method !== "GET") return json(405, { error: "Method not allowed" }, { Allow: "GET" });
 
-    const path = pathname.split("?", 1)[0];
+    const queryStart = pathname.indexOf("?");
+    const path = queryStart < 0 ? pathname : pathname.slice(0, queryStart);
+    const query = queryStart < 0 ? "" : pathname.slice(queryStart + 1);
+    if (path === "/api/phases") {
+      return json(200, phasesResponse(store, projectIdentifier));
+    }
     if (path === "/api/workflow") {
-      return json(200, workflowSummary(store, projectIdentifier));
+      const requested = readPhaseParameter(query);
+      if (requested.kind === "invalid") return json(404, { error: "Invalid phase" });
+      if (requested.kind === "repeated") return json(400, { error: "Repeated phase parameter" });
+      if (requested.kind === "none") return json(200, workflowSummary(store, projectIdentifier));
+      if (!store.listPhaseSummaries(projectIdentifier).some((summary) => summary.phase === requested.value)) {
+        return json(404, { error: "Phase not found", phase: requested.value });
+      }
+      return json(200, workflowSummary(store, projectIdentifier, requested.value));
     }
 
     const taskPath = path.match(/^\/api\/tasks\/([^/]+)(\/handoffs)?$/);
@@ -41,8 +53,50 @@ export function createWorkflowApi(cwd: string): WorkflowApiHandler {
   };
 }
 
-function workflowSummary(store: WorkflowStore, projectIdentifier: string): WorkflowSummaryDto {
-  const tasks = store.listTasks(projectIdentifier);
+const maxPhaseLength = 200;
+
+type PhaseParameter = { kind: "none" } | { kind: "invalid" } | { kind: "repeated" } | { kind: "value"; value: string };
+
+/** Read the `phase` parameter. A missing parameter means no filter. An empty value is a value. */
+function readPhaseParameter(query: string): PhaseParameter {
+  let found: string | undefined;
+  for (const pair of query.split("&")) {
+    const separator = pair.indexOf("=");
+    const rawKey = separator < 0 ? pair : pair.slice(0, separator);
+    let key: string;
+    try {
+      key = decodeURIComponent(rawKey.replace(/\+/g, " "));
+    } catch {
+      continue;
+    }
+    if (key !== "phase") continue;
+    if (found !== undefined) return { kind: "repeated" };
+    const rawValue = separator < 0 ? "" : pair.slice(separator + 1);
+    if (rawValue.length > maxPhaseLength * 9) return { kind: "invalid" };
+    try {
+      found = decodeURIComponent(rawValue.replace(/\+/g, " "));
+    } catch {
+      return { kind: "invalid" };
+    }
+    if (found.length > maxPhaseLength) return { kind: "invalid" };
+  }
+  return found === undefined ? { kind: "none" } : { kind: "value", value: found };
+}
+
+function phasesResponse(store: WorkflowStore, projectIdentifier: string): PhasesResponseDto {
+  return {
+    project_identifier: projectIdentifier,
+    phases: store.listPhaseSummaries(projectIdentifier).map((summary) => ({
+      phase: summary.phase,
+      total: summary.total,
+      counts: summary.counts,
+      latest_updated_on: summary.latestUpdatedOn
+    }))
+  };
+}
+
+function workflowSummary(store: WorkflowStore, projectIdentifier: string, phase?: string): WorkflowSummaryDto {
+  const tasks = store.listTasks(projectIdentifier, phase === undefined ? undefined : { phase });
   const phases = [...new Set(tasks.map((task) => resolveTaskPhase(task)))].sort((a, b) => a.localeCompare(b));
   return {
     project_identifier: projectIdentifier,
