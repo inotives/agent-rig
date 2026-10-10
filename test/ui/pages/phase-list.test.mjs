@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { orderPhases, phaseLabel, phaseNumber, phaseState, renderPhaseCards, renderPhaseSkeleton } from "../../../dist/ui/pages/phase-list/index.js";
+import { filterPhases, orderPhases, parsePhaseFilter, phaseFilterHash, phaseLabel, phaseNumber, phaseState, renderPhaseCards, renderPhaseLanding, renderPhaseSkeleton } from "../../../dist/ui/pages/phase-list/index.js";
 import { routeHash } from "../../../dist/ui/pages/task-board/index.js";
 
 const NOW = Date.parse("2026-10-11T12:00:00Z");
@@ -9,7 +9,9 @@ const counts = (over = {}) => ({ todo: 0, ready: 0, in_progress: 0, blocked: 0, 
 const summary = (phase, over = {}, latest = "2026-10-10T12:00:00Z") => { const c = counts(over); return { phase, total: Object.values(c).reduce((a, b) => a + b, 0), counts: c, latest_updated_on: latest }; };
 
 class Element {
-  constructor(tag) { this.tagName = tag; this.children = []; this.attrs = {}; this.dataset = {}; this.className = ""; this.textContent = ""; }
+  constructor(tag) { this.tagName = tag; this.children = []; this.attrs = {}; this.dataset = {}; this.className = ""; this.textContent = ""; this.value = ""; this.listeners = {}; }
+  addEventListener(type, listener) { this.listeners[type] = listener; }
+  fire(type) { this.listeners[type]?.(); }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   setAttribute(name, value) { this.attrs[name] = String(value); }
@@ -110,7 +112,109 @@ test("cards follow the display order", () => withDom(() => {
 
 test("the grid has responsive columns and no overflow classes", () => withDom(() => {
   const grid = renderPhaseCards({ project_identifier: "p", phases: [summary("phase-1", { done: 1 })] }, NOW);
-  for (const name of ["grid", "grid-cols-1", "sm:grid-cols-2", "lg:grid-cols-3", "2xl:grid-cols-4"]) assert.ok(grid.className.split(" ").includes(name), name);
+  for (const name of ["grid", "grid-cols-1", "sm:grid-cols-2", "lg:grid-cols-4"]) assert.ok(grid.className.split(" ").includes(name), name);
+  for (const name of ["lg:grid-cols-3", "2xl:grid-cols-4"]) assert.ok(!grid.className.split(" ").includes(name), name);
+}));
+
+const F = (over = {}) => ({ q: "", from: "", to: "", ...over });
+const sample = [summary("phase-27", { ready: 1 }, "2026-10-10T12:00:00Z"), summary("26", { done: 1 }, "2026-10-05"), summary("hardening", { todo: 1 }, "2026-09-01"), summary("Unassigned", { todo: 1 }, "")];
+const names = (list) => list.map((item) => item.phase);
+
+test("filterPhases searches name and label, ignores case, matches part of the text", () => {
+  assert.deepEqual(names(filterPhases(sample, F({ q: "26" }))), ["26"]);
+  assert.deepEqual(names(filterPhases(sample, F({ q: "PHASE 26" }))), ["26"]);
+  assert.deepEqual(names(filterPhases(sample, F({ q: "phase-27" }))), ["phase-27"]);
+  assert.deepEqual(names(filterPhases(sample, F({ q: "HARD" }))), ["hardening"]);
+  assert.deepEqual(names(filterPhases(sample, F({ q: "phase" }))), ["phase-27", "26"]);
+  assert.equal(filterPhases(sample, F({ q: "zzz" })).length, 0);
+  assert.equal(filterPhases(sample, F()).length, 4);
+});
+
+test("filterPhases range is inclusive, allows one open end, and hides empty dates", () => {
+  assert.deepEqual(names(filterPhases(sample, F({ from: "2026-10-05", to: "2026-10-10" }))), ["phase-27", "26"]);
+  assert.deepEqual(names(filterPhases(sample, F({ from: "2026-10-06" }))), ["phase-27"]);
+  assert.deepEqual(names(filterPhases(sample, F({ to: "2026-09-30" }))), ["hardening"]);
+  assert.ok(!names(filterPhases(sample, F({ from: "2000-01-01" }))).includes("Unassigned"));
+  assert.ok(!names(filterPhases(sample, F({ to: "2100-01-01" }))).includes("Unassigned"));
+  assert.ok(names(filterPhases(sample, F({ q: "una" }))).includes("Unassigned"));
+});
+
+test("filterPhases with an inverted range matches nothing and does not throw", () => {
+  assert.deepEqual(filterPhases(sample, F({ from: "2026-10-10", to: "2026-10-01" })), []);
+});
+
+test("parsePhaseFilter and phaseFilterHash round-trip and ignore invalid values", () => {
+  assert.deepEqual(parsePhaseFilter("#/"), F());
+  assert.deepEqual(parsePhaseFilter("#/?q=26&from=2026-10-01&to=2026-10-10"), F({ q: "26", from: "2026-10-01", to: "2026-10-10" }));
+  assert.deepEqual(parsePhaseFilter("#/?from=nope&to=2026-13-45&x=1"), F());
+  assert.deepEqual(parsePhaseFilter("#/?q=%00"), F());
+  assert.deepEqual(parsePhaseFilter("#/?q=a%20b"), F({ q: "a b" }));
+  assert.equal(phaseFilterHash(F()), "#/");
+  assert.equal(phaseFilterHash(F({ q: "26", from: "2026-10-01", to: "2026-10-10" })), "#/?q=26&from=2026-10-01&to=2026-10-10");
+  assert.equal(phaseFilterHash(F({ q: "a b&c" })), "#/?q=a+b%26c");
+  const filter = F({ q: "a b&c", from: "2026-10-01" });
+  assert.deepEqual(parsePhaseFilter(phaseFilterHash(filter)), filter);
+  assert.equal(phaseFilterHash(F({ from: "bad" })), "#/");
+});
+
+test("a phase route is not read as a filter route", () => {
+  assert.deepEqual(parsePhaseFilter("#/?phase=26"), F());
+  assert.equal(routeHash({ kind: "board" }, "26"), "#/?phase=26");
+});
+
+const landing = (filter, phases = sample) => { const changes = []; const root = renderPhaseLanding({ project_identifier: "p", phases }, filter, (next) => changes.push(next), NOW); const find = (id) => walk(root).find((item) => item.id === id); return { root, changes, q: find("phase-filter-q"), from: find("phase-filter-from"), to: find("phase-filter-to"), clear: walk(root).find((item) => item.tagName === "button" && item.textContent === "Clear"), count: walk(root).find((item) => item.dataset.filterCount) }; };
+
+test("the landing has labelled inputs and shows all cards without a count when no filter is set", () => withDom(() => {
+  const view = landing(F());
+  assert.equal(cardsOf(view.root).length, 4);
+  assert.equal(view.count.textContent, "");
+  const labels = walk(view.root).filter((item) => item.tagName === "label").map((item) => `${item.htmlFor}:${item.textContent}`);
+  assert.deepEqual(labels, ["phase-filter-q:Search phases", "phase-filter-from:Updated from", "phase-filter-to:Updated to"]);
+  assert.equal(view.from.type, "date");
+  assert.equal(view.clear.disabled, true);
+}));
+
+test("typing filters the cards, shows the count, and reports the filter", () => withDom(() => {
+  const view = landing(F());
+  view.q.value = "26"; view.q.fire("input");
+  assert.equal(cardsOf(view.root).length, 1);
+  assert.equal(view.count.textContent, "1 of 4 phases");
+  assert.deepEqual(view.changes, [F({ q: "26" })]);
+  assert.equal(view.clear.disabled, false);
+  view.from.value = "2026-10-01"; view.from.fire("input");
+  assert.equal(cardsOf(view.root).length, 1);
+  view.to.value = "2026-10-04"; view.to.fire("input");
+  assert.equal(cardsOf(view.root).length, 0);
+  assert.match(textOf(view.root), /No phases match/);
+}));
+
+test("the initial filter is applied, an inverted range shows a message, and Clear resets", () => withDom(() => {
+  const view = landing(F({ q: "phase", from: "2026-10-10", to: "2026-10-01" }));
+  assert.equal(view.q.value, "phase");
+  assert.equal(cardsOf(view.root).length, 0);
+  assert.match(textOf(view.root), /Updated from is later than Updated to/);
+  view.clear.fire("click");
+  assert.equal(cardsOf(view.root).length, 4);
+  assert.equal(view.q.value, "");
+  assert.equal(view.from.value, "");
+  assert.deepEqual(view.changes.at(-1), F());
+  assert.equal(view.count.textContent, "");
+}));
+
+test("the empty-state Clear button resets the filter", () => withDom(() => {
+  const view = landing(F({ q: "zzz" }));
+  assert.match(textOf(view.root), /No phases match/);
+  const buttons = walk(view.root).filter((item) => item.tagName === "button" && item.textContent === "Clear");
+  assert.equal(buttons.length, 2);
+  buttons[1].fire("click");
+  assert.equal(cardsOf(view.root).length, 4);
+  assert.deepEqual(view.changes.at(-1), F());
+}));
+
+test("the landing with no phases shows only the empty state", () => withDom(() => {
+  const view = { root: renderPhaseLanding({ project_identifier: "p", phases: [] }, F(), () => {}, NOW) };
+  assert.match(textOf(view.root), /No phases yet/);
+  assert.equal(walk(view.root).filter((item) => item.tagName === "input").length, 0);
 }));
 
 test("no phases shows the empty state", () => withDom(() => {

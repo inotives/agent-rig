@@ -324,7 +324,7 @@ function fakeBrowser({ hash, respond }) {
     replaceChildren(...children) { this.children = children; }
     remove() {}
     setAttribute() {}
-    addEventListener() {}
+    addEventListener(type, listener) { (this.listeners ??= {})[type] = listener; }
     querySelector() { return null; }
   }
   const walk = (element, found = []) => { found.push(element); for (const child of element.children ?? []) walk(child, found); return found; };
@@ -340,7 +340,7 @@ function fakeBrowser({ hash, respond }) {
   globalThis.window = { matchMedia: () => ({ matches: false }), scrollY: 0, addEventListener(type, listener) { listeners[type] = listener; }, scrollTo() {} };
   const root = new Element("div");
   return {
-    root, requests, replaced, links: () => walk(root).filter((item) => item.tagName === "a"), texts: () => walk(root).map((item) => item.textContent).filter(Boolean),
+    root, requests, replaced, inputs: () => walk(root).filter((item) => item.tagName === "input"), links: () => walk(root).filter((item) => item.tagName === "a"), texts: () => walk(root).map((item) => item.textContent).filter(Boolean),
     navigate: async (next) => { globalThis.location.hash = next; listeners.hashchange(); await new Promise((resolve) => setImmediate(resolve)); },
     restore: () => Object.assign(globalThis, previous)
   };
@@ -457,6 +457,26 @@ test("landing shows one Detail link per phase card and makes no task request", a
     assert.ok(browser.texts().includes("Phase 27"));
     assert.ok(browser.texts().includes("Phase 26"));
     assert.equal(browser.links().filter((link) => link.textContent === "Detail").length, 2);
+  } finally { browser.restore(); }
+});
+
+test("landing filters from the URL, updates the URL while typing, and never requests again", async () => {
+  const browser = fakeBrowser({ hash: "#/?q=26&from=2026-09-01", respond: respondFor });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/phases"]);
+    assert.deepEqual(browser.links().filter((link) => link.textContent === "Detail").map((link) => link.href), ["#/?phase=26"]);
+    const search = browser.inputs().find((item) => item.id === "phase-filter-q");
+    assert.equal(search.value, "26");
+    search.value = "27"; search.listeners.input();
+    assert.deepEqual(browser.links().filter((link) => link.textContent === "Detail").map((link) => link.href), ["#/?phase=phase-27"]);
+    assert.deepEqual(browser.replaced, ["#/?q=27&from=2026-09-01"]);
+    assert.deepEqual(browser.requests, ["/api/phases"]);
+    search.value = "zzz"; search.listeners.input();
+    assert.ok(browser.texts().includes("No phases match"));
+    assert.equal(browser.replaced.at(-1), "#/?q=zzz&from=2026-09-01");
+    assert.deepEqual(browser.requests, ["/api/phases"]);
   } finally { browser.restore(); }
 });
 

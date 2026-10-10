@@ -108,14 +108,125 @@ export function renderPhaseCards(data: PhasesResponseDto, now: number = Date.now
     empty.textContent = "No phases yet";
     return empty;
   }
-  const grid = node("div", "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4");
+  const grid = node("div", "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4");
   for (const summary of orderPhases(data.phases)) grid.append(renderPhaseCard(summary, now));
   return grid;
 }
 
 export function renderPhaseSkeleton() {
-  const grid = node("div", "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4");
+  const grid = node("div", "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4");
   grid.setAttribute("aria-label", "Loading phases");
   for (let index = 0; index < 6; index += 1) grid.append(node("div", "h-40 animate-pulse rounded-box bg-base-300"));
   return grid;
+}
+
+export type PhaseFilter = { q: string; from: string; to: string };
+export const EMPTY_PHASE_FILTER: PhaseFilter = { q: "", from: "", to: "" };
+const MAX_QUERY_LENGTH = 100;
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A valid `YYYY-MM-DD` day, or an empty string. */
+function validDay(value: string) { return DAY.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) ? value : ""; }
+/** The day part of a date or a timestamp, or an empty string when there is none. */
+function dayOf(value: string) { return validDay(value.slice(0, 10)); }
+
+/** Read the filter from the hash query. Unknown or invalid values are ignored. */
+export function parsePhaseFilter(hash: string): PhaseFilter {
+  const query = hash.split("?", 2)[1];
+  if (!query) return EMPTY_PHASE_FILTER;
+  const params = new URLSearchParams(query);
+  const q = (params.get("q") ?? "").trim();
+  return { q: q.length <= MAX_QUERY_LENGTH && !/[\u0000-\u001f\u007f\ufffd]/.test(q) ? q : "", from: validDay(params.get("from")?.trim() ?? ""), to: validDay(params.get("to")?.trim() ?? "") };
+}
+
+/** The landing hash for a filter. An empty filter gives `#/`. */
+export function phaseFilterHash(filter: PhaseFilter) {
+  const params = new URLSearchParams();
+  if (filter.q.trim()) params.set("q", filter.q.trim());
+  if (validDay(filter.from)) params.set("from", filter.from);
+  if (validDay(filter.to)) params.set("to", filter.to);
+  const query = params.toString();
+  return query ? `#/?${query}` : "#/";
+}
+
+export function phaseFilterActive(filter: PhaseFilter) { return filter.q.trim() !== "" || filter.from !== "" || filter.to !== ""; }
+export function phaseRangeInverted(filter: PhaseFilter) { return filter.from !== "" && filter.to !== "" && filter.from > filter.to; }
+
+/** Phases that match the search text and the date range. Both ends of the range are inclusive. An inverted range matches nothing. */
+export function filterPhases(phases: readonly PhaseSummaryDto[], filter: PhaseFilter): PhaseSummaryDto[] {
+  if (phaseRangeInverted(filter)) return [];
+  const needle = filter.q.trim().toLowerCase();
+  const ranged = filter.from !== "" || filter.to !== "";
+  return phases.filter((item) => {
+    if (needle && !item.phase.toLowerCase().includes(needle) && !phaseLabel(item.phase).toLowerCase().includes(needle)) return false;
+    if (!ranged) return true;
+    const day = dayOf(item.latest_updated_on);
+    return day !== "" && (filter.from === "" || day >= filter.from) && (filter.to === "" || day <= filter.to);
+  });
+}
+
+function filterField(id: string, labelText: string, type: string, value: string, classes: string) {
+  const field = node("div", classes);
+  const label = node("label", "text-xs font-medium opacity-70");
+  label.htmlFor = id;
+  label.textContent = labelText;
+  const input = node("input", "input input-bordered input-sm w-full min-w-0");
+  input.id = id;
+  input.type = type;
+  input.value = value;
+  field.append(label, input);
+  return { field, input };
+}
+
+/**
+ * The landing view: a filter bar and the phase cards. The filter works on `data` in the browser.
+ * `onFilterChange` receives each new filter so the caller can keep it in the URL.
+ */
+export function renderPhaseLanding(data: PhasesResponseDto, initial: PhaseFilter, onFilterChange: (filter: PhaseFilter) => void, now: number = Date.now()) {
+  if (!data.phases.length) return renderPhaseCards(data, now);
+  let filter = initial;
+  const root = node("div", "flex flex-col gap-4");
+  const bar = node("div", "flex flex-wrap items-end gap-3");
+  bar.setAttribute("role", "search");
+  const search = filterField("phase-filter-q", "Search phases", "search", filter.q, "flex w-full flex-col gap-1 sm:w-64");
+  const from = filterField("phase-filter-from", "Updated from", "date", filter.from, "flex min-w-0 flex-1 flex-col gap-1 sm:w-40 sm:flex-none");
+  const to = filterField("phase-filter-to", "Updated to", "date", filter.to, "flex min-w-0 flex-1 flex-col gap-1 sm:w-40 sm:flex-none");
+  search.input.placeholder = "Phase name or number";
+  const clear = node("button", "btn btn-ghost btn-sm") as HTMLButtonElement;
+  clear.type = "button";
+  clear.textContent = "Clear";
+  const actions = node("div", "flex h-8 w-full items-center gap-3 sm:w-auto");
+  const count = node("p", "text-sm tabular-nums opacity-70");
+  count.setAttribute("aria-live", "polite");
+  count.dataset.filterCount = "true";
+  actions.append(clear, count);
+  bar.append(search.field, from.field, to.field, actions);
+  const results = node("div");
+
+  function update() {
+    const active = phaseFilterActive(filter);
+    const matches = filterPhases(data.phases, filter);
+    clear.disabled = !active;
+    count.textContent = active ? `${matches.length} of ${data.phases.length} phases` : "";
+    if (matches.length) { results.replaceChildren(renderPhaseCards({ ...data, phases: matches }, now)); return; }
+    const empty = node("div", "flex flex-wrap items-center gap-3 rounded-box border border-base-300 bg-base-100 p-4 text-sm");
+    empty.dataset.phaseEmpty = "true";
+    const message = node("span");
+    message.textContent = phaseRangeInverted(filter) ? "No phases match. Updated from is later than Updated to." : "No phases match";
+    const again = node("button", "btn btn-primary btn-sm") as HTMLButtonElement;
+    again.type = "button";
+    again.textContent = "Clear";
+    again.addEventListener("click", reset);
+    empty.append(message, again);
+    results.replaceChildren(empty);
+  }
+  function change(next: PhaseFilter) { filter = next; update(); onFilterChange(filter); }
+  function reset() { search.input.value = ""; from.input.value = ""; to.input.value = ""; change(EMPTY_PHASE_FILTER); }
+  search.input.addEventListener("input", () => change({ ...filter, q: search.input.value }));
+  from.input.addEventListener("input", () => change({ ...filter, from: validDay(from.input.value) }));
+  to.input.addEventListener("input", () => change({ ...filter, to: validDay(to.input.value) }));
+  clear.addEventListener("click", reset);
+  update();
+  root.append(bar, results);
+  return root;
 }
