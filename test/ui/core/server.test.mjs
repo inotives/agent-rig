@@ -58,7 +58,8 @@ function installBrowserHarness() {
   globalThis.location = { hash: "" };
   globalThis.history = {
     back: () => { globalThis.location.hash = ""; globalThis.window.dispatchEvent({ type: "hashchange" }); },
-    forward: () => { globalThis.location.hash = "#/tasks/task-0001"; globalThis.window.dispatchEvent({ type: "hashchange" }); },
+    forward: () => { globalThis.location.hash = "#/tasks/task-0001?phase=phase-17"; globalThis.window.dispatchEvent({ type: "hashchange" }); },
+    replaceState: (_state, _title, url) => { globalThis.location.hash = url; },
   };
   globalThis.localStorage = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
   globalThis.Option = class extends FakeElement { constructor(label, value) { super("option"); this.textContent = label; this.value = value; } };
@@ -109,11 +110,19 @@ test("browser smoke serves board assets and route behavior without write methods
     const harness = installBrowserHarness();
     try {
       const browserFetch = globalThis.fetch;
-      globalThis.fetch = (input, init) => browserFetch(new URL(input, base), init);
+      const requested = [];
+      globalThis.fetch = (input, init) => { requested.push(String(input)); return browserFetch(new URL(input, base), init); };
       const root = harness.document.root;
+      const go = (hash) => { globalThis.location.hash = hash; globalThis.window.dispatchEvent({ type: "hashchange" }); };
        mountSlidingBoard(root);
+      await waitFor(() => root.textContent.includes("phase-17"));
+      assert.deepEqual(requested, ["/api/phases"], "landing asks for the phase list only");
+      assert.equal(root.findAll("[data-task-id]").length, 0, "landing shows no task nodes");
+      assert.match(root.textContent, /phase-16/);
+      go("#/?phase=phase-17");
       await waitFor(() => root.textContent.includes("Phase 17 board"));
       assert.match(root.textContent, /Phase 17 board/);
+      assert.deepEqual(requested, ["/api/phases", "/api/workflow?phase=phase-17"], "a phase view asks for its own phase only");
       const drawer = root.findAll("aside")[0];
       const scrim = root.findAll("button").find((button) => button.getAttribute("aria-label") === "Close task details");
       assert.ok(drawer.classList.values.has("fixed"), "drawer is viewport-fixed");
@@ -125,29 +134,25 @@ test("browser smoke serves board assets and route behavior without write methods
       assert.equal(scrim.getAttribute("tabindex"), "-1");
       const graph = root.findAll("svg")[0];
       assert.equal(graph.getAttribute("aria-label"), "Task dependency flow");
-      assert.equal(root.findAll("[data-task-id]").length, 2, "two task node groups are rendered");
-      assert.equal(root.findAll("[data-edge-from]").length, 1, "one dependency edge is rendered");
+      assert.equal(root.findAll("[data-task-id]").length, 1, "one task node group is rendered for the phase");
       const initialViewBox = graph.getAttribute("viewBox");
       root.findAll("button").find((button) => button.getAttribute("aria-label") === "Zoom in task flow").click();
       assert.notEqual(graph.getAttribute("viewBox"), initialViewBox);
       root.findAll("button").find((button) => button.getAttribute("aria-label") === "Fit task flow to view").click();
       assert.equal(graph.getAttribute("viewBox"), initialViewBox);
-      const phase = root.findAll("select")[0];
-      phase.value = "phase-16";
-      phase.dispatchEvent({ type: "change", target: phase });
+      go("#/?phase=phase-16");
       await waitFor(() => root.textContent.includes("Phase 16 legacy task"));
       assert.doesNotMatch(root.textContent, /Phase 17 board/);
       assert.match(root.textContent, /Phase 16 legacy task/);
 
-       globalThis.location.hash = "#/tasks/task-0001?phase=phase-16";
-       globalThis.window.dispatchEvent({ type: "hashchange" });
+       go("#/tasks/task-0001?phase=phase-17");
        await waitFor(() => root.textContent.includes("Handoff timeline"));
        assert.match(root.textContent, /Handoff timeline/);
        assert.equal(drawer.getAttribute("inert"), undefined);
        assert.equal(scrim.getAttribute("inert"), undefined);
        const closeTask = harness.document.body.findAll("button").find((button) => button.textContent === "×");
        closeTask.dispatchEvent({ type: "keydown", key: "Escape", preventDefault: () => {} });
-       assert.equal(globalThis.location.hash, "#/?phase=phase-16");
+       assert.equal(globalThis.location.hash, "#/?phase=phase-17");
        globalThis.window.dispatchEvent({ type: "hashchange" });
        await waitFor(() => root.findAll("[data-task-id]").length === 1);
        assert.equal(drawer.getAttribute("inert"), "");
@@ -157,8 +162,9 @@ test("browser smoke serves board assets and route behavior without write methods
       assert.match(timeline.textContent, /worker.*reviewer/);
       assert.equal(root.findAll("button").filter((button) => button.getAttribute("aria-label") === "Open handoff 1 details").length, 1);
       globalThis.history.back();
-      await waitFor(() => root.findAll("[data-task-id]").length === 1);
-      assert.match(root.textContent, /Phase 17 board/);
+      await waitFor(() => root.textContent.includes("phase-16"));
+      assert.match(root.textContent, /phase-16/, "Back returns to the landing page");
+      assert.equal(root.findAll("[data-task-id]").length, 0);
       globalThis.history.forward();
       await waitFor(() => root.textContent.includes("Handoff timeline"));
       assert.match(root.textContent, /Handoff timeline/);
@@ -190,17 +196,18 @@ test("browser smoke serves board assets and route behavior without write methods
       await waitFor(() => harness.scrollCalls.some((value) => value === 321));
       assert.ok(harness.scrollCalls.some((value) => value === 321));
 
-      globalThis.location.hash = "#/tasks/task-0002";
-      globalThis.window.dispatchEvent({ type: "hashchange" });
+      go("#/tasks/task-0002");
       await waitFor(() => root.textContent.includes("No handoffs recorded for this task yet"));
       assert.match(root.textContent, /No handoffs recorded for this task yet/);
-      globalThis.location.hash = "#/tasks/stale-task";
-      globalThis.window.dispatchEvent({ type: "hashchange" });
+      assert.equal(globalThis.location.hash, "#/tasks/task-0002?phase=phase-16", "a task link without a phase gets its phase");
+      go("#/tasks/stale-task");
       await waitFor(() => root.textContent.includes("Task not found"));
       assert.match(root.textContent, /Task not found/);
+      go("#/?phase=nope");
+      await waitFor(() => root.textContent.includes("Phase not found"));
+      assert.match(root.textContent, /Phase not found/);
 
-      globalThis.location.hash = "";
-      globalThis.window.dispatchEvent({ type: "hashchange" });
+      go("#/?phase=phase-16");
       await waitFor(() => root.findAll("[data-task-id]").length === 1);
       root.findAll("[data-task-id]")[0].click();
        assert.equal(globalThis.location.hash, "#/tasks/task-0002?phase=phase-16");
@@ -209,6 +216,8 @@ test("browser smoke serves board assets and route behavior without write methods
       assert.match(root.textContent, /Handoff timeline/);
       globalThis.location.hash = "";
       globalThis.window.dispatchEvent({ type: "hashchange" });
+      await waitFor(() => root.textContent.includes("phase-17"));
+      assert.ok(!requested.includes("/api/workflow"), "the UI never asks for the unfiltered workflow");
       await waitFor(() => root.findAll("button").some((button) => /theme/i.test(button.textContent)));
       const theme = root.findAll("button").find((button) => /theme/i.test(button.textContent));
       theme.click();
