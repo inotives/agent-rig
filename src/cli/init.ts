@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -124,6 +124,7 @@ function scaffold(cwd: string, options: { agents: Agent[]; addProjectGitignore: 
   mkdirSync(join(root, "human"), { recursive: true });
   writeFileSync(join(root, "_shared", "notes", ".gitkeep"), "", "utf8");
   writeFileSync(join(root, "_shared", "tools", ".gitkeep"), "", "utf8");
+  installSandboxRunner(join(root, "_shared", "tools"));
   writeFileSync(join(root, "_shared", "tasks", ".gitkeep"), "", "utf8");
   seedProfiles(root);
 
@@ -172,10 +173,18 @@ function initOption(args: string[], name: string) {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
+function installSandboxRunner(toolsDir: string) {
+  const source = readFileSync(join(templateRoot, "tools", "sandbox-run.sh"), "utf8");
+  const target = join(toolsDir, "sandbox-run.sh");
+  writeFileSync(target, source, "utf8");
+  chmodSync(target, 0o755);
+}
+
 function contextMarkdown(cwd: string) {
   const project = detectProject(cwd);
   const readme = project.hasReadme ? "\nREADME: ./README.md\n" : "";
-  return `# Project Context\n\nProject: ${project.name}\nType: ${project.type}\n${readme}`;
+  const safeOperations = readFileSync(join(templateRoot, "safe-operations.md"), "utf8");
+  return `# Project Context\n\nProject: ${project.name}\nType: ${project.type}\n${readme}\n${safeOperations}`;
 }
 
 function addGitignoreEntry(cwd: string, entry: string) {

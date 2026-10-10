@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync, readdirSync, symlinkSync, chmodSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync, readdirSync, symlinkSync, chmodSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -236,6 +236,15 @@ test("init --yes creates solo Codex worker scaffold", () => {
   assert.equal(readFileSync(join(cwd, ".agent-rig", ".creds", ".gitignore"), "utf8"), "*\n!.gitignore\n!*.toml\n!*.env.example\n");
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "skills", "find-skills")));
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "skills", "handoff")));
+});
+
+test("init installs the executable sandbox runner", () => {
+  const cwd = tempProject();
+  const result = run(["init", "--yes"], cwd);
+  assert.equal(result.status, 0, result.stderr);
+  const installed = join(cwd, ".agent-rig", "_shared", "tools", "sandbox-run.sh");
+  assert.equal(readFileSync(installed, "utf8"), readFileSync(new URL("../../templates/tools/sandbox-run.sh", import.meta.url), "utf8"));
+  assert.equal(statSync(installed).mode & 0o777, 0o755);
 });
 
 test("init accepts and persists a validated project identifier", () => {
