@@ -93,8 +93,6 @@ Use the planner-manager contract in `.agent-rig/_shared/context.md`. Ask one dec
 
 Create and maintain the phase and implementation planning documents under `docs/` during the grilling session. These documents remain the canonical planning artifacts and are not migrated into the workflow store. After the plan is approved, break it into small tasks with explicit dependencies and a final integrated-review task. Keep downstream tasks blocked; set only dependency-free foundation tasks to `ready` and assign them to worker agents. Use the project-local `agent-rig tasks ...` CLI for task and handoff mutations. Use `agent-rig tasks create "<title>"` to capture implementation work and refine each generated Markdown task before making it ready. In SQLite mode, do not edit migrated task or handoff Markdown; it is historical reference only.
 
-The planner-manager directly performs the final integrated review, routes repairs through the same worker and independent reviewer cycle, and owns final phase acceptance. Child agents do not start nested AgentRig loops.
-
 If implementation or review exposes a limitation that changes the plan, pause the affected task graph, discuss the finding with the human, update the documents under `docs/`, and create or revise tasks only after the revised plan is accepted.
 
 Create or update ADRs only for hard-to-reverse decisions, surprising tradeoffs, or decisions future contributors need to understand.

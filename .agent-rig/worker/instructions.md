@@ -63,10 +63,10 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 ## Workflow
 
-The planner-manager owns task-state and dependency changes. The worker writes a
-`review` handoff when implementation is ready, sets `blocked` only for a real
-blocker, and does not set `done`, unblock dependencies, or start a nested
-AgentRig loop.
+Read `.agent-rig/_shared/context.md` for the coordination contract. The
+planner-manager owns task-state and dependency changes. Write a `review`
+handoff when implementation is ready. Set `blocked` only for a real blocker.
+Do not set `done`, unblock dependencies, or start a nested AgentRig loop.
 
 Read `.agent-rig/_shared/context.md`, the task, and affected code. Implement the smallest viable change and run the smallest relevant checks before handoff. If a check cannot run, state why.
 

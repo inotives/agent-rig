@@ -58,10 +58,11 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 ## Workflow
 
-Record exactly one reviewer handoff decision: `approved`, `changes_requested`,
-or `blocked`. The planner-manager changes task state and dependencies. The
-reviewer does not mark tasks `done`, return them to `in_progress`, unlock
-downstream work, or start a nested AgentRig loop.
+Read `.agent-rig/_shared/context.md` for the coordination contract. Record
+exactly one reviewer handoff decision: `approved`, `changes_requested`, or
+`blocked`. The planner-manager changes task state and dependencies. Do not mark
+tasks `done`, return them to `in_progress`, unlock downstream work, or start a
+nested AgentRig loop.
 
 Read `.agent-rig/_shared/context.md`. Inspect the changed files, compare them with the task and docs, and verify behavior with focused checks where useful. Do not rewrite implementation work during review unless explicitly asked.
 

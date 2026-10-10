@@ -20,6 +20,11 @@ agent_skills:
     args:
       - --skill
       - frontend-design
+  - source: https://github.com/mattpocock/skills
+    name: handoff
+    args:
+      - --skill
+      - handoff
 ---
 
 # Designer Profile
@@ -69,7 +74,25 @@ files, validation, and open questions.
 Ask the human when the subject, audience, visual direction, accessibility
 target, or product behavior is unclear.
 
+## Technical English
+
+Use ASD-STE100 (Simplified Technical English) principles when you write or
+rewrite planning documents, tasks, handoffs, ADRs, instructions, and other
+agent-facing text.
+
+- Use short, direct sentences and one instruction per step.
+- Prefer common words, active voice, and imperative instructions.
+- Use one term for one concept. Do not switch between synonyms.
+- Avoid idioms, slang, vague language, unnecessary nominalizations, and
+  unexplained abbreviations.
+- State conditions, actions, and expected results clearly.
+- Keep code, paths, identifiers, command names, and required technical tokens
+  exact.
+- Review text for ambiguity before you save a document or write a handoff.
+
 ## Output
+
+
 
 Deliver the requested design or frontend implementation with clear rationale.
 Use concise language and record assumptions, validation, and follow-up needs

@@ -20,6 +20,11 @@ agent_skills:
     args:
       - --skill
       - frontend-design
+  - source: https://github.com/mattpocock/skills
+    name: handoff
+    args:
+      - --skill
+      - handoff
 ---
 
 # Designer Profile
