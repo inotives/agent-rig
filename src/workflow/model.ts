@@ -73,6 +73,20 @@ export function validateTaskTransition(role: string, currentStatus: string, next
 export type WorkflowTaskQuery = {
   status?: string;
   assignedTo?: string;
+  /** Resolved phase, as given by `resolveTaskPhase` without a file name. */
+  phase?: string;
+};
+
+export const taskStatuses = ["todo", "ready", "in_progress", "blocked", "review", "done"] as const;
+
+export type TaskStatus = (typeof taskStatuses)[number];
+
+export type PhaseSummary = {
+  phase: string;
+  total: number;
+  counts: Record<TaskStatus, number>;
+  /** Latest `updatedOn` among the tasks of the phase ("" when none has a value). */
+  latestUpdatedOn: string;
 };
 
 /** Resolve the UI-facing phase without persisting legacy inference. */
@@ -80,4 +94,21 @@ export function resolveTaskPhase(task: Pick<WorkflowTask, "phase" | "title">, so
   if (task.phase?.trim()) return task.phase.trim();
   const token = `${task.title} ${sourceFilename}`.match(/(?:^|[^a-z0-9])phase(?:-|\s)(\d+)\b/i);
   return token ? `phase-${token[1]}` : "Unassigned";
+}
+
+/** Group tasks by resolved phase. Both providers use this, so their results are equal. */
+export function summarizePhases(tasks: Iterable<Pick<WorkflowTask, "phase" | "title" | "status" | "updatedOn">>): PhaseSummary[] {
+  const byPhase = new Map<string, PhaseSummary>();
+  for (const task of tasks) {
+    const phase = resolveTaskPhase(task);
+    let summary = byPhase.get(phase);
+    if (!summary) {
+      summary = { phase, total: 0, counts: { todo: 0, ready: 0, in_progress: 0, blocked: 0, review: 0, done: 0 }, latestUpdatedOn: "" };
+      byPhase.set(phase, summary);
+    }
+    summary.total += 1;
+    if ((taskStatuses as readonly string[]).includes(task.status)) summary.counts[task.status as TaskStatus] += 1;
+    if (task.updatedOn > summary.latestUpdatedOn) summary.latestUpdatedOn = task.updatedOn;
+  }
+  return [...byPhase.values()].sort((a, b) => a.phase.localeCompare(b.phase));
 }

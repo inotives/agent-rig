@@ -2,11 +2,13 @@ import { join } from "node:path";
 import { MarkdownWorkflowStore } from "./markdown-store.js";
 import { SQLiteWorkflowStore } from "./sqlite-store.js";
 import { readWorkspaceWorkflowConfig } from "./config.js";
-import type { ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
+import type { PhaseSummary, ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
 
 export interface WorkflowStore {
   getTask(projectIdentifier: ProjectIdentifier, taskId: string): WorkflowTask | undefined;
   listTasks(projectIdentifier: ProjectIdentifier, query?: WorkflowTaskQuery): WorkflowTask[];
+  /** One summary per resolved phase, sorted by phase name. */
+  listPhaseSummaries(projectIdentifier: ProjectIdentifier): PhaseSummary[];
   createTask(task: WorkflowTask): WorkflowTask;
   updateTask(projectIdentifier: ProjectIdentifier, taskId: string, patch: WorkflowTaskPatch): void;
   updateTaskWithHandoff(

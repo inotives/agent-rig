@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { validateNewHandoff, validateTaskTransition } from "./model.js";
-import type { ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
+import { resolveTaskPhase, summarizePhases, validateNewHandoff, validateTaskTransition } from "./model.js";
+import type { PhaseSummary, ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
 import type { WorkflowStore } from "./store.js";
 
 const legacyHandoffFilename = /^\d{4}-\d{2}-\d{2}-(?:\d{4}|task-[a-z0-9-]+)_(?:.+_)?[a-z0-9-]+_[a-z][a-z0-9-]*\.md$/;
@@ -43,8 +43,12 @@ export class MarkdownWorkflowStore implements WorkflowStore {
     const ids = new Set(parsed.map(({ metadata }) => String(metadata.id ?? "")));
     return parsed
       .map(({ file, metadata, body }) => this.toTask(file, metadata, body, done, ids))
-      .filter((task) => (typeof query.status === "undefined" || task.status === query.status) && (typeof query.assignedTo === "undefined" || task.assignedTo === query.assignedTo))
+      .filter((task) => (typeof query.status === "undefined" || task.status === query.status) && (typeof query.assignedTo === "undefined" || task.assignedTo === query.assignedTo) && (typeof query.phase === "undefined" || resolveTaskPhase(task) === query.phase))
       .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  listPhaseSummaries(projectIdentifier: ProjectIdentifier): PhaseSummary[] {
+    return summarizePhases(this.listTasks(projectIdentifier));
   }
 
   createTask(task: WorkflowTask): WorkflowTask {
