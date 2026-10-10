@@ -177,13 +177,51 @@ does not open a browser automatically. The board reads the active workflow
 provider and never mutates tasks or handoffs. Use the `agent-rig tasks ...`
 commands for all workflow changes.
 
-The single-page board filters tasks by phase and status, opens task details in
-a side panel, shows handoffs in a searchable timeline, and opens handoff
-details in a modal. It supports light and dark themes and preserves the
-selected phase during browser refresh.
+The board has two pages.
+
+- The landing page lists the phases as cards. Each card shows the phase name,
+  an `active` or `complete` badge, a progress bar with "N of M done", chips for
+  the non-zero status counts, the time of the last update, and a Detail button.
+  Phases with open work come first. The `Unassigned` card is last.
+- The phase view shows the task flow of one phase. The header has a breadcrumb
+  ("All phases / Phase 25"), the state badge, and the progress. The page has
+  graph search, status and agent filters, Collapse done, a task side panel, and
+  a searchable handoff timeline with a handoff modal.
+
+The landing page loads only the phase summaries. The phase view loads only the
+tasks of its phase. The graph shows only the tasks of the phase. A task with
+dependencies in other phases shows an "N external" marker. The task panel lists
+each external dependency with its phase. A click on it opens that task in its
+own phase view. Both pages support light and dark themes.
+
+| URL | Page |
+|---|---|
+| `#/` | Landing page with phase cards. |
+| `#/?phase=<phase>` | Phase view, for example `#/?phase=phase-25`. |
+| `#/tasks/<id>?phase=<phase>` | Task panel inside its phase view. |
+| `#/tasks/<id>` | The UI reads the phase of the task, then opens the task in its phase view. |
+
+An unknown phase shows a "phase not found" message with a link back to the
+landing page.
+
+The UI reads these endpoints:
+
+| Endpoint | Response |
+|---|---|
+| `GET /api/phases` | One summary per phase: counts by status, total, and the latest update. No task rows. |
+| `GET /api/workflow?phase=<phase>` | The tasks of one phase, with `depends_on`. An unknown phase returns `404`. |
+| `GET /api/tasks/<id>` | One task with its details. |
+| `GET /api/tasks/<id>/handoffs` | The handoffs of one task. |
+
+`GET /api/workflow` without `phase` still returns all tasks. The UI does not
+call it.
 
 <p align="center">
-  <img src="docs/_images/agent-rig-ui-ss.png" alt="AgentRig task board in the dark theme: the task-flow graph highlights the lineage of the selected task, and the task details are open in a side panel" width="900">
+  <img src="docs/_images/agent-rig-ui-landing.png" alt="AgentRig landing page: a grid of phase cards, each with a state badge, a progress bar, status chips, the last update time, and a Detail button" width="900">
+</p>
+
+<p align="center">
+  <img src="docs/_images/agent-rig-ui-phase.png" alt="AgentRig phase view in the dark theme: the breadcrumb header, the task-flow graph with the lineage of the selected task, and a side panel that lists a dependency in another phase" width="900">
 </p>
 
 The frontend is packaged as static assets. From a repository checkout,
