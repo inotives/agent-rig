@@ -319,7 +319,7 @@ test("board has one status legend, inside the graph", () => {
 
 function fakeBrowser({ hash, respond }) {
   class Element {
-    constructor(tag) { this.tagName = tag; this.children = []; this.dataset = {}; this.classList = { toggle() {} }; this.textContent = ""; }
+    constructor(tag) { this.tagName = tag; this.children = []; this.dataset = {}; this.classList = { toggle() {} }; this.textContent = ""; this.value = ""; }
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
     remove() {}
@@ -493,5 +493,40 @@ test("a failed landing refresh keeps the last good cards and offers Retry", asyn
     assert.ok(browser.texts().some((value) => value.includes("Showing last successful data")));
     assert.ok(browser.texts().includes("Retry"));
     assert.equal(browser.links().filter((link) => link.textContent === "Detail").length, 2);
+  } finally { browser.restore(); }
+});
+
+test("the phase dropdown is removed and the breadcrumb is shown on a phase page", async () => {
+  const source = readFileSync(new URL("../../../src/ui/pages/task-board/index.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /Filter by phase|createElement\("select"\)|new Option/);
+  const browser = fakeBrowser({ hash: "#/?phase=phase-25", respond: (path) => path.startsWith("/api/workflow") ? { project_identifier: "agent-rig", phases: ["phase-25"], tasks: [{ ...task("task-0090", "high", "2026-10-06", "phase-25"), status: "done", depends_on: ["task-0088"] }, task("task-0091", "high", "2026-10-06", "phase-25")] } : respondFor(path) });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.ok(browser.texts().includes("Phase 25"));
+    assert.ok(browser.texts().some((value) => value === "1 of 2 done"));
+    assert.ok(browser.texts().includes("active"));
+    assert.ok(browser.links().some((link) => link.href === "#/" && link.textContent === "All phases"));
+  } finally { browser.restore(); }
+});
+
+test("the task panel lists external dependencies of the open task", async () => {
+  const respond = (path) => {
+    if (path.startsWith("/api/workflow?phase=")) return { project_identifier: "agent-rig", phases: ["phase-25"], tasks: [{ ...task("task-0090", "high", "2026-10-06", "phase-25"), depends_on: ["task-0088", "task-0077"] }] };
+    if (path === "/api/tasks/task-0090") return { task: { ...task("task-0090", "high", "2026-10-06", "phase-25"), body: "", depends_on: ["task-0088", "task-0077"], dependency_ready: true, blocked_by: [], created_by: "planner", created_on: "2026-10-06", metadata: {} } };
+    if (path === "/api/tasks/task-0090/handoffs") return { handoffs: [] };
+    if (path === "/api/tasks/task-0088") return { task: { ...task("task-0088", "high", "2026-10-06", "phase-24"), title: "Earlier work", status: "done", body: "", depends_on: [], dependency_ready: true, blocked_by: [], created_by: "planner", created_on: "2026-10-06", metadata: {} } };
+    if (path === "/api/tasks/task-0077") return { ok: false, status: 404, json: async () => ({}) };
+    throw new Error(`unexpected request ${path}`);
+  };
+  const browser = fakeBrowser({ hash: "#/tasks/task-0090?phase=phase-25", respond });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/workflow?phase=phase-25", "/api/tasks/task-0090", "/api/tasks/task-0090/handoffs", "/api/tasks/task-0088", "/api/tasks/task-0077"]);
+    assert.ok(browser.texts().includes("Dependencies in other phases"));
+    assert.ok(browser.texts().includes("Earlier work"));
+    assert.ok(browser.texts().includes("not found"));
+    assert.ok(browser.links().some((link) => link.href === "#/tasks/task-0088?phase=phase-24"));
   } finally { browser.restore(); }
 });

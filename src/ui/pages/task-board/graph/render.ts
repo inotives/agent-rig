@@ -1,5 +1,6 @@
 import { TaskSummaryDto } from "../../../core/contracts.js";
 import { computeEdgePaths } from "./edges.js";
+import { externalDependencyLabel, externalMarkerText } from "./external.js";
 import { ARROW_FOCUS_ID, ARROW_ID, edgeMarker } from "./focus.js";
 import { TaskGraphLayout, TaskGraphNode } from "./layout.js";
 
@@ -43,9 +44,9 @@ export function graphNodeText(task: TaskSummary) {
   return { id: task.id, title: wrapGraphTitle(task.title ?? ""), status: task.status.replaceAll("_", " "), agent: task.assigned_to || "unassigned", priority: task.priority, handoffs: String(task.handoff_count ?? 0) };
 }
 
-export function graphNodeAriaLabel(task: TaskSummary) {
+export function graphNodeAriaLabel(task: TaskSummary, external = 0) {
   const count = task.handoff_count ?? 0;
-  return `${task.id}: ${task.title}; status ${task.status}; agent ${task.assigned_to || "unassigned"}; priority ${task.priority}; ${count} handoff${count === 1 ? "" : "s"}`;
+  return `${task.id}: ${task.title}; status ${task.status}; agent ${task.assigned_to || "unassigned"}; priority ${task.priority}; ${count} handoff${count === 1 ? "" : "s"}${external > 0 ? `; ${externalDependencyLabel(external)}` : ""}`;
 }
 
 function svg<K extends keyof SVGElementTagNameMap>(tag: K, attributes: Record<string, string> = {}) {
@@ -64,8 +65,17 @@ function renderEdges(layout: TaskGraphLayout) {
 export type GraphNodeHandlers = { onSelect: (id: string) => void; onPreview: (element: Element, task: TaskSummary) => void; onPreviewEnd: () => void };
 
 function nodeGroup(item: TaskGraphNode, selected: boolean) {
-  const group = svg("g", { tabindex: "0", role: "button", "aria-label": graphNodeAriaLabel(item.task), transform: `translate(${item.x},${item.y})`, class: "cursor-pointer outline-none", "data-task-id": item.task.id });
+  const group = svg("g", { tabindex: "0", role: "button", "aria-label": graphNodeAriaLabel(item.task, item.external), transform: `translate(${item.x},${item.y})`, class: "cursor-pointer outline-none", "data-task-id": item.task.id });
   if (selected) group.setAttribute("aria-current", "true");
+  return group;
+}
+/** Small "N external" pill for a task that depends on tasks of other phases. `right` is the x of its right edge and `y` is the text baseline. */
+function externalMarker(count: number, right: number, y: number) {
+  const label = externalMarkerText(count); const width = Math.round(label.length * 5.6 + 12);
+  const group = svg("g", { role: "img", "aria-label": externalDependencyLabel(count), "data-external-marker": "true" });
+  const title = svg("title"); title.textContent = externalDependencyLabel(count);
+  const pill = svg("rect", { x: String(right - width), y: String(y - 11), width: String(width), height: "15", rx: "7.5", class: "fill-base-200 stroke-base-300", "stroke-width": "1" });
+  group.append(title, pill, svgText(label, { x: String(right - width / 2), y: String(y), "text-anchor": "middle", class: "fill-base-content/70 text-[10px] font-medium" }));
   return group;
 }
 function selectedRing(item: TaskGraphNode) { return svg("rect", { x: "-3", y: "-3", width: String(item.width + 6), height: String(item.height + 6), rx: "11", fill: "none", "stroke-width": "2", class: "stroke-primary", "data-selected-ring": "true" }); }
@@ -87,7 +97,7 @@ function renderCompactNode(item: TaskGraphNode, selected: boolean, handlers: Gra
   const markY = item.height / 2;
   const mark = svg("circle", { cx: String(item.width - 16), cy: String(markY), r: "7", class: classes.badge, "data-done-mark": "true" });
   const tick = svg("path", { d: `M ${item.width - 19.5} ${markY} l 2.5 2.5 l 4.5 -5`, fill: "none", "stroke-width": "1.75", "stroke-linecap": "round", "stroke-linejoin": "round", class: "stroke-success-content" });
-  group.append(...(selected ? [selectedRing(item)] : []), card, rail, id, mark, tick);
+  group.append(...(selected ? [selectedRing(item)] : []), card, rail, id, mark, tick, ...(item.external > 0 ? [externalMarker(item.external, item.width - 30, item.height / 2 + 4)] : []));
   wireNode(group, task, handlers);
   return group;
 }
@@ -110,7 +120,7 @@ function renderNode(item: TaskGraphNode, selected: boolean, handlers: GraphNodeH
   const agent = svgText(text.agent, { x: String(16 + badgeWidth + 8), y: String(bottom + 1), class: "fill-base-content/70 text-[11px]" });
   const handoffs = svgText(`⇄ ${text.handoffs}`, { x: String(item.width - 10), y: String(bottom + 1), "text-anchor": "end", class: "fill-base-content/60 text-[11px]" });
   const handoffsTitle = svg("title"); handoffsTitle.textContent = `${text.handoffs} handoffs`; handoffs.append(handoffsTitle);
-  group.append(...(ring ? [ring] : []), card, rail, dot, id, title, badge, badgeText, agent, handoffs);
+  group.append(...(ring ? [ring] : []), card, rail, dot, id, title, badge, badgeText, agent, handoffs, ...(item.external > 0 ? [externalMarker(item.external, item.width - 28, 21)] : []));
   wireNode(group, task, handlers);
   return group;
 }

@@ -93,7 +93,7 @@ test("browser smoke serves board assets and route behavior without write methods
     const html = await (await fetch(`${base}/`)).text();
     const script = await (await fetch(`${base}/ui/pages/task-board/index.js`)).text();
     assert.match(html, /id="app"/);
-    for (const marker of ["Filter by phase", "Search handoffs", "No handoffs recorded", "Task not found", "agent-rig-theme", "#/tasks/"]) assert.match(script, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    for (const marker of ["Search handoffs", "No handoffs recorded", "Task not found", "agent-rig-theme", "#/tasks/"]) assert.match(script, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     const beforeStore = new SQLiteWorkflowStore(join(shared, "workflow.sqlite"), "fixture");
     const before = JSON.stringify(beforeStore.listTasks("fixture"));
     beforeStore.close();
