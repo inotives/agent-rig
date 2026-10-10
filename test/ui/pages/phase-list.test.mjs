@@ -233,3 +233,26 @@ test("the page source sets no HTML from data", () => {
   const source = readFileSync(new URL("../../../src/ui/pages/phase-list/index.ts", import.meta.url), "utf8");
   assert.ok(!/innerHTML|insertAdjacentHTML/.test(source));
 });
+
+test("dayOf and the date filter use the local day of a timestamp, not the UTC day", async () => {
+  const { dayOf } = await import("../../../dist/ui/pages/phase-list/index.js");
+  const before = process.env.TZ;
+  try {
+    // 2026-10-10 20:00 UTC is already 2026-10-11 04:00 in Singapore (UTC+8) and still 2026-10-10 in New York.
+    process.env.TZ = "Asia/Singapore";
+    assert.equal(dayOf("2026-10-10T20:00:00Z"), "2026-10-11");
+    assert.deepEqual(names(filterPhases([summary("p", {}, "2026-10-10T20:00:00Z")], F({ from: "2026-10-11", to: "2026-10-11" }))), ["p"]);
+    assert.deepEqual(names(filterPhases([summary("p", {}, "2026-10-10T20:00:00Z")], F({ to: "2026-10-10" }))), []);
+    process.env.TZ = "America/New_York";
+    assert.equal(dayOf("2026-10-10T20:00:00Z"), "2026-10-10");
+    assert.equal(dayOf("2026-10-11T02:00:00Z"), "2026-10-10");
+    // A date without time keeps its own day in every zone.
+    assert.equal(dayOf("2026-10-10"), "2026-10-10");
+    // Missing or invalid values give no day.
+    assert.equal(dayOf(""), "");
+    assert.equal(dayOf("not a date"), "");
+    assert.equal(dayOf("2026-10-10Tgarbage"), "");
+  } finally {
+    if (before === undefined) delete process.env.TZ; else process.env.TZ = before;
+  }
+});

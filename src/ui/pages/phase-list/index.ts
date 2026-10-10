@@ -127,8 +127,19 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A valid `YYYY-MM-DD` day, or an empty string. */
 function validDay(value: string) { return DAY.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) ? value : ""; }
-/** The day part of a date or a timestamp, or an empty string when there is none. */
-function dayOf(value: string) { return validDay(value.slice(0, 10)); }
+/**
+ * The local calendar day of a date or a timestamp, or an empty string when there is none.
+ * A date has no time zone and stays as it is. A timestamp becomes the day in the viewer's time zone,
+ * the same day that the card shows.
+ */
+export function dayOf(value: string) {
+  if (DAY.test(value)) return validDay(value);
+  if (!DAY.test(value.slice(0, 10))) return "";
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${time.getFullYear()}-${pad(time.getMonth() + 1)}-${pad(time.getDate())}`;
+}
 
 /** Read the filter from the hash query. Unknown or invalid values are ignored. */
 export function parsePhaseFilter(hash: string): PhaseFilter {
