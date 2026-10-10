@@ -29,6 +29,7 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 23. [Phase 23: Graph Polish and Filtering](phase-23-graph-polish-and-filtering.md) — active
 24. [Phase 24: Native Crash and Edge Routing Fixes](phase-24-native-crash-and-edge-routing-fixes.md) — active
 25. [Phase 25: Handoff Timeline Redesign](phase-25-handoff-timeline-redesign.md) — active
+26. [Phase 26: Planner-Manager Worker-Reviewer Contract](phase-26-planner-manager-worker-reviewer-contract.md) — complete
 
 ## Workflow
 

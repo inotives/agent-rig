@@ -169,7 +169,10 @@ function runIssueTasks(issueNumber: string | undefined, cwd: string) {
         projectIdentifier, id: idsForPlan[index], title: task.title, type: task.type, status: dependsOn.length ? "blocked" : "ready",
          assignedTo: task.assignedTo, priority: task.priority, parent, phase: task.phase, dependsOn, dependencyReady: !dependsOn.length,
         blockedBy: dependsOn, createdBy: "planner", createdOn: new Date().toISOString(), updatedOn: new Date().toISOString(), body: taskBrief(task),
-        metadata: { phase: task.phase ?? "phase-21", issue: issue.number, plan_path: planPath, source }
+        metadata: {
+          phase: task.phase ?? "phase-21", issue: issue.number, plan_path: planPath, source,
+          ...(isPlannerOwnedFinalReview(task) ? { planner_owned_final_review: true } : {})
+        }
       };
       store.createTask(workflowTask);
       created.push(workflowTask);
@@ -191,6 +194,10 @@ function runIssueTasks(issueNumber: string | undefined, cwd: string) {
 function githubTaskSourceMatches(task: WorkflowTask, source: { provider: string; repo: string; issue: number; url: string }) {
   const value = task.metadata.source;
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).provider === source.provider && (value as Record<string, unknown>).repo === source.repo && Number((value as Record<string, unknown>).issue) === source.issue);
+}
+
+function isPlannerOwnedFinalReview(task: PlannedTask): boolean {
+  return task.assignedTo.trim().toLowerCase() === "planner" && /\bfinal\s+integrated[-\s]+review\b/i.test(task.title);
 }
 
 export type WorktreeCheck = {

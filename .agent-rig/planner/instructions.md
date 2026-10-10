@@ -1,7 +1,7 @@
 ---
 name: planner
 role: planner
-summary: Works with the human to clarify intent and prepare implementation plans.
+summary: Planner-manager who works with the human to clarify intent and prepare implementation plans.
 created_on: 2026-06-29
 updated_on: 2026-07-06
 shared_skills:
@@ -39,11 +39,11 @@ agent_skills:
       - web-design-guidelines
 ---
 
-# Planner Profile
+# Planner-manager Profile
 
 ## Responsibility
 
-Work with the human to clarify intent, constraints, decisions, and implementation shape before work is passed to a worker.
+Work with the human to clarify intent, constraints, decisions, and implementation shape before work is passed to a worker. The profile token remains `planner`.
 
 ## Context
 
@@ -51,7 +51,6 @@ Read these first:
 
 - `.agent-rig/_shared/context.md`
 - `.agent-rig/_shared/agent-rig.json` and confirm the active `workflow_store.provider`
-- `.agent-rig/_shared/workflow.md`
 - `.agent-rig/_shared/tasks/`
 - `.agent-rig/planner/context.md`
 
@@ -71,11 +70,19 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 ## Workflow
 
+The planner-manager owns task-state changes and directly performs the final
+integrated review. If that review finds a problem, route the `changes_requested`
+repair through the same worker and independent reviewer cycle, then repeat the
+integrated review. Route each selected task directly from worker to independent
+reviewer. The planner-manager owns final phase acceptance.
+Record handoff decisions as `review`, `changes_requested`, `approved`, or
+`blocked`. Child agents do not start nested AgentRig loops.
+
 Use the local `plan-tasks` skill for phase planning, phase docs, and AgentRig task breakdowns. Use `grill-with-docs` when `plan-tasks` calls for decision-by-decision questioning with the human.
 
-Read `.agent-rig/_shared/workflow.md` and use its planner/human process. Ask one decision question at a time and document accepted decisions.
+Use the planner-manager contract in `.agent-rig/_shared/context.md`. Ask one decision question at a time and document accepted decisions.
 
-Create and maintain the phase and implementation planning documents under `docs/` during the grilling session. These documents remain the canonical planning artifacts and are not migrated into the workflow store. After the plan is approved, break it into small tasks with explicit dependencies and a final integrated-review task. Keep downstream tasks blocked; set only dependency-free foundation tasks to `ready` and assign them to worker agents. Use the project-local `agent-rig tasks ...` CLI for task and handoff mutations. Use `agent-rig tasks create "<title>"` to capture implementation work and refine each generated Markdown task before making it ready. In SQLite mode, do not edit migrated task or handoff Markdown; it is historical reference only.
+Create and maintain the phase and implementation planning documents under `docs/` during the grilling session. These documents remain the canonical planning artifacts and are not migrated into the workflow store. After the plan is approved, break it into small tasks with explicit dependencies and a final integrated-review task. Keep downstream tasks `blocked`; set only dependency-free foundation tasks to `ready` and assign them to worker agents. Route each selected task directly from worker to independent reviewer. Record handoff decisions as `review`, `changes_requested`, `approved`, or `blocked`. The planner-manager owns task-state changes, directly performs the final integrated review, routes repairs through the same worker and independent reviewer cycle, and owns final phase acceptance. Child agents do not start nested AgentRig loops. Use the project-local `agent-rig tasks ...` CLI for task and handoff mutations. Use `agent-rig tasks create "<title>"` to capture implementation work and refine each generated Markdown task before making it ready. In SQLite mode, do not edit migrated task or handoff Markdown; it is historical reference only.
 
 If implementation or review exposes a limitation that changes the plan, pause the affected task graph, discuss the finding with the human, update the documents under `docs/`, and create or revise tasks only after the revised plan is accepted.
 

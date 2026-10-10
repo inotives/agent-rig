@@ -27,13 +27,12 @@ export function createWorkflowStore(cwd: string): { store: WorkflowStore; projec
   const config = readWorkspaceWorkflowConfig(cwd);
   if (config.workflow_store.provider === "sqlite") {
     return {
-      store: new SQLiteWorkflowStore(join(cwd, ".agent-rig", "_shared", "workflow.sqlite"), config.project_identifier),
+      store: new SQLiteWorkflowStore(join(cwd, ".agent-rig", "_shared", "workflow.sqlite"), config.project_identifier, { actorRole: process.env.AGENT_RIG_ROLE }),
       projectIdentifier: config.project_identifier
     };
   }
   return {
-    store: new MarkdownWorkflowStore(join(cwd, ".agent-rig"), config.project_identifier),
+    store: new MarkdownWorkflowStore(join(cwd, ".agent-rig"), config.project_identifier, process.env.AGENT_RIG_ROLE),
     projectIdentifier: config.project_identifier
   };
 }
-

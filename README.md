@@ -158,6 +158,9 @@ AGENT_RIG_SKIP_SKILLS=1 agent-rig init --yes
 For task lifecycle, workflow storage, worker-reviewer operation, and GitHub
 issue planning, see [INSTRUCTIONS.md](INSTRUCTIONS.md).
 
+For a backup-first upgrade of an existing deployment, see
+[docs/upgrade-existing-deployment.md](docs/upgrade-existing-deployment.md).
+
 ## Local Task Board UI
 
 Start the read-only task board from the project whose workflow state you want
@@ -278,6 +281,7 @@ it runs `tsc` and the Tailwind/DaisyUI static-asset build in
 
 For future phases, follow the planning and manager workflow in
 [INSTRUCTIONS.md](INSTRUCTIONS.md) and [AGENTS.md](AGENTS.md).
+Complete the final human end-to-end check before marking a phase complete.
 
 ## Repository Layout
 
