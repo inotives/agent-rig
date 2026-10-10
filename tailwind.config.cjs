@@ -1,7 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   darkMode: "class",
-  content: ["./src/ui/core/ui.html", "./src/ui/pages/task-board/index.ts", "./src/ui/pages/task-board/graph/*.ts"],
+  content: ["./src/ui/core/ui.html", "./src/ui/pages/task-board/index.ts", "./src/ui/pages/phase-list/*.ts", "./src/ui/pages/task-board/graph/*.ts"],
   theme: {
     extend: {
       keyframes: {

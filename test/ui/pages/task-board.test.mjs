@@ -447,3 +447,51 @@ test("a failed load keeps the last good phase data and offers Retry", async () =
     assert.ok(browser.texts().some((value) => value.includes("task-0090")) || browser.root.children.length > 0);
   } finally { browser.restore(); }
 });
+
+test("landing shows one Detail link per phase card and makes no task request", async () => {
+  const browser = fakeBrowser({ hash: "#/", respond: respondFor });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/phases"]);
+    assert.ok(browser.texts().includes("Phase 27"));
+    assert.ok(browser.texts().includes("Phase 26"));
+    assert.equal(browser.links().filter((link) => link.textContent === "Detail").length, 2);
+  } finally { browser.restore(); }
+});
+
+test("landing with no phases shows the empty state", async () => {
+  const browser = fakeBrowser({ hash: "#/", respond: () => ({ project_identifier: "agent-rig", phases: [] }) });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.ok(browser.texts().includes("No phases yet"));
+  } finally { browser.restore(); }
+});
+
+test("a landing load error with no data shows Retry and no cards", async () => {
+  let fail = true;
+  const respond = (path) => fail && path === "/api/phases" ? { ok: false, status: 500, json: async () => ({}) } : respondFor(path);
+  const browser = fakeBrowser({ hash: "#/", respond });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.ok(browser.texts().includes("Retry"));
+    assert.equal(browser.links().filter((link) => link.textContent === "Detail").length, 0);
+  } finally { browser.restore(); }
+});
+
+test("a failed landing refresh keeps the last good cards and offers Retry", async () => {
+  let fail = false;
+  const respond = (path) => fail && path === "/api/phases" ? { ok: false, status: 500, json: async () => ({}) } : respondFor(path);
+  const browser = fakeBrowser({ hash: "#/", respond });
+  try {
+    const board = mountBoard(browser.root);
+    await settle();
+    fail = true;
+    await board.refresh(true);
+    assert.ok(browser.texts().some((value) => value.includes("Showing last successful data")));
+    assert.ok(browser.texts().includes("Retry"));
+    assert.equal(browser.links().filter((link) => link.textContent === "Detail").length, 2);
+  } finally { browser.restore(); }
+});

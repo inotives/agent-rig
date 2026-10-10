@@ -1,4 +1,6 @@
 import { HandoffDto, PhasesResponseDto, TaskDetailDto, TaskSummaryDto, WorkflowSummaryDto } from "../../core/contracts.js";
+import { relativeTime } from "../../common/time.js";
+import { renderPhaseCards, renderPhaseSkeleton } from "../phase-list/index.js";
 import { collapseDoneDefault, compactTaskIds } from "./graph/compact.js";
 import { layoutTaskGraph } from "./graph/layout.js";
 import { applyGraphFocus, computeGraphFocus, focusTarget } from "./graph/focus.js";
@@ -15,6 +17,7 @@ export type TaskSummary = TaskSummaryDto;
 export type WorkflowSummary = WorkflowSummaryDto;
 export type TaskDetail = TaskDetailDto;
 export type Handoff = HandoffDto;
+export { relativeTime };
 export type UiRoute = { kind: "board" } | { kind: "task"; taskId: string };
 export type UiLoadState = "idle" | "loading" | "ready" | "error";
 export type UiState = { route: UiRoute; selectedPhase: string | null; selectedTaskId: string | null; loadState: UiLoadState; error: string | null; data?: WorkflowSummary; lastGoodData?: WorkflowSummary; theme: "light" | "dark" };
@@ -193,22 +196,6 @@ const HANDOFF_BADGE_CLASSES: Record<string, string> = { success: "badge-success"
 /** Map a handoff status to a DaisyUI color token. An unknown status is neutral. */
 export function handoffStatusTone(status: string) { return Object.prototype.hasOwnProperty.call(HANDOFF_TONES, status) ? HANDOFF_TONES[status] : "neutral"; }
 
-/** Short English time since `value`. After 30 days, show the date. */
-export function relativeTime(value: string, now: number = Date.now()) {
-  const time = new Date(value).getTime();
-  if (!value) return "—";
-  if (Number.isNaN(time)) return value;
-  const seconds = Math.floor((now - time) / 1000);
-  if (seconds < 60) return "just now";
-  const unit = (amount: number, name: string) => `${amount} ${name}${amount === 1 ? "" : "s"} ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return unit(minutes, "minute");
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return unit(hours, "hour");
-  const days = Math.floor(hours / 24);
-  return days <= 30 ? unit(days, "day") : new Date(time).toLocaleDateString();
-}
-
 /** Plain one-line text from a Markdown message. */
 export function handoffPreviewText(markdown: string) {
   // The preview shows 2 lines. A short slice keeps the regex chain fast on any input.
@@ -379,12 +366,12 @@ function renderTaskDetail(task: TaskDetail, handoffs: Handoff[], onBack: () => v
 
 
 export function mountBoard(root: HTMLElement) { let state = createUiState(); let graphFilter: GraphFilter = EMPTY_FILTER; let collapseChoice: boolean | null = null; let filterPhase = state.selectedPhase; let landing: PhasesResponseDto | undefined; let loadToken = 0; const app = node("div", "min-h-screen bg-base-200 text-base-content transition-colors"); const header = node("header", "navbar border-b border-base-300 bg-base-100"); const headerInner = node("div", "mx-auto flex w-full max-w-screen-2xl flex-wrap items-center justify-between gap-3 px-4 py-4"); const brand = node("div"); const title = node("h1", "text-xl font-bold"); title.textContent = "AgentRig"; const subtitle = node("p", "text-sm italic opacity-70"); subtitle.textContent = "Read-only workflow visibility"; brand.append(title, subtitle); const controls = node("div", "flex items-center gap-2"); const phase = document.createElement("select"); phase.className = "select select-bordered select-sm"; phase.setAttribute("aria-label", "Filter by phase"); const allPhases = node("a", "btn btn-ghost btn-sm"); allPhases.href = "#/"; allPhases.textContent = "All phases"; const refresh = node("button", "btn btn-primary btn-sm"); refresh.type = "button"; refresh.textContent = "Refresh"; const theme = node("button", "btn btn-ghost btn-sm"); theme.type = "button"; theme.addEventListener("click", () => applyTheme(preferredTheme() === "dark" ? "light" : "dark")); controls.append(allPhases, phase, refresh, theme); headerInner.append(brand, controls); header.append(headerInner); const main = node("main", "mx-auto max-w-screen-2xl px-4 py-5"); const status = node("p", "mb-2 text-sm opacity-70"); const board = node("div", "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"); const emptyDetail = node("aside", "card mt-5 bg-base-100 p-5 text-sm opacity-70"); emptyDetail.textContent = "Select a task to view its details."; main.append(status, board, emptyDetail); app.append(header, main); root.replaceChildren(app); setTheme(state.theme, false);
-  function renderLanding(data: PhasesResponseDto) { title.textContent = `AgentRig: ${data.project_identifier}`; phase.classList.toggle("hidden", true); allPhases.classList.toggle("hidden", true); emptyDetail.classList.toggle("hidden", true); board.className = "overflow-x-auto"; const list = node("ul", "menu rounded-box bg-base-100 shadow-sm"); for (const item of data.phases) { const entry = document.createElement("li"); const link = node("a"); link.href = routeHash({ kind: "board" }, item.phase); link.textContent = `${item.phase} · ${item.total} task${item.total === 1 ? "" : "s"} · ${item.counts.done} done`; entry.append(link); list.append(entry); } board.replaceChildren(list); status.textContent = `${data.phases.length} phase${data.phases.length === 1 ? "" : "s"}`; theme.textContent = preferredTheme() === "dark" ? "Light theme" : "Dark theme"; }
+  function renderLanding(data: PhasesResponseDto) { title.textContent = `AgentRig: ${data.project_identifier}`; phase.classList.toggle("hidden", true); allPhases.classList.toggle("hidden", true); emptyDetail.classList.toggle("hidden", true); board.className = ""; board.replaceChildren(renderPhaseCards(data)); status.textContent = `${data.phases.length} phase${data.phases.length === 1 ? "" : "s"}`; theme.textContent = preferredTheme() === "dark" ? "Light theme" : "Dark theme"; }
   function renderBoard() { const current = state.data ?? state.lastGoodData; const selected = state.selectedPhase; if (!current || selected === null) return; title.textContent = `AgentRig: ${current.project_identifier}`; phase.classList.toggle("hidden", false); allPhases.classList.toggle("hidden", false); emptyDetail.classList.toggle("hidden", false); phase.replaceChildren(new Option(selected, selected)); phase.value = selected; const filtered = current.tasks; if (filterPhase !== selected) { filterPhase = selected; graphFilter = EMPTY_FILTER; collapseChoice = null; } if (typeof document.createElementNS === "function") { board.className = "overflow-x-auto"; board.replaceChildren(graphCanvas(sortTasks(filtered), state.selectedTaskId, (id) => { location.hash = routeHash({ kind: "task", taskId: id }, selected); }, graphFilter, (next) => { graphFilter = next; }, collapseChoice ?? collapseDoneDefault(filtered.length), (value) => { collapseChoice = value; renderBoard(); })); } else { board.className = "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"; const grouped = new Map<string, TaskSummary[]>(); for (const task of filtered) grouped.set(task.status, [...(grouped.get(task.status) ?? []), task]); board.replaceChildren(...STATUS_COLUMNS.map((name) => column(name, sortTasks(grouped.get(name) ?? [])))); } status.textContent = `${filtered.length} task${filtered.length === 1 ? "" : "s"} in ${selected}`; theme.textContent = preferredTheme() === "dark" ? "Light theme" : "Dark theme"; }
   async function renderRoute() { const id = state.selectedTaskId; main.replaceChildren(status, board, emptyDetail); if (!id) { if (state.data || state.lastGoodData) renderBoard(); else board.replaceChildren(skeleton()); return; } renderBoard(); emptyDetail.replaceChildren(skeleton()); try { const [taskResponse, handoffResponse] = await Promise.all([getJson<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(id)}`), getJson<{ handoffs: Handoff[] }>(`/api/tasks/${encodeURIComponent(id)}/handoffs`)]); const detail = renderTaskDetail(taskResponse.task, handoffResponse.handoffs, () => history.back()); const taskMetadata = document.createElement("details"); taskMetadata.className = "mt-5 rounded-lg border border-slate-200 bg-white p-4 text-sm dark:border-slate-700 dark:bg-slate-800"; const taskMetadataSummary = document.createElement("summary"); taskMetadataSummary.className = "cursor-pointer font-medium"; taskMetadataSummary.textContent = "Task metadata"; const taskMetadataJson = node("pre", "mt-3 overflow-x-auto text-xs"); taskMetadataJson.textContent = JSON.stringify(taskResponse.task.metadata ?? {}, null, 2); taskMetadata.append(taskMetadataSummary, taskMetadataJson); detail.append(taskMetadata); emptyDetail.replaceChildren(detail); } catch (error) { const empty = node("div", "rounded-lg border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"); empty.textContent = error instanceof Error && error.message === "Task not found" ? "Task not found." : error instanceof Error ? error.message : "Unable to load task."; const back = node("a", "mt-3 inline-block underline"); back.href = routeHash({ kind: "board" }, state.selectedPhase); back.textContent = "Return to board"; empty.append(document.createElement("br"), back); emptyDetail.replaceChildren(empty); } }
   async function fetchAndRender(showLoading = false) {
     const token = ++loadToken; const scrollY = window.scrollY; state = beginUiLoad(state);
-    if (showLoading && !(state.selectedPhase === null ? landing : state.lastGoodData)) board.replaceChildren(skeleton());
+    if (showLoading && !(state.selectedPhase === null ? landing : state.lastGoodData)) { if (state.selectedPhase === null) { board.className = ""; board.replaceChildren(renderPhaseSkeleton()); } else board.replaceChildren(skeleton()); }
     refresh.disabled = true;
     try {
       if (state.route.kind === "task" && state.selectedPhase === null) {

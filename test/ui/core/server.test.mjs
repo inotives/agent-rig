@@ -115,10 +115,10 @@ test("browser smoke serves board assets and route behavior without write methods
       const root = harness.document.root;
       const go = (hash) => { globalThis.location.hash = hash; globalThis.window.dispatchEvent({ type: "hashchange" }); };
        mountSlidingBoard(root);
-      await waitFor(() => root.textContent.includes("phase-17"));
+      await waitFor(() => root.textContent.includes("Phase 17"));
       assert.deepEqual(requested, ["/api/phases"], "landing asks for the phase list only");
       assert.equal(root.findAll("[data-task-id]").length, 0, "landing shows no task nodes");
-      assert.match(root.textContent, /phase-16/);
+      assert.match(root.textContent, /Phase 16/);
       go("#/?phase=phase-17");
       await waitFor(() => root.textContent.includes("Phase 17 board"));
       assert.match(root.textContent, /Phase 17 board/);
@@ -162,8 +162,8 @@ test("browser smoke serves board assets and route behavior without write methods
       assert.match(timeline.textContent, /worker.*reviewer/);
       assert.equal(root.findAll("button").filter((button) => button.getAttribute("aria-label") === "Open handoff 1 details").length, 1);
       globalThis.history.back();
-      await waitFor(() => root.textContent.includes("phase-16"));
-      assert.match(root.textContent, /phase-16/, "Back returns to the landing page");
+      await waitFor(() => root.textContent.includes("2 phases"));
+      assert.match(root.textContent, /Phase 16/, "Back returns to the landing page");
       assert.equal(root.findAll("[data-task-id]").length, 0);
       globalThis.history.forward();
       await waitFor(() => root.textContent.includes("Handoff timeline"));
