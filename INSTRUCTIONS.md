@@ -72,24 +72,31 @@ In SQLite mode, task completion requires a worker handoff followed by a
 reviewer handoff. Use `agent-rig tasks handoff` for manual handoffs. Use
 `--admin-override` only for exceptional human completion.
 
-## Worker-reviewer loop
+## Planner-manager worker-reviewer loop
 
-The planner and human first finalize the phase documents under `docs/`. After
-approval, create dependency-gated tasks. For each selected task:
+The planner-manager and human first finalize the phase documents under `docs/`.
+After approval, create dependency-gated tasks. The planner-manager owns task
+selection, dependency unblocking, and task-state changes. For each selected
+task:
 
-1. The manager starts the assigned worker.
+1. The planner-manager starts the assigned worker.
 2. The worker implements the task and leaves it in `review` or `blocked`.
-3. The manager starts an independent reviewer.
-4. The reviewer leaves the task in `done`, `ready`, or `blocked`.
-5. Findings return to the same worker for focused fixes and re-review.
-6. The manager unblocks the next selected dependent task only after clean review.
-7. A final integrated reviewer checks the complete phase.
+3. The planner-manager starts an independent reviewer after the worker handoff.
+4. The reviewer records one handoff decision: `approved`, `changes_requested`,
+   or `blocked`. The reviewer does not change task status.
+5. For `changes_requested`, the planner-manager returns the same task to
+   `in_progress`, routes the findings to the same worker, and sends the fix
+   through independent review again.
+6. For `approved`, the planner-manager marks the task `done` and unblocks only
+   the next selected dependent task.
+7. The planner-manager runs the final integrated review and repeats the same
+   repair cycle until all acceptance criteria pass.
 
 The normal lifecycle is:
 
 ```text
 ready -> in_progress -> review -> done
-                         \-> ready
+                         \-> in_progress
                          \-> blocked
 ```
 
@@ -99,22 +106,25 @@ single-task adapter.
 
 ### Process boundary
 
-Run the manager loop from a normal host terminal, outside any worker or reviewer
-Codex session. Do not start `agent-rig loop` from inside a Codex task. The
-manager launches the worker and reviewer as separate child processes.
+Run the manager loop from a normal host terminal, outside any worker or
+reviewer task session. Do not start `agent-rig loop` from inside a worker or
+reviewer task. Child agents do not start nested AgentRig loops.
 
-Before starting the loop, verify the child runtime from the same terminal:
+Before starting the loop, verify the selected child runtime from the same
+terminal. Confirm that its executable is available and that its documented
+version command succeeds:
 
 ```sh
 command -v agent-rig
-command -v codex
-codex --version
 agent-rig status
 ```
 
-The terminal must have the required Codex authentication and network access.
-Do not assume permission granted to the parent session is available to a child
-Codex process.
+Use the executable and version command configured for the selected agent
+runtime. Do not assume a specific runtime, model, mode, or vendor.
+
+The terminal must have the authentication and network access required by the
+selected agent runtime. Do not assume permission granted to the parent session
+is available to a child agent.
 
 If a child process fails before changing the task or writing a handoff, treat it
 as an infrastructure failure. Keep a worker task `ready` or a reviewer task
@@ -122,13 +132,13 @@ as an infrastructure failure. Keep a worker task `ready` or a reviewer task
 `blocked` only for a real task blocker or a stale task state after a successful
 child run.
 
-Do not use `--dangerously-bypass-approvals-and-sandbox` as a general fix. If the
-host cannot start child Codex processes, use a separately managed runner or
-perform the task manually while preserving the worker and reviewer handoffs.
+Do not bypass the selected agent runtime's safety controls as a general fix. If
+the host cannot start child agents, use a separately managed runner or perform
+the task manually while preserving the worker and reviewer handoffs.
 
-OpenCode uses its configured default model. AgentRig does not pass `--model` or
-`--auto`. Claude loop execution is unsupported. Live OpenCode smoke testing is
-manual and is not part of CI.
+Each child agent uses its configured runtime. AgentRig does not require a
+specific model, mode, or vendor. Live child-agent smoke testing is manual and
+is not part of CI.
 
 ## GitHub issue planning
 

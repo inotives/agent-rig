@@ -32,10 +32,10 @@ test("top-level help lists the reviewed issue planning commands", () => {
 test("README documents the issue planning approval boundary", () => {
   const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
   assert.match(readme, /plan github-issue.*does not create tasks/i);
-  assert.match(readme, /docs\/plans/);
-  assert.match(readme, /human approves the plan/i);
-  assert.match(readme, /prints a GitHub compare link/i);
-  assert.match(readme, /does not create a pull request automatically/i);
+  assert.match(readme, /plan tasks.*after plan approval/i);
+  assert.match(readme, /plan approve.*Record explicit human approval/i);
+  assert.match(readme, /print its compare link/i);
+  assert.match(readme, /plan tasks.*dependency-gated workflow tasks/i);
   assert.match(readme, /final human end-to-end check/i);
 });
 
@@ -406,6 +406,24 @@ test("plan tasks generates complete dependency-gated tasks and prevents duplicat
   const duplicate = run(["plan", "tasks", "12"], cwd, env);
   assert.equal(duplicate.status, 1);
   assert.match(duplicate.stderr, /Implementation tasks already exist/);
+});
+
+test("plan tasks marks the planner-owned final review and completes it through the CLI", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  writeApprovedPlan(cwd, `${approvedPlanBody()}\n\n### Task 3: Final integrated review\n\n#### Context\n\nReview the complete change.\n\n#### Goal\n\nConfirm phase acceptance.\n\n#### Scope\n\nRun the final checks.\n\n#### Planner Notes\n\nThe planner owns this review.\n\n#### Implementation Plan\n\nInspect the complete diff and test results.\n\n#### Acceptance Criteria\n\nAll phase checks pass.\n\nAssigned To: planner\n`);
+  const env = fakeGh(cwd, [issue]);
+  fakeGit(cwd, "main");
+
+  const generated = run(["plan", "tasks", "12"], cwd, env);
+
+  assert.equal(generated.status, 0, generated.stderr);
+  const task = run(["tasks", "show", "task-0003"], cwd);
+  assert.match(task.stdout, /planner_owned_final_review: true/);
+  assert.equal(run(["tasks", "handoff", "task-0003", "--sender", "planner", "--recipient", "planner", "--status", "approved", "--message", "integrated review passed"], cwd).status, 0);
+  const completed = run(["tasks", "done", "task-0003"], cwd);
+  assert.equal(completed.status, 0, completed.stderr);
+  assert.match(completed.stdout, /Done task-0003/);
 });
 
 test("plan tasks rejects an unapproved plan before creating tasks", () => {

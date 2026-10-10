@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { validateNewHandoff, validateTaskTransition } from "./model.js";
 import type { ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
 import type { WorkflowStore } from "./store.js";
 
@@ -21,7 +22,11 @@ export class MarkdownWorkflowStore implements WorkflowStore {
   private readonly tasksDirectory: string;
   private readonly handoffsDirectory: string;
 
-  constructor(private readonly root: string, private readonly projectIdentifier: ProjectIdentifier) {
+  constructor(
+    private readonly root: string,
+    private readonly projectIdentifier: ProjectIdentifier,
+    private readonly actorRole?: string
+  ) {
     this.tasksDirectory = join(root, "_shared", "tasks");
     this.handoffsDirectory = join(root, "_shared", "handoff_logs");
   }
@@ -56,6 +61,7 @@ export class MarkdownWorkflowStore implements WorkflowStore {
     const record = this.taskRecord(taskId);
     if (!record) throw new Error(`Task not found: ${taskId}`);
     const current = this.toTask(record.file, record.metadata, record.body, new Set(), new Set());
+    if (this.actorRole && patch.status) validateTaskTransition(this.actorRole, current.status, patch.status);
     const next: WorkflowTask = { ...current, ...patch, projectIdentifier };
     next.metadata = patch.metadata ?? current.metadata;
     writeFileSync(record.file, serializeTask(next), "utf8");
@@ -68,9 +74,11 @@ export class MarkdownWorkflowStore implements WorkflowStore {
     handoff: Omit<WorkflowHandoff, "sequence"> & { sequence?: number }
   ): WorkflowHandoff {
     this.assertProject(projectIdentifier);
+    validateNewHandoff(handoff);
     const record = this.taskRecord(taskId);
     if (!record) throw new Error(`Task not found: ${taskId}`);
     const current = this.toTask(record.file, record.metadata, record.body, new Set(), new Set());
+    if (this.actorRole && patch.status) validateTaskTransition(this.actorRole, current.status, patch.status);
     const next: WorkflowTask = { ...current, ...patch, projectIdentifier, metadata: patch.metadata ?? current.metadata };
     const existing = this.listHandoffs(projectIdentifier, taskId);
     const sequence = handoff.sequence && handoff.sequence > existing.length ? handoff.sequence : existing.length + 1;
@@ -96,8 +104,14 @@ export class MarkdownWorkflowStore implements WorkflowStore {
 
   completeTask(projectIdentifier: ProjectIdentifier, taskId: string, administrativeOverride = false): void {
     if (!administrativeOverride) {
+      const task = this.getTask(projectIdentifier, taskId);
       const handoffs = this.listHandoffs(projectIdentifier, taskId).slice(-2);
-      if (handoffs.length < 2 || handoffs[0].sender !== "worker" || handoffs[0].metadata.source_order_conflict || handoffs[1].sender !== "reviewer" || handoffs[1].status !== "done") {
+      const plannerHandoff = handoffs.at(-1);
+      if (task?.metadata.planner_owned_final_review === true && plannerHandoff?.sender === "planner" && plannerHandoff.recipient === "planner" && plannerHandoff.status === "approved") {
+        this.updateTask(projectIdentifier, taskId, { status: "done", updatedOn: new Date().toISOString() });
+        return;
+      }
+      if (handoffs.length < 2 || handoffs[0].sender !== "worker" || handoffs[0].metadata.source_order_conflict || handoffs[1].sender !== "reviewer" || handoffs[1].status !== "approved") {
         throw new Error("Task completion requires worker and reviewer handoffs");
       }
     }
@@ -110,6 +124,7 @@ export class MarkdownWorkflowStore implements WorkflowStore {
 
   addHandoff(handoff: WorkflowHandoff): void {
     this.assertProject(handoff.projectIdentifier);
+    validateNewHandoff(handoff);
     mkdirSync(this.handoffsDirectory, { recursive: true });
     const filename = typeof handoff.metadata.filename === "string"
       ? handoff.metadata.filename

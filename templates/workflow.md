@@ -49,11 +49,11 @@ local workflows do not require GitHub CLI access. Use
 - Keep downstream tasks `blocked`; dependency metadata does not authorize work
   by itself.
 
-## 3. Run Worker And Reviewer Sub-Agents
+## 3. Run The Planner-Manager Worker And Reviewer Flow
 
 For each selected task:
 
-1. Unblock and claim the task for its worker.
+1. The planner-manager unblocks and claims the task for its worker.
 2. The worker reads its profile, task, project docs, relevant prior handoffs,
    and affected code; makes only scoped changes; runs focused checks; sets the
    task to `review`; and writes a worker handoff. The worker does not commit or
@@ -61,12 +61,15 @@ For each selected task:
 3. An independent reviewer reads the reviewer profile, task, worker handoff,
    project docs, and current diff; verifies the acceptance criteria without
    editing implementation files; and writes a reviewer handoff.
-4. If review is clean, mark the task `done` and unlock only the next selected
-   dependent task.
-5. If review finds an issue, return the same task to `in_progress`. A worker
-   reads both handoffs, applies the focused fix, adds regression coverage when
-   needed, verifies it, and writes a new handoff. Review again before unlocking
+4. The reviewer records one handoff decision: `approved`, `changes_requested`,
+   or `blocked`. The reviewer does not change task status.
+5. If review is clean, the planner-manager marks the task `done` and unlocks
+   only the next selected dependent task.
+6. If review finds an issue, the planner-manager returns the same task to
+   `in_progress`. The same worker reads both handoffs, applies the focused fix,
+   verifies it, and writes a new handoff. Review again before unlocking
    downstream work.
+7. Child agents do not start nested AgentRig loops.
 
 ## 4. Replan When Reality Changes The Plan
 
@@ -82,10 +85,15 @@ For each selected task:
 
 ## 5. Finish The Phase
 
-- After all implementation tasks pass task-level review, run the final
-  integrated reviewer task against the complete diff and phase acceptance
-  checks.
-- Write a planner handoff with verification evidence and resolved findings.
+- After all implementation tasks pass task-level review, the planner-manager
+  directly runs the final integrated review against the complete diff and phase
+  acceptance checks.
+- If the integrated review finds an issue, the planner-manager routes the
+  `changes_requested` repair through the same worker and independent reviewer
+  cycle, then repeats the integrated review. The planner-manager owns final
+  phase acceptance.
+- Write a planner-manager handoff with verification evidence and resolved
+  findings.
 - Commit, push, or open a pull request only when the human explicitly asks.
 - Complete the final human end-to-end check for discovery, plan review,
   approval, task generation, and the worker-reviewer flow before marking the

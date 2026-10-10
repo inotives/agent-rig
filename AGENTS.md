@@ -161,7 +161,8 @@ For each new phase:
    - Keep downstream tasks `blocked`; dependency metadata alone does not
      authorize them to start.
 
-4. Run the manager-driven worker/reviewer loop.
+4. Run the planner-manager-driven worker/reviewer loop.
+   - The planner-manager owns task selection, dependency unblocking, and final task-state changes.
    - Unblock and claim one selected eligible worker task.
    - Spawn a worker sub-agent using the assigned AgentRig profile. It reads
      the task, project docs, relevant prior handoffs, and affected code; makes
@@ -171,9 +172,9 @@ For each new phase:
      reads the task, worker handoff, project docs, and current diff; verifies
      the acceptance criteria; does not edit implementation files; and writes a
      reviewer handoff.
-   - If review is clean, mark the task `done` and unblock only the next
+   - If review is clean, record the `approved` handoff decision, mark the task `done`, and unblock only the next
      selected dependent task.
-   - If review finds a problem, set the same task back to `in_progress` and
+   - If review finds a problem, record the `changes_requested` handoff decision, set the same task back to `in_progress` and
      spawn a worker to read both handoffs, implement the focused fix, add
      regression coverage where needed, verify it, and write a new handoff.
      Repeat independent review until clean; do not unlock downstream work.
@@ -188,10 +189,14 @@ For each new phase:
      revised predecessors pass review.
 
 5. Complete the phase.
-   - After all implementation tasks pass task-level review, run the final
-     integrated reviewer task against the complete diff and phase acceptance
-     checks.
-   - Write the planner phase handoff with verification evidence and resolved
+    - After all implementation tasks pass task-level review, the planner-manager
+      directly runs the final integrated review against the complete diff and
+      phase acceptance checks.
+    - If the integrated review finds a problem, the planner-manager routes the
+      `changes_requested` repair through the same worker and independent
+      reviewer cycle, then repeats the integrated review. The planner-manager
+      owns final phase acceptance.
+   - Write the planner-manager handoff with verification evidence and resolved
      review findings.
    - Commit, push, or open a pull request only when the human explicitly asks.
    - After merge, archive the completed phase document under `docs/_archived/`

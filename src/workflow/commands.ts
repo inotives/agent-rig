@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { Agent, readAgents, requireWorkspace, validSlug } from "../workspace/workspace.js";
-import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, resolveTaskPhase, serializeTask, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./index.js";
+import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, resolveTaskPhase, serializeTask, validateNewHandoff, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./index.js";
 import { replaceFrontmatter } from "./migration.js";
 
 export type SharedTask = {
@@ -38,6 +39,14 @@ export type LoopRunResult = {
   runDir: string;
 };
 
+type LoopLauncher = (root: string, cwd: string, agent: Agent, task: SharedTask) => LoopRunResult;
+
+const loopLaunchers: Record<string, LoopLauncher> = {
+  codex: runCodexLoop,
+  opencode: runOpenCodeLoop,
+  claude: runClaudeLoop
+};
+
 const taskStatuses = new Set(["todo", "ready", "in_progress", "blocked", "review", "done"]);
 const taskTypes = new Set(["task", "bug", "story", "epic", "chore", "research", "doc"]);
 const priorities = new Set(["low", "normal", "high"]);
@@ -56,6 +65,7 @@ export function runTasks(args: string[], cwd: string) {
   const [command, ...rest] = args;
   if (!command || command === "--help" || command === "-h" || command === "help") return tasksHelp();
   if (command === "create") return tasksCreate(rest, cwd);
+  if (command === "mark-final-review") return tasksMarkFinalReview(rest, cwd);
   if (command === "show") return tasksShow(rest, cwd);
   if (command === "update-body") return tasksUpdateBody(rest, cwd);
   if (command === "set-status") return tasksSetStatus(rest, cwd);
@@ -76,6 +86,7 @@ function tasksHelp() {
 
 Commands:
   create <title>              Create a shared workflow task with --body-file
+  mark-final-review <task-id> Mark an eligible planner-owned final review
   show <task-id>              Print the task as Markdown
   update-body <task-id>       Replace the full task brief with --body-file
   set-status <task-id> <status> [--admin-override]
@@ -141,6 +152,24 @@ function tasksCreate(args: string[], cwd: string) {
       metadata: {}
     });
     console.log(`Created ${created.id}${readWorkspaceProvider(cwd) === "markdown" ? `: ${relative(cwd, join(sharedTasksDir(root), `${created.id}_${slug(title)}.md`))}` : ""}`);
+    return 0;
+  } catch (cause) {
+    return fail(message(cause));
+  }
+}
+
+function tasksMarkFinalReview(args: string[], cwd: string) {
+  try {
+    const [id] = args;
+    if (!id || args.length !== 1) return fail("Usage: agent-rig tasks mark-final-review <task-id>");
+    const task = requireSharedTask(cwd, id);
+    if (task.workflow.assignedTo !== "planner" || !/\bfinal\b.*\breview\b/i.test(task.workflow.title)) {
+      return fail("Only tasks assigned to planner with a final review title can be marked");
+    }
+    task.store.updateTask(task.projectIdentifier, id, {
+      metadata: { ...task.workflow.metadata, planner_owned_final_review: true }
+    });
+    console.log(`Marked ${id} as planner-owned final review`);
     return 0;
   } catch (cause) {
     return fail(message(cause));
@@ -313,7 +342,7 @@ function tasksDone(args: string[], cwd: string) {
     const task = requireSharedTask(cwd, id);
     if (process.env.AGENT_RIG_LOOP_REVIEW_TASK === id) {
       updateSharedTask(task, { ...updates, status: "review", pending_completion: true });
-      console.log(`Pending reviewer completion for ${id}`);
+      console.log(`Recorded reviewer approval for ${id}; planner completion is required.`);
       return 0;
     }
     task.store.completeTask(task.projectIdentifier, id, options.has("--admin-override"));
@@ -358,6 +387,7 @@ function tasksHandoff(args: string[], cwd: string) {
       handoff = { projectIdentifier: task.projectIdentifier, taskId: id, sequence: 0, sender, recipient, status, message, createdAt: new Date().toISOString(), metadata: {} };
     }
     handoff.sequence = task.store.listHandoffs(task.projectIdentifier, id).length + 1;
+    if (!source) validateNewHandoff(handoff);
     task.store.addHandoff(handoff);
     if (source) replaceFrontmatter(resolve(cwd, source), new Date().toISOString());
     console.log(`Recorded handoff ${id} #${handoff.sequence}`);
@@ -542,9 +572,9 @@ export function buildLoopPrompt(cwd: string, agentName: string, taskId: string) 
 }
 
 export function runLoopAgent(root: string, cwd: string, agent: Agent, task: SharedTask): LoopRunResult {
-  if (agent.tool === "codex") return runCodexLoop(root, cwd, agent, task);
-  if (agent.tool === "opencode") return runOpenCodeLoop(root, cwd, agent, task);
-  throw new Error(`Phase 14 loop supports Codex and OpenCode only. ${agent.role} agent "${agent.name}" has tool "${agent.tool}".`);
+  const launcher = loopLaunchers[agent.tool];
+  if (!launcher) throw new Error(`Unsupported loop tool "${agent.tool}" for ${agent.role} agent "${agent.name}". Supported tools: codex, opencode, claude.`);
+  return launcher(root, cwd, agent, task);
 }
 
 function runCodexLoop(root: string, cwd: string, agent: Agent, task: SharedTask): LoopRunResult {
@@ -553,7 +583,7 @@ function runCodexLoop(root: string, cwd: string, agent: Agent, task: SharedTask)
   const runDir = join(root, agent.name, "runs", runId);
   const prompt = assemblePrompt(root, agent, task);
   const lastMessagePath = join(runDir, "last-message.md");
-  const baseArgs = ["exec", "-C", cwd, "--sandbox", "workspace-write"];
+  const baseArgs = ["exec", "--ephemeral", "--ignore-user-config", "-C", cwd, "--sandbox", "workspace-write"];
 
   mkdirSync(runDir, { recursive: true });
   writeFileSync(join(runDir, "prompt.md"), prompt, "utf8");
@@ -562,12 +592,14 @@ function runCodexLoop(root: string, cwd: string, agent: Agent, task: SharedTask)
   const preferredArgs = [...baseArgs, "--output-last-message", lastMessagePath, "-"];
   const fallbackArgs = [...baseArgs, "-"];
   let args = preferredArgs;
-  const env = { ...process.env, ...(agent.role === "reviewer" ? { AGENT_RIG_LOOP_REVIEW_TASK: task.id } : {}) };
+  const codexRuntime = codexLoopEnvironment(agent, task);
+  const env = codexRuntime.env;
   let result = spawnSync("codex", args, { cwd, input: prompt, encoding: "utf8", env });
   if (codexDoesNotSupportLastMessage(result)) {
     args = fallbackArgs;
     result = spawnSync("codex", args, { cwd, input: prompt, encoding: "utf8", env });
   }
+  try { rmSync(codexRuntime.home, { recursive: true, force: true }); } catch { /* preserve the child result */ }
   if (!existsSync(lastMessagePath)) writeFileSync(lastMessagePath, "", "utf8");
 
   const finalTask = requireSharedTask(cwd, task.id);
@@ -578,6 +610,25 @@ function runCodexLoop(root: string, cwd: string, agent: Agent, task: SharedTask)
   const failureSummary = exitStatus === 0 ? "" : loopFailureMessage(agent.tool, exitStatus, agent.name, agent.role, task.id, stderr, error);
   writeJson(join(runDir, "result.json"), loopResultRecord(agent, task.id, args, exitStatus, started, finalTask.status, stdout, stderr, error, failureSummary));
   return { exitStatus, stdout, stderr, error, failureSummary, runDir };
+}
+
+function codexLoopEnvironment(agent: Agent, task: SharedTask) {
+  const runtimeRoot = process.platform === "darwin" ? "/private/tmp" : tmpdir();
+  const home = mkdtempSync(join(runtimeRoot, "agent-rig-codex-home-"));
+  const configuredCodexHome = process.env.CODEX_HOME || (process.env.HOME ? join(process.env.HOME, ".codex") : "");
+  const codexHome = join(home, ".codex");
+  mkdirSync(codexHome);
+  const authFile = configuredCodexHome ? join(configuredCodexHome, "auth.json") : "";
+  if (authFile && existsSync(authFile)) {
+    try {
+      symlinkSync(authFile, join(codexHome, "auth.json"));
+    } catch {
+      // Let Codex report an authentication failure if the link cannot be created.
+    }
+  }
+  const env = { ...process.env };
+  delete env.CODEX_HOME;
+  return { env: { ...env, HOME: home, AGENT_RIG_ROLE: agent.role, ...(agent.role === "reviewer" ? { AGENT_RIG_LOOP_REVIEW_TASK: task.id } : {}) }, home };
 }
 
 function runOpenCodeLoop(root: string, cwd: string, agent: Agent, task: SharedTask): LoopRunResult {
@@ -600,13 +651,34 @@ function runOpenCodeLoop(root: string, cwd: string, agent: Agent, task: SharedTa
 
   mkdirSync(runDir, { recursive: true });
   writeFileSync(promptPath, prompt, "utf8");
-  const result = spawnSync("opencode", args, { cwd, encoding: "utf8", env: { ...process.env, ...(agent.role === "reviewer" ? { AGENT_RIG_LOOP_REVIEW_TASK: task.id } : {}) } });
+  const result = spawnSync("opencode", args, { cwd, encoding: "utf8", env: { ...process.env, AGENT_RIG_ROLE: agent.role, ...(agent.role === "reviewer" ? { AGENT_RIG_LOOP_REVIEW_TASK: task.id } : {}) } });
   const finalTask = requireSharedTask(cwd, task.id);
   const exitStatus = result.status ?? (result.error ? 1 : 0);
   const stdout = spawnText(result.stdout);
   const stderr = spawnText(result.stderr);
   const error = result.error ? message(result.error) : "";
   writeFileSync(lastMessagePath, stdout, "utf8");
+  const failureSummary = exitStatus === 0 ? "" : loopFailureMessage(agent.tool, exitStatus, agent.name, agent.role, task.id, stderr, error);
+  writeJson(join(runDir, "result.json"), loopResultRecord(agent, task.id, args, exitStatus, started, finalTask.status, stdout, stderr, error, failureSummary));
+  return { exitStatus, stdout, stderr, error, failureSummary, runDir };
+}
+
+function runClaudeLoop(root: string, cwd: string, agent: Agent, task: SharedTask): LoopRunResult {
+  const started = new Date();
+  const runId = nextRunId(join(root, agent.name, "runs"), task.id, started);
+  const runDir = join(root, agent.name, "runs", runId);
+  const prompt = assemblePrompt(root, agent, task);
+  const args = ["-p"];
+
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, "prompt.md"), prompt, "utf8");
+  const result = spawnSync("claude", args, { cwd, input: prompt, encoding: "utf8", env: { ...process.env, AGENT_RIG_ROLE: agent.role, ...(agent.role === "reviewer" ? { AGENT_RIG_LOOP_REVIEW_TASK: task.id } : {}) } });
+  const finalTask = requireSharedTask(cwd, task.id);
+  const exitStatus = result.status ?? (result.error ? 1 : 0);
+  const stdout = spawnText(result.stdout);
+  const stderr = spawnText(result.stderr);
+  const error = result.error ? message(result.error) : "";
+  writeFileSync(join(runDir, "last-message.md"), stdout, "utf8");
   const failureSummary = exitStatus === 0 ? "" : loopFailureMessage(agent.tool, exitStatus, agent.name, agent.role, task.id, stderr, error);
   writeJson(join(runDir, "result.json"), loopResultRecord(agent, task.id, args, exitStatus, started, finalTask.status, stdout, stderr, error, failureSummary));
   return { exitStatus, stdout, stderr, error, failureSummary, runDir };
@@ -632,27 +704,37 @@ function loopResultRecord(agent: Agent, taskId: string, args: string[], exitStat
 
 export function handleLoopResult(cwd: string, result: LoopRunResult, agent: Agent, taskId: string, handoffCount: number) {
   const task = requireSharedTask(cwd, taskId);
+  const handoffs = task.store.listHandoffs(task.projectIdentifier, task.id);
+  const latestHandoff = handoffs.at(-1);
+  const reviewerDecision = agent.role === "reviewer"
+    && handoffs.length > handoffCount
+    && latestHandoff?.sender === agent.role
+    && ["approved", "changes_requested", "done"].includes(latestHandoff.status);
   if (result.exitStatus !== 0) {
-    blockLoopTask(task, result.failureSummary || loopFailureMessage(agent.tool, result.exitStatus, agent.name, agent.role, taskId, result.stderr, result.error));
+    const reason = result.failureSummary || loopFailureMessage(agent.tool, result.exitStatus, agent.name, agent.role, taskId, result.stderr, result.error);
+    if (isInfrastructureFailure(result)) {
+      retryLoopTask(task, agent, reason);
+    } else {
+      blockLoopTask(task, reason);
+    }
   } else if (agent.role === "worker" && task.status === "in_progress") {
     blockLoopTask(task, staleLoopTaskMessage(agent, taskId, "in_progress"));
-  } else if (agent.role === "reviewer" && task.status === "review" && task.meta.pending_completion !== true) {
+  } else if (agent.role === "reviewer" && task.status === "review" && task.meta.pending_completion !== true && !reviewerDecision) {
     blockLoopTask(task, staleLoopTaskMessage(agent, taskId, "review"));
   }
   if (result.exitStatus === 0 && task.status !== "blocked") {
     const messagePath = join(result.runDir, "last-message.md");
     const handoffMessage = existsSync(messagePath) ? readFileSync(messagePath, "utf8") : "";
     const updates = {
-      status: task.meta.pending_completion === true ? "done" : task.status,
+      status: task.status,
       pending_completion: undefined,
       run_id: basename(result.runDir),
       finished_at: new Date().toISOString(),
       message: handoffMessage,
+      infrastructure_failure: undefined,
       updated_on: dateStamp(new Date())
     };
-    const handoffs = task.store.listHandoffs(task.projectIdentifier, task.id);
     if (handoffs.length > handoffCount && handoffs.at(-1)?.sender === agent.role) {
-      if (updates.status === "done") task.store.completeTask?.(task.projectIdentifier, task.id);
       updateSharedTask(task, updates);
     } else {
       updateSharedTaskAndHandoff(task, updates, agent, basename(result.runDir), updates.status, handoffMessage);
@@ -665,6 +747,22 @@ export function handleLoopResult(cwd: string, result: LoopRunResult, agent: Agen
       ? String(finalTask.meta.blocked_reason ?? result.failureSummary ?? "")
       : result.failureSummary
   });
+}
+
+function retryLoopTask(task: SharedTask, agent: Agent, reason: string) {
+  const status = agent.role === "reviewer" ? "review" : "ready";
+  updateSharedTask(task, {
+    status,
+    infrastructure_failure: reason,
+    run_id: undefined,
+    finished_at: new Date().toISOString(),
+    message: reason,
+    updated_on: dateStamp(new Date())
+  });
+}
+
+function isInfrastructureFailure(result: LoopRunResult) {
+  return Boolean(result.error) || /(?:could not create PATH aliases|failed to initialize in-process app-server client|Operation not permitted|failed to lookup address information|getaddrinfo|failed to refresh available models|workspace routing discovery failed|connection failed|error sending request|failed to connect)/i.test(`${result.stderr}\n${result.failureSummary}`);
 }
 
 function blockLoopTask(task: SharedTask, reason: string) {
@@ -715,7 +813,9 @@ function isMissingExecutable(error: string) {
 }
 
 function toolName(tool: string) {
-  return tool === "opencode" ? "OpenCode" : "Codex";
+  if (tool === "opencode") return "OpenCode";
+  if (tool === "claude") return "Claude";
+  return "Codex";
 }
 
 function staleLoopTaskMessage(agent: Agent, taskId: string, status: string) {
@@ -725,7 +825,7 @@ function staleLoopTaskMessage(agent: Agent, taskId: string, status: string) {
 
 function lifecycleInstructions(role: string) {
   if (role === "reviewer") {
-    return "Review the task against the phase docs and current repo behavior. Before you finish, leave the task in exactly one terminal state for this run: `done` if accepted, `ready` if fixes are required, or `blocked` if progress is impossible.";
+    return "Review the task against the phase docs and current repo behavior. Send an `approved` handoff to the planner when accepted and leave the task in `review`; leave it `ready` when fixes are required, or `blocked` if progress is impossible.";
   }
   return "Implement only the assigned task. Before you finish, leave the task in exactly one terminal state for this run: `review` when the work is ready for review, or `blocked` when you cannot continue.";
 }
@@ -738,13 +838,22 @@ function inferPhaseDocPath(task: SharedTask) {
 function updateSharedTaskAndHandoff(task: SharedTask, updates: Record<string, unknown>, agent: Agent, runId: string, status: string, msg: string, administrativeOverride = false) {
   const createdAt = new Date().toISOString();
   const handoffs = task.store.listHandoffs(task.projectIdentifier, task.id);
+  const handoffRoute = status === "blocked"
+    ? { recipient: "planner", decision: "blocked" }
+    : agent.role === "worker"
+      ? { recipient: "reviewer", decision: "review" }
+      : agent.role === "reviewer"
+        ? task.meta.pending_completion === true
+          ? { recipient: "planner", decision: "approved" }
+          : { recipient: "worker", decision: "changes_requested" }
+        : { recipient: "worker", decision: "changes_requested" };
   const handoff: WorkflowHandoff = {
     projectIdentifier: task.projectIdentifier,
     taskId: task.id,
     sequence: handoffs.length + 1,
     sender: agent.role,
-    recipient: agent.role === "worker" ? "reviewer" : "worker",
-    status,
+    recipient: handoffRoute.recipient,
+    status: handoffRoute.decision,
     message: msg,
     createdAt,
     metadata: {
@@ -812,9 +921,9 @@ function handoffFileName(agent: Agent, runId: string, date: Date) {
 export function loopHelp() {
   console.log(`Usage: agent-rig loop [--once] [--worker <agent>] [--reviewer <agent>] [--interval <seconds>]
 
-Supports loop agents with \`tool = "codex"\` or \`tool = "opencode"\`.
+Supports loop agents with \`tool = "codex"\`, \`tool = "opencode"\`, or \`tool = "claude"\`.
 OpenCode uses its configured default model; AgentRig does not pass \`--model\` or \`--auto\`.
-Claude loop execution is unsupported.
+Claude receives the assembled prompt on stdin.
 
 Options:
   --once                Run one loop tick and exit
@@ -878,7 +987,7 @@ function lock(cwd: string, lockName: string, lockError: string) {
 
 export function requireLoopAgent(root: string, name: string, label: string) {
   const agent = requireAgent(root, name);
-  if (agent.tool !== "codex" && agent.tool !== "opencode") throw new Error(`Phase 14 loop supports Codex and OpenCode only. ${label} agent "${name}" has tool "${agent.tool}".`);
+  if (!loopLaunchers[agent.tool]) throw new Error(`Unsupported loop tool "${agent.tool}" for ${label} agent "${name}". Supported tools: codex, opencode, claude.`);
   return agent;
 }
 
@@ -964,7 +1073,13 @@ export function nextActionableTask(tasks: SharedTask[], agentName: string | unde
 
 export function selectLoopTask(tasks: SharedTask[], workerName: string) {
   const reviewTask = tasks.find((task) => task.status === "review");
-  if (reviewTask) return { kind: "review" as const, task: reviewTask };
+  if (reviewTask) {
+    const latestHandoff = reviewTask.store.listHandoffs(reviewTask.projectIdentifier, reviewTask.id).at(-1);
+    if (["reviewer", "planner"].includes(latestHandoff?.sender ?? "") && latestHandoff?.status === "changes_requested") {
+      return { kind: "worker" as const, task: reviewTask };
+    }
+    return { kind: "review" as const, task: reviewTask };
+  }
   const workerTask = nextActionableTask(tasks, workerName, []);
   if (workerTask) return { kind: "worker" as const, task: workerTask };
   return { kind: "none" as const };
