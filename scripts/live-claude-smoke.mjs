@@ -51,17 +51,38 @@ export const REVIEWER_DECISIONS = ["approved", "changes_requested", "blocked"];
 export const SANDBOX_RUNNER = ".agent-rig/_shared/tools/sandbox-run.sh";
 export const NESTED_LOOP_PATTERN = /agent-rig(?:\s+|\/dist\/index\.js["']?\s+)loop|index\.js["']?\s+loop/;
 
-// Extra folders (relative to the home directory) that Claude writes to for its own
-// configuration and cache. Only the ones that exist are allowed. Change this list
-// when a run shows "Operation not permitted" for another path.
-export const CLAUDE_EXTRA_WRITE_PATHS = [
-  ".claude",
-  ".claude.json",
-  "Library/Caches/claude-cli-nodejs",
-  ".cache/claude",
-  ".local/state/claude",
-  ".local/share/claude"
+// Folders (relative to the home directory) in which Claude keeps one subfolder per project.
+// The sandbox allows writes only to the subfolder of this workspace (<folder>/<workspace slug>),
+// never to the whole folder. The script creates the subfolder (mode 0700) before the loop,
+// only when the parent folder exists. Evidence and risks: docs/reports/phase-27-live-claude-test.md.
+// - .claude/projects/<slug>: the session transcript. The whole folder is NOT allowed: it holds
+//   the memory/ folders and transcripts of other projects, which later unsandboxed sessions load.
+// - Library/Caches/claude-cli-nodejs/<slug>: MCP logs.
+// Never allowed, because a sandboxed agent could plant code or instructions that run later outside
+// the sandbox: the whole ~/.claude folder (settings, hooks, CLAUDE.md, plugins, skills),
+// ~/.claude/shell-snapshots (unsandboxed sessions source the snapshot-zsh-*.sh files),
+// ~/.claude.json (MCP servers; Claude writes it through a lock and a temporary file in the home
+// directory, which the runner cannot allow, and the run works without it), and the Claude install
+// and update folders (.local/share/claude, .local/state/claude, .cache/claude).
+// Add a path only after a run shows "Operation not permitted" for it, and only a path of the run.
+export const CLAUDE_PROJECT_PARENTS = [
+  ".claude/projects",
+  "Library/Caches/claude-cli-nodejs"
 ];
+
+// Claude stores a project under a name made from its path: every character that is not a
+// letter or a digit becomes "-". Longer names get a hash suffix, so the script refuses them.
+export const MAX_SLUG_LENGTH = 200;
+
+export function claudeProjectSlug(workspace) {
+  const slug = workspace.replace(/[^a-zA-Z0-9]/g, "-");
+  if (slug.length > MAX_SLUG_LENGTH) throw new Error(`The workspace path is too long for a Claude project folder name (${slug.length} > ${MAX_SLUG_LENGTH}).`);
+  return slug;
+}
+
+// Claude creates a folder for Bash tool output under /tmp/claude-<uid>/ unless CLAUDE_CODE_TMPDIR
+// is set. The loop points it at this folder inside the workspace (ignored by git and by fingerprint).
+export const CLAUDE_TMP_DIR = join(".agent-rig", "claude-tmp");
 
 const repoRoot = realpathSync.native(join(dirname(fileURLToPath(import.meta.url)), ".."));
 
@@ -186,6 +207,11 @@ export function cleanEnv(env) {
   return copy;
 }
 
+// The environment of the loop process: no loop variables, and CLAUDE_CODE_TMPDIR inside the workspace.
+export function loopEnv(env, workspace) {
+  return { ...cleanEnv(env), CLAUDE_CODE_TMPDIR: join(workspace, CLAUDE_TMP_DIR) };
+}
+
 export function effectiveMax(option, marker) {
   return option ?? marker.max_claude_runs ?? DEFAULT_MAX_CLAUDE_RUNS;
 }
@@ -201,8 +227,32 @@ export function reserveClaudeRun(marker, max) {
 
 // ---------- sandbox command ----------
 
-export function claudeExtraPaths(home) {
-  return CLAUDE_EXTRA_WRITE_PATHS.map((rel) => join(home, rel)).filter((path) => existsSync(path));
+// The per-workspace Claude folders that exist. Only these are allowed in the sandbox.
+export function claudeExtraPaths(home, workspace) {
+  const slug = claudeProjectSlug(workspace);
+  return CLAUDE_PROJECT_PARENTS.map((rel) => join(home, rel, slug)).filter((path) => isRealDir(path));
+}
+
+// Create <parent>/<slug> with mode 0700 for each parent folder that exists. It creates nothing else.
+export function ensureClaudeProjectDirs(home, workspace) {
+  const slug = claudeProjectSlug(workspace);
+  for (const rel of CLAUDE_PROJECT_PARENTS) {
+    const parent = join(home, rel);
+    if (!isRealDir(parent)) continue;
+    const dir = join(parent, slug);
+    if (!existsSync(dir)) mkdirSync(dir, { mode: 0o700 });
+    if (!isRealDir(dir)) throw new Error(`Refused: the Claude project folder is a symbolic link or not a directory: ${dir}`);
+  }
+  return claudeExtraPaths(home, workspace);
+}
+
+function isRealDir(path) {
+  try {
+    const stat = lstatSync(path);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 export function buildLoopCommand({ repo, workspace, sandbox, extraPaths, nodePath }) {
@@ -212,12 +262,19 @@ export function buildLoopCommand({ repo, workspace, sandbox, extraPaths, nodePat
   return { command: join(repo, SANDBOX_RUNNER), args: [...allow, "--", ...loop] };
 }
 
+// Return a warning when the allowed paths include the whole Claude configuration folder.
+export function claudeDirWarning(extraPaths, home) {
+  const whole = join(home, ".claude");
+  if (!extraPaths.some((path) => path === whole || path === `${whole}/`)) return undefined;
+  return `warning: the sandbox allows writes to the whole ${whole} folder. A sandboxed agent can change settings, hooks, and CLAUDE.md there.`;
+}
+
 function loopCommandFor(workspace, noSandbox) {
   return buildLoopCommand({
     repo: repoRoot,
     workspace,
     sandbox: !noSandbox,
-    extraPaths: claudeExtraPaths(homedir()), // safe-ops: not a delete target
+    extraPaths: claudeExtraPaths(homedir(), workspace), // safe-ops: not a delete target
     nodePath: process.execPath
   });
 }
@@ -226,8 +283,8 @@ function shellText(cmd) {
   return [cmd.command, ...cmd.args].join(" ");
 }
 
-function probeRunner(workspace) {
-  const runner = join(repoRoot, SANDBOX_RUNNER);
+// Stop before any state change when the runner is missing, not executable, or fails a probe.
+export function probeRunner(workspace, runner = join(repoRoot, SANDBOX_RUNNER)) {
   try { accessSync(runner, constants.X_OK); } catch { throw new Error(`The sandbox runner is not usable (not executable): ${runner}. Use --no-sandbox only if you accept the risk.`); }
   const probe = loopCommandFor(workspace, false);
   const allow = probe.args.slice(0, probe.args.indexOf("--"));
@@ -285,7 +342,45 @@ export function checkReviewerUnchanged(events) {
 
 export function checkNoNestedLoop(texts) {
   const problems = texts.filter((t) => NESTED_LOOP_PATTERN.test(t.text)).map((t) => `${t.source}: contains an agent-rig loop command`);
-  return result("no nested loop", problems, ["no loop command in last-message.md or result.json stdout (best effort: tool calls are not visible)"]);
+  return result("no nested loop", problems, ["no loop command in the Bash tool calls of claude-stream.jsonl (or, for a run without a stream, in last-message.md and result.json stdout)"]);
+}
+
+// Tool calls from a Claude stream-json file: each tool_use event with its tool_result.
+// `denied` is true when Claude listed the call in the permission_denials of the result event.
+export function streamToolCalls(text) {
+  const calls = [];
+  const byId = new Map();
+  const denied = new Set();
+  for (const line of String(text).split("\n")) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    const content = Array.isArray(event?.message?.content) ? event.message.content : [];
+    if (event?.type === "assistant") {
+      for (const part of content.filter((c) => c?.type === "tool_use")) {
+        const call = { id: part.id, name: part.name, input: part.input ?? {}, error: false, denied: false, output: "" };
+        calls.push(call);
+        byId.set(part.id, call);
+      }
+    } else if (event?.type === "user") {
+      for (const part of content.filter((c) => c?.type === "tool_result")) {
+        const call = byId.get(part.tool_use_id);
+        if (!call) continue;
+        call.error = part.is_error === true;
+        const body = Array.isArray(part.content) ? part.content.map((c) => c?.text ?? "").join("\n") : String(part.content ?? "");
+        call.output = body.split("\n").find((l) => l.trim()) ?? "";
+      }
+    } else if (event?.type === "result" && Array.isArray(event.permission_denials)) {
+      for (const d of event.permission_denials) denied.add(d?.tool_use_id);
+    }
+  }
+  for (const call of calls) call.denied = denied.has(call.id);
+  return calls;
+}
+
+export function describeCall(call) {
+  const input = call.input.command ?? call.input.file_path ?? call.input.pattern ?? call.input.path ?? "";
+  const outcome = call.denied ? "denied" : call.error ? "error" : "ok";
+  return `${call.name} ${String(input).replace(/\s+/g, " ").slice(0, 200)} -> ${outcome}${call.output ? `: ${call.output.slice(0, 160)}` : ""}`;
 }
 
 export function checkCanonicalStatuses(tasks) {
@@ -328,7 +423,7 @@ export function evaluateContract({ tasks, events, texts, runFolders }) {
   return { ok: checks.every((c) => c.ok), checks };
 }
 
-export function renderReport({ tasks, events, evaluation }) {
+export function renderReport({ tasks, events, evaluation, runs = [] }) {
   const lines = ["# Live Claude smoke report", ""];
   for (const task of tasks) {
     lines.push(`## ${task.id}: ${task.title ?? ""}`.trimEnd(), `Status: ${task.status}`, "");
@@ -341,12 +436,21 @@ export function renderReport({ tasks, events, evaluation }) {
     else if (e.kind === "loop-tick") lines.push(`- loop run ${e.run_number ?? "?"}: ${e.role} on ${e.task}, task status after: ${e.final_status}`);
     else lines.push(`- ${e.kind}: ${e.task ?? ""}`);
   }
+  if (runs.length) {
+    lines.push("", "## Tool calls per run", "");
+    for (const run of runs) {
+      lines.push(`### ${run.source}`, "");
+      for (const call of run.calls) lines.push(`- ${describeCall(call)}`);
+      if (!run.calls.length) lines.push("- no tool calls");
+      lines.push("");
+    }
+  }
   lines.push("", "## Contract checks", "");
   for (const c of evaluation.checks) {
     lines.push(`- ${c.ok ? "PASS" : "FAIL"}: ${c.name}`);
     for (const d of c.details) lines.push(`  - ${d}`);
   }
-  lines.push("", "Note: `claude -p` shows only the final message, so tool calls are not visible. The nested loop check is best effort.", "");
+  lines.push("", "Note: tool calls come from claude-stream.jsonl in each run folder (`--output-format stream-json`). A run without that file falls back to the final message only.", "");
   lines.push(`Result: ${evaluation.ok ? "PASS" : "FAIL"}`);
   return lines.join("\n");
 }
@@ -356,12 +460,13 @@ export function renderReport({ tasks, events, evaluation }) {
 export function readWorkspaceData(dir) {
   const db = new Database(join(dir, ".agent-rig", "_shared", "workflow.sqlite"), { readonly: true, fileMustExist: true });
   try {
-    const tasks = db.prepare("select task_id, title, status from tasks order by task_id").all();
+    const tasks = db.prepare("select task_id, title, status, metadata_json from tasks order by task_id").all();
     const handoffs = db.prepare("select task_id, sequence, sender, recipient, status, message_markdown from handoffs order by task_id, sequence").all();
     return tasks.map((t) => ({
       id: t.task_id,
       title: t.title,
       status: t.status,
+      blocked_reason: blockedReason(t.metadata_json),
       handoffs: handoffs.filter((h) => h.task_id === t.task_id).map((h) => ({ sequence: h.sequence, sender: h.sender, recipient: h.recipient, status: h.status, message: h.message_markdown }))
     }));
   } finally {
@@ -369,16 +474,30 @@ export function readWorkspaceData(dir) {
   }
 }
 
-// Read the text of each run: last-message.md and the stdout of result.json. Never prompt.md.
+function blockedReason(json) {
+  try { return JSON.parse(json ?? "{}").blocked_reason; } catch { return undefined; }
+}
+
+// Read the evidence of each run. With claude-stream.jsonl, the texts are the Bash commands of the
+// tool calls (prose in the final message is not a command). Without it, the texts are
+// last-message.md and the stdout of result.json. Never prompt.md.
 export function readRunTexts(dir) {
   const texts = [];
+  const runs = [];
   let runFolders = 0;
   for (const agent of ["worker", "reviewer"]) {
-    const runs = join(dir, ".agent-rig", agent, "runs");
-    if (!existsSync(runs)) continue;
-    for (const run of readdirSync(runs, { withFileTypes: true }).filter((e) => e.isDirectory())) {
+    const runsDir = join(dir, ".agent-rig", agent, "runs");
+    if (!existsSync(runsDir)) continue;
+    for (const run of readdirSync(runsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
       runFolders += 1;
-      const base = join(runs, run.name);
+      const base = join(runsDir, run.name);
+      const stream = join(base, "claude-stream.jsonl");
+      if (existsSync(stream)) {
+        const calls = streamToolCalls(readFileSync(stream, "utf8"));
+        runs.push({ source: `${agent}/runs/${run.name}`, calls });
+        for (const call of calls.filter((c) => c.name === "Bash")) texts.push({ source: `${agent}/runs/${run.name}/claude-stream.jsonl Bash`, text: String(call.input.command ?? "") });
+        continue;
+      }
       const last = join(base, "last-message.md");
       if (existsSync(last)) texts.push({ source: `${agent}/runs/${run.name}/last-message.md`, text: readFileSync(last, "utf8") });
       const json = join(base, "result.json");
@@ -387,7 +506,7 @@ export function readRunTexts(dir) {
       }
     }
   }
-  return { texts, runFolders };
+  return { texts, runFolders, runs };
 }
 
 // Hash of git status, git diff, and untracked file content. Files that the CLI and the loop write are excluded.
@@ -493,6 +612,11 @@ function record(ctx, event) {
 
 function warnNoSandbox(args) {
   if (args.noSandbox) console.error("warning: the sandbox is OFF (--no-sandbox). The loop and Claude can write anywhere you can.");
+  else {
+    const home = homedir(); // safe-ops: not a delete target
+    const warning = claudeDirWarning(CLAUDE_PROJECT_PARENTS.map((rel) => join(home, rel)), home);
+    if (warning) console.error(warning);
+  }
 }
 
 function placeholderDir(parent) {
@@ -525,7 +649,7 @@ function buildWorkspace(dir, marker) {
   mustRun("add reviewer", runCli(dir, ["add", "reviewer", "--role", "reviewer", "--tool", "claude"], skip));
   mustRun("add planner", runCli(dir, ["add", "planner", "--role", "planner", "--tool", "claude"], skip));
   setWorkerToolToClaude(dir);
-  copyCurrentInstructions(dir);
+  copySharedContract(dir);
   writeFileSync(join(dir, "check-hello.mjs"), HAPPY_CHECK, "utf8");
   writeFileSync(join(dir, "check-greeting.mjs"), REPAIR_CHECK, "utf8");
   marker.tasks.happy = createTask(dir, HAPPY_TITLE, brief("Create `hello.txt` with exact content.", "hello.txt", "hello world", "check-hello.mjs"));
@@ -541,10 +665,10 @@ function setWorkerToolToClaude(dir) {
   writeFileSync(file, `${JSON.stringify(session, null, 2)}\n`, "utf8");
 }
 
-function copyCurrentInstructions(dir) {
-  for (const role of ["planner", "worker", "reviewer"]) {
-    copyFileSync(join(repoRoot, ".agent-rig", role, "instructions.md"), join(dir, ".agent-rig", role, "instructions.md"));
-  }
+// The role instructions come from this repository's templates (agent-rig init and add render them),
+// so a run tests the templates that new projects get. The coordination contract has no template:
+// copy it from this repository's shared context.
+function copySharedContract(dir) {
   copyFileSync(join(repoRoot, ".agent-rig", "_shared", "context.md"), join(dir, ".agent-rig", "_shared", "context.md"));
 }
 
@@ -584,7 +708,8 @@ function loopTick(ctx, expectRole) {
   const before = fingerprint(ctx.dir);
   const cmd = loopCommandFor(ctx.dir, ctx.args.noSandbox);
   console.log(`loop run ${ctx.marker.claude_runs} of ${max}: ${shellText(cmd)}`);
-  const spawned = spawnSync(cmd.command, cmd.args, { cwd: ctx.dir, encoding: "utf8", env: cleanEnv(process.env), timeout: LOOP_TIMEOUT_MS });
+  mkdirSync(join(ctx.dir, CLAUDE_TMP_DIR), { recursive: true, mode: 0o700 });
+  const spawned = spawnSync(cmd.command, cmd.args, { cwd: ctx.dir, encoding: "utf8", env: loopEnv(process.env, ctx.dir), timeout: LOOP_TIMEOUT_MS });
   const after = fingerprint(ctx.dir);
   if (spawned.stdout) console.log(spawned.stdout.trimEnd());
   if (spawned.stderr) console.error(spawned.stderr.trimEnd());
@@ -602,18 +727,26 @@ function lastHandoff(ctx, id) {
   return taskById(ctx, id).handoffs.at(-1);
 }
 
-// After a worker run the task must be in review. The planner records review if the worker handoff exists but the state is not review.
-function planWorkerReview(ctx, id) {
-  const task = taskById(ctx, id);
-  const last = task.handoffs.at(-1);
-  if (last?.sender === "worker" && last.status === "review" && task.status !== "review" && task.status !== "blocked") setStatus(ctx, id, "review");
+// After a worker run the task must be in review. The loop blocks a task that the worker leaves
+// in_progress, and the next loop tick then starts no agent. Stop here, so no run is spent on it.
+export function workerTickStop(task) {
+  if (task.status === "review") return undefined;
+  return `After the worker run, ${task.id} is ${task.status}, not review${task.blocked_reason ? `: ${task.blocked_reason}` : ""}. Stopped before the reviewer run.`;
+}
+
+function stopUnlessReview(ctx, id) {
+  const stop = workerTickStop(taskById(ctx, id));
+  if (stop) throw new StepError(stop);
 }
 
 function prepareRun(ctx, args) {
   assertRunsLeft(ctx.marker, effectiveMax(args.maxClaudeRuns, ctx.marker));
   refuseWhenReviewPending(ctx);
   warnNoSandbox(args);
-  if (!args.noSandbox) probeRunner(ctx.dir);
+  if (!args.noSandbox) {
+    ensureClaudeProjectDirs(homedir(), ctx.dir); // safe-ops: not a delete target (creates only <parent>/<workspace slug>)
+    probeRunner(ctx.dir);
+  }
 }
 
 function stepRunHappy(args) {
@@ -623,7 +756,7 @@ function stepRunHappy(args) {
   if (taskById(ctx, id).status === "todo") setStatus(ctx, id, "ready");
   for (let round = 1; round <= MAX_ROUNDS; round += 1) {
     loopTick(ctx, "worker");
-    planWorkerReview(ctx, id);
+    stopUnlessReview(ctx, id);
     loopTick(ctx, "reviewer");
     const last = lastHandoff(ctx, id);
     if (last?.sender === "reviewer" && last.status === "approved") {
@@ -650,7 +783,7 @@ function stepRunRepair(args) {
   expectDecision(ctx, id, "changes_requested");
   console.log("Note: the loop routes a review task whose last handoff is changes_requested to the worker and sets in_progress itself. No planner state action is needed here.");
   loopTick(ctx, "worker");
-  planWorkerReview(ctx, id);
+  stopUnlessReview(ctx, id);
   loopTick(ctx, "reviewer");
   expectDecision(ctx, id, "approved");
   plannerAction(ctx, id, "done", ["tasks", "done", id, "--message", "Repair approved by the reviewer; accepted by the planner."]);
@@ -666,9 +799,9 @@ function expectDecision(ctx, id, wanted) {
 function stepReport(args) {
   const ctx = loadContext(args, fixedParent());
   const tasks = readWorkspaceData(ctx.dir);
-  const { texts, runFolders } = readRunTexts(ctx.dir);
+  const { texts, runFolders, runs } = readRunTexts(ctx.dir);
   const evaluation = evaluateContract({ tasks, events: ctx.marker.events, texts, runFolders });
-  console.log(renderReport({ tasks, events: ctx.marker.events, evaluation }));
+  console.log(renderReport({ tasks, events: ctx.marker.events, evaluation, runs }));
   return evaluation.ok ? 0 : 1;
 }
 
@@ -702,6 +835,11 @@ function dryRunStep(args) {
   const times = args.step === "run-happy" ? "twice per round (worker, then reviewer)" : "three times (reviewer, worker, reviewer)";
   console.log(`dry run: ${args.step} would run this command ${times}, at most ${args.maxClaudeRuns ?? DEFAULT_MAX_CLAUDE_RUNS} Claude runs in total:`);
   console.log(shellText(cmd));
+  if (!args.noSandbox) {
+    const slug = claudeProjectSlug(dir);
+    const home = homedir(); // safe-ops: not a delete target
+    console.log(`dry run: a real run first creates (mode 0700) and also allows only these Claude folders, when their parent exists: ${CLAUDE_PROJECT_PARENTS.map((rel) => join(home, rel, slug)).join(", ")}`);
+  }
   console.log("dry run: no claude process was started.");
   return 0;
 }

@@ -1,0 +1,17 @@
+{
+  "agent": "worker",
+  "role": "worker",
+  "tool": "claude",
+  "task_id": "task-0001",
+  "command_args": [
+    "-p"
+  ],
+  "exit_status": 0,
+  "started_at": "2026-10-11T00:14:40.713Z",
+  "finished_at": "2026-10-11T00:14:53.063Z",
+  "final_task_status": "blocked",
+  "stdout": "I couldn't do task-0001, and I haven't set its status to `review` or `blocked`.\n\nThe sandbox denied every action the task needs:\n- **Creating `hello.txt`:** both the Write tool and a shell redirect were refused for lack of permission.\n- **`node check-hello.mjs`:** the command needs approval, and none was given. I never saw the script's contents because `cat` failed with an EPERM error on a `/private/tmp` directory.\n- **`agent-rig tasks` CLI:** the earlier call was blocked, so I did not retry it. Without it, I can't mark the task `blocked` or write a handoff.\n\n`hello.txt` does not exist. Nothing was verified and nothing changed.\n\nTo unblock, either of these works:\n- Grant write permission in the working directory and approval for `node check-hello.mjs` and the `agent-rig tasks` commands, then re-run the task.\n- Have the planner set task-0001 to `blocked` for me.\n\nThe change itself is one command: `printf 'hello world\\n' > hello.txt`, then `node check-hello.mjs`, which should exit 0.\n",
+  "stderr": "",
+  "error": "",
+  "failure_summary": "worker worker left task-0001 in_progress after claude run"
+}

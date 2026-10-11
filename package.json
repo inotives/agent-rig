@@ -28,6 +28,7 @@
     "dist",
     "templates",
     "docs/**/*.md",
+    "!docs/reports",
     "logo.png",
     "README.md",
     "LICENSE"

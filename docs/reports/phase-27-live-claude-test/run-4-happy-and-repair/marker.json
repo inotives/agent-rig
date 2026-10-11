@@ -1,0 +1,97 @@
+{
+  "kind": "agent-rig-live-smoke",
+  "name": "run-20261011-085622-xsvx",
+  "created_at": "2026-10-11T00:56:22.886Z",
+  "claude_runs": 5,
+  "max_claude_runs": 6,
+  "tasks": {
+    "happy": "task-0001",
+    "repair": "task-0002"
+  },
+  "events": [
+    {
+      "at": "2026-10-11T00:56:28.212Z",
+      "kind": "planner-action",
+      "task": "task-0001",
+      "action": "ready",
+      "command": "agent-rig tasks set-status task-0001 ready"
+    },
+    {
+      "at": "2026-10-11T00:56:37.799Z",
+      "kind": "loop-tick",
+      "run_number": 1,
+      "role": "worker",
+      "task": "task-0001",
+      "exit_status": 0,
+      "final_status": "review"
+    },
+    {
+      "at": "2026-10-11T00:56:50.569Z",
+      "kind": "loop-tick",
+      "run_number": 2,
+      "role": "reviewer",
+      "task": "task-0001",
+      "exit_status": 0,
+      "final_status": "review",
+      "reviewer_before": "5ece561ebcbd591ea8d749738b67947f559141620a944f046f701e8bf2c36cf6",
+      "reviewer_after": "5ece561ebcbd591ea8d749738b67947f559141620a944f046f701e8bf2c36cf6"
+    },
+    {
+      "at": "2026-10-11T00:56:50.647Z",
+      "kind": "planner-action",
+      "task": "task-0001",
+      "action": "done",
+      "command": "agent-rig tasks done task-0001 --message Approved by the reviewer; accepted by the planner."
+    },
+    {
+      "at": "2026-10-11T00:57:02.327Z",
+      "kind": "harness-worker-pass",
+      "task": "task-0002"
+    },
+    {
+      "at": "2026-10-11T00:57:02.399Z",
+      "kind": "planner-action",
+      "task": "task-0002",
+      "action": "review",
+      "command": "agent-rig tasks set-status task-0002 review"
+    },
+    {
+      "at": "2026-10-11T00:57:14.527Z",
+      "kind": "loop-tick",
+      "run_number": 3,
+      "role": "reviewer",
+      "task": "task-0002",
+      "exit_status": 0,
+      "final_status": "review",
+      "reviewer_before": "fa1f1a0afaf9e67ae2e39ed55950613cd8d1cf22b8ee4c4a5eb2a9d9ab661549",
+      "reviewer_after": "fa1f1a0afaf9e67ae2e39ed55950613cd8d1cf22b8ee4c4a5eb2a9d9ab661549"
+    },
+    {
+      "at": "2026-10-11T00:57:26.959Z",
+      "kind": "loop-tick",
+      "run_number": 4,
+      "role": "worker",
+      "task": "task-0002",
+      "exit_status": 0,
+      "final_status": "review"
+    },
+    {
+      "at": "2026-10-11T00:57:40.507Z",
+      "kind": "loop-tick",
+      "run_number": 5,
+      "role": "reviewer",
+      "task": "task-0002",
+      "exit_status": 0,
+      "final_status": "review",
+      "reviewer_before": "a5e08f11a26181a91fc5a0482939a2698f4e85065a97514084b30a4ccace7680",
+      "reviewer_after": "a5e08f11a26181a91fc5a0482939a2698f4e85065a97514084b30a4ccace7680"
+    },
+    {
+      "at": "2026-10-11T00:57:40.581Z",
+      "kind": "planner-action",
+      "task": "task-0002",
+      "action": "done",
+      "command": "agent-rig tasks done task-0002 --message Repair approved by the reviewer; accepted by the planner."
+    }
+  ]
+}

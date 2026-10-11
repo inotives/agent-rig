@@ -60,7 +60,9 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 Read `.agent-rig/_shared/context.md` for the coordination contract. Record
 exactly one reviewer handoff decision: `approved`, `changes_requested`, or
-`blocked`. The planner-manager changes task state and dependencies. Do not mark
+`blocked`. Write it with `agent-rig tasks handoff`: `approved` to `planner`,
+`changes_requested` to `worker`, or `blocked` to `planner`. Leave the task in
+`review`. The planner-manager changes task state and dependencies. Do not mark
 tasks `done`, return them to `in_progress`, unlock downstream work, or start a
 nested AgentRig loop.
 

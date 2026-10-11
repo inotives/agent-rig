@@ -21,14 +21,24 @@ Task states are exactly:
 The worker implements the assigned task, verifies it, and writes a handoff with
 decision `review`. The reviewer independently checks the worker handoff and
 changed files. The reviewer writes exactly one handoff decision:
-`approved`, `changes_requested`, or `blocked`. The reviewer does not change
-task state or dependencies.
+`approved`, `changes_requested`, or `blocked`. The reviewer sends the handoff
+to the role that acts next:
 
-The planner-manager records the handoff decision and changes task state. For
-`changes_requested`, it returns the same task to `in_progress`, sends the
-findings to the same worker, and routes the repair through independent review
-again. For `approved`, it marks the task `done` and unblocks only the next
-selected dependent task. The planner-manager directly performs the final
+- `approved`: to `planner`. The planner-manager marks the task `done`.
+- `changes_requested`: to `worker`. The same worker repairs the task.
+- `blocked`: to `planner`. The planner-manager resolves the blocker with the
+  human.
+
+The reviewer does not change task state or dependencies.
+
+The planner-manager reads each reviewer decision and changes task state. For
+`changes_requested`, the task stays in `review`. The same worker reads both
+handoffs, repairs the task, and writes a new `review` handoff. Then an
+independent reviewer reviews the task again. The planner-manager does not set
+the task back to `in_progress`. For `approved`, the planner-manager marks the
+task `done` and unblocks only the next selected dependent task. For `blocked`,
+the planner-manager sets the task to `blocked` and resolves the blocker with
+the human. The planner-manager directly performs the final
 integrated review. If it finds a problem, it routes the `changes_requested`
 repair through the same worker and independent reviewer cycle, then repeats the
 integrated review. The planner-manager owns final phase acceptance.

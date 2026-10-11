@@ -112,6 +112,18 @@ the mutation proof in one brief.
   `in_progress` task. The contract says the planner returns the task to
   `in_progress`. The live test must show which behavior is right. Align the
   contract text and the loop in this phase.
+- Resolved (human decision, 2026-10-11, after task-0107): change the contract
+  text, not the loop. The live run showed that the loop behavior is right.
+  - After `changes_requested`, the task stays in `review`. The same worker
+    repairs the task and writes a new `review` handoff. The planner-manager
+    does not set the task back to `in_progress`.
+  - The reviewer sends one decision handoff to the role that acts next:
+    `approved` to `planner`, `changes_requested` to `worker`, and `blocked` to
+    `planner`. The CLI routes in `src/workflow/model.ts` already enforce this.
+  - Updated files: `.agent-rig/_shared/context.md`, `AGENTS.md`,
+    `INSTRUCTIONS.md`, and `templates/workflow.md`. The worker and reviewer
+    profiles in this repository are updated with
+    `agent-rig profiles update ... --apply`.
 - If the test finds a problem in an instruction file, a template, or the
   launcher, fix it in this phase and add a regression test. If a finding needs
   a design change, pause and discuss it with the human first.

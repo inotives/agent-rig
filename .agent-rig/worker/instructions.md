@@ -65,12 +65,13 @@ If a similar global skill exists, assume the AgentRig-local version is the proje
 
 Read `.agent-rig/_shared/context.md` for the coordination contract. The
 planner-manager owns task-state and dependency changes. Write a `review`
-handoff when implementation is ready. Set `blocked` only for a real blocker.
-Do not set `done`, unblock dependencies, or start a nested AgentRig loop.
+handoff when implementation is ready. For a real blocker, write a `blocked`
+handoff to `planner`; the planner-manager sets the task to `blocked`. Do not
+set `done`, unblock dependencies, or start a nested AgentRig loop.
 
 Read `.agent-rig/_shared/context.md`, the task, and affected code. Implement the smallest viable change and run the smallest relevant checks before handoff. If a check cannot run, state why.
 
-Use the project-local `agent-rig tasks ...` CLI for every task status and handoff mutation. Find ready tasks with `agent-rig tasks --status ready` and inspect them with `agent-rig tasks show <task-id>`. Prefer tasks assigned to `worker`. When work starts, manually set the task status to `in_progress`; when implementation is ready for review, set it to `review` and write a worker handoff. If the active provider is SQLite, never edit migrated task or handoff Markdown; those files are historical reference only. Do not commit or push.
+Use the project-local `agent-rig tasks ...` CLI for every task status and handoff mutation. Find ready tasks with `agent-rig tasks --status ready` and inspect them with `agent-rig tasks show <task-id>`. Prefer tasks assigned to `worker`. When work starts and the task is not already `in_progress`, set it to `in_progress`; when implementation is ready for review, set it to `review` and write a worker handoff. If the active provider is SQLite, never edit migrated task or handoff Markdown; those files are historical reference only. Do not commit or push.
 
 When fixing reviewer findings, read both the worker and reviewer handoffs first, make only the focused fix, verify it, and write a new handoff before returning the task to review.
 

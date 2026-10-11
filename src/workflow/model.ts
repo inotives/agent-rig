@@ -55,10 +55,13 @@ export function validateNewHandoff(handoff: Pick<WorkflowHandoff, "sender" | "re
   const status = handoff.status.trim();
   if (!sender || !recipient) throw new Error("Handoff requires a non-empty sender and recipient");
   if (!status) throw new Error("Handoff requires a non-empty decision");
-  const expected = handoffRoutes[`${sender}\u0000${recipient}`]
-    ?? (((sender === "worker" || sender === "reviewer") && recipient === "planner") ? "blocked" : undefined);
-  if (!expected) throw new Error(`Invalid handoff route: ${sender} -> ${recipient}`);
-  if (status !== expected) throw new Error(`Invalid handoff decision for ${sender} -> ${recipient}: expected ${expected}`);
+  const route = handoffRoutes[`${sender}\u0000${recipient}`];
+  // The worker and the reviewer can always send `blocked` to the planner, also
+  // where another decision has a route (reviewer -> planner: approved).
+  const blockedRoute = (sender === "worker" || sender === "reviewer") && recipient === "planner";
+  const expected = [route, blockedRoute ? "blocked" : undefined].filter((decision): decision is string => Boolean(decision));
+  if (!expected.length) throw new Error(`Invalid handoff route: ${sender} -> ${recipient}`);
+  if (!expected.includes(status)) throw new Error(`Invalid handoff decision for ${sender} -> ${recipient}: expected ${expected.join(" or ")}`);
 }
 
 /** Validate task status changes made by an identified workflow actor. */

@@ -127,6 +127,18 @@ test("removeWorkspace refuses a missing marker and a bad marker", () => {
   assert.ok(existsSync(join(child, "keep.txt")));
 });
 
+test("removeWorkspace refuses a marker of another kind", () => {
+  const parent = freshDir();
+  const child = join(parent, NAME);
+  mkdirSync(child);
+  writeFileSync(join(child, "keep.txt"), "x");
+  for (const kind of ["something-else", undefined, ""]) {
+    writeFileSync(join(child, smoke.MARKER_FILE), JSON.stringify({ kind, name: NAME, claude_runs: 0, events: [] }));
+    assert.throws(() => smoke.removeWorkspace(NAME, parent), /marker/i, String(kind));
+  }
+  assert.ok(existsSync(join(child, "keep.txt")));
+});
+
 test("removeWorkspace refuses a marker that is a symbolic link", () => {
   const parent = freshDir();
   const outside = freshDir("live-smoke-target-");
@@ -250,6 +262,14 @@ test("assertRunsLeft refuses when the marker count has reached the limit", () =>
   assert.throws(() => smoke.assertRunsLeft({ claude_runs: 7 }, 6), /limit/i);
 });
 
+test("loopEnv sets CLAUDE_CODE_TMPDIR inside the workspace and removes the loop variables", () => {
+  const ws = "/w/space/parent/" + NAME;
+  const env = smoke.loopEnv({ PATH: "/bin", AGENT_RIG_ROLE: "worker", AGENT_RIG_LOOP_REVIEW_TASK: "task-1", CLAUDE_CODE_TMPDIR: "/tmp/other" }, ws);
+  assert.deepEqual(env, { PATH: "/bin", CLAUDE_CODE_TMPDIR: `${ws}/.agent-rig/claude-tmp` });
+  // The folder is under .agent-rig/, so git status and the reviewer fingerprint ignore it.
+  assert.ok(smoke.CLAUDE_TMP_DIR.startsWith(".agent-rig/"));
+});
+
 test("effectiveMax uses the option, then the marker, then the default", () => {
   assert.equal(smoke.effectiveMax(2, { max_claude_runs: 4 }), 2);
   assert.equal(smoke.effectiveMax(undefined, { max_claude_runs: 4 }), 4);
@@ -270,17 +290,92 @@ test("buildLoopCommand wraps the loop in the sandbox runner with explicit paths"
   assert.deepEqual(plain.args, ["/r/e/p/o/dist/index.js", "loop", "--once"]);
 });
 
-test("claudeExtraPaths keeps only existing paths under the given home", () => {
+test("claudeProjectSlug matches the folder name that Claude used in the live run", () => {
+  // Observed in task-0105: ~/.claude/projects/<this name> for this workspace path.
+  assert.equal(
+    smoke.claudeProjectSlug("/private/var/folders/d3/z2r450kd07g7_pd9dr5fdhlw0000gq/T/agent-rig-live-smoke/run-20261011-081429-gfdl"),
+    "-private-var-folders-d3-z2r450kd07g7-pd9dr5fdhlw0000gq-T-agent-rig-live-smoke-run-20261011-081429-gfdl"
+  );
+  assert.equal(smoke.claudeProjectSlug("/a b/c.d_e"), "-a-b-c-d-e");
+  assert.throws(() => smoke.claudeProjectSlug("/" + "x".repeat(smoke.MAX_SLUG_LENGTH)), /too long/);
+});
+
+test("claudeExtraPaths allows only the workspace folders, never the parent or a sibling", () => {
   const home = freshDir("live-smoke-home-");
-  mkdirSync(join(home, ".claude"));
+  const ws = "/w/space/parent/" + NAME;
+  const slug = smoke.claudeProjectSlug(ws);
+  const projects = join(home, ".claude", "projects");
+  const caches = join(home, "Library", "Caches", "claude-cli-nodejs");
+  mkdirSync(join(projects, "-Users-someone-other-project", "memory"), { recursive: true });
+  mkdirSync(caches, { recursive: true });
+  mkdirSync(join(home, ".claude", "shell-snapshots"), { recursive: true });
   writeFileSync(join(home, ".claude.json"), "{}");
-  const paths = smoke.claudeExtraPaths(home);
-  assert.ok(paths.includes(join(home, ".claude")));
-  assert.ok(paths.includes(join(home, ".claude.json")));
-  assert.ok(paths.every((p) => p.startsWith(home + "/")));
-  assert.ok(!paths.includes(home));
-  assert.ok(smoke.CLAUDE_EXTRA_WRITE_PATHS.length > 0);
-  assert.ok(smoke.CLAUDE_EXTRA_WRITE_PATHS.every((p) => !p.startsWith("/") && !p.includes("..")));
+  // Before ensureClaudeProjectDirs the workspace folders do not exist: nothing is allowed.
+  assert.deepEqual(smoke.claudeExtraPaths(home, ws), []);
+  const paths = smoke.ensureClaudeProjectDirs(home, ws);
+  assert.deepEqual(paths, [join(projects, slug), join(caches, slug)]);
+  assert.deepEqual(smoke.claudeExtraPaths(home, ws), paths);
+  for (const path of paths) assert.equal(lstatSync(path).mode & 0o777, 0o700, path);
+  for (const banned of [home, join(home, ".claude"), projects, caches, join(projects, "-Users-someone-other-project"), join(home, ".claude", "shell-snapshots"), join(home, ".claude.json")]) {
+    assert.ok(!paths.includes(banned), banned);
+  }
+  // The sibling project is untouched and only the two workspace folders were created.
+  assert.deepEqual(readdirSync(projects).sort(), ["-Users-someone-other-project", slug].sort());
+  assert.deepEqual(readdirSync(caches), [slug]);
+  // The command allows the workspace and exactly these folders.
+  const cmd = smoke.buildLoopCommand({ repo: "/r/e/p/o", workspace: ws, sandbox: true, extraPaths: paths, nodePath: "/n/node" });
+  assert.deepEqual(cmd.args.slice(0, cmd.args.indexOf("--")), ["--allow-write", ws, "--allow-write", paths[0], "--allow-write", paths[1]]);
+});
+
+test("ensureClaudeProjectDirs creates nothing when the parent folders are missing", () => {
+  const home = freshDir("live-smoke-home-");
+  assert.deepEqual(smoke.ensureClaudeProjectDirs(home, "/w/space/parent/" + NAME), []);
+  assert.deepEqual(readdirSync(home), []);
+});
+
+test("ensureClaudeProjectDirs refuses a workspace folder that is a symbolic link", () => {
+  const home = freshDir("live-smoke-home-");
+  const ws = "/w/space/parent/" + NAME;
+  const projects = join(home, ".claude", "projects");
+  const decoy = join(home, "decoy");
+  mkdirSync(projects, { recursive: true });
+  mkdirSync(decoy);
+  symlinkSync(decoy, join(projects, smoke.claudeProjectSlug(ws)));
+  assert.throws(() => smoke.ensureClaudeProjectDirs(home, ws), /symbolic link/);
+  assert.deepEqual(smoke.claudeExtraPaths(home, ws), []);
+});
+
+test("the allow-list does not allow the whole Claude folder, shell snapshots, or the Claude install folders", () => {
+  assert.deepEqual(smoke.CLAUDE_PROJECT_PARENTS, [".claude/projects", "Library/Caches/claude-cli-nodejs"]);
+  for (const rel of [".claude.json", ".claude", ".claude/", ".claude/shell-snapshots", ".claude/settings.json", ".claude/CLAUDE.md", ".claude/plugins", ".claude/skills", ".claude/todos", ".claude/statsig", ".local/share/claude", ".local/bin"]) {
+    assert.ok(!smoke.CLAUDE_PROJECT_PARENTS.includes(rel), rel);
+  }
+  assert.ok(smoke.CLAUDE_PROJECT_PARENTS.every((p) => !p.startsWith("/") && !p.includes("..")));
+});
+
+test("claudeDirWarning warns only when the whole Claude folder is allowed", () => {
+  const home = "/h/o/m/e";
+  assert.match(smoke.claudeDirWarning(["/h/o/m/e/.claude.json", "/h/o/m/e/.claude"], home), /warning: .*whole \/h\/o\/m\/e\/\.claude folder/);
+  assert.match(smoke.claudeDirWarning(["/h/o/m/e/.claude/"], home), /warning/);
+  assert.equal(smoke.claudeDirWarning(["/h/o/m/e/.claude.json", "/h/o/m/e/.claude/projects"], home), undefined);
+  assert.equal(smoke.claudeDirWarning([], home), undefined);
+});
+
+test("probeRunner stops when the runner fails or is not executable", () => {
+  const dir = freshDir("live-smoke-runner-");
+  const failing = join(dir, "failing-runner.sh");
+  writeFileSync(failing, "#!/bin/sh\necho decoy runner refused >&2\nexit 3\n");
+  chmodSync(failing, 0o755);
+  assert.throws(() => smoke.probeRunner(dir, failing), /not usable \(status 3\): decoy runner refused/);
+  const plain = join(dir, "plain-runner.sh");
+  writeFileSync(plain, "#!/bin/sh\nexit 0\n");
+  chmodSync(plain, 0o644);
+  assert.throws(() => smoke.probeRunner(dir, plain), /not usable \(not executable\)/);
+  assert.throws(() => smoke.probeRunner(dir, join(dir, "missing-runner.sh")), /not usable \(not executable\)/);
+  const passing = join(dir, "passing-runner.sh");
+  writeFileSync(passing, "#!/bin/sh\nexit 0\n");
+  chmodSync(passing, 0o755);
+  assert.doesNotThrow(() => smoke.probeRunner(dir, passing));
 });
 
 // ---- contract checks ----
@@ -352,6 +447,20 @@ test("fingerprint changes with deliverables and ignores .agent-rig and the marke
   assert.notEqual(smoke.fingerprint(dir), edited);
 });
 
+test("fingerprint changes when a tracked file changes again (git diff line)", () => {
+  const dir = freshDir();
+  const git = (...args) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: dir, encoding: "utf8" });
+  assert.equal(git("init", "-q").status, 0);
+  writeFileSync(join(dir, "a.txt"), "one\n");
+  assert.equal(git("add", "a.txt").status, 0);
+  assert.equal(git("commit", "-q", "-m", "base").status, 0);
+  writeFileSync(join(dir, "a.txt"), "two\n");
+  const first = smoke.fingerprint(dir);
+  writeFileSync(join(dir, "a.txt"), "three\n");
+  // git status shows " M a.txt" both times; only the diff tells the edits apart.
+  assert.notEqual(smoke.fingerprint(dir), first);
+});
+
 test("checkCanonicalStatuses", () => {
   assert.equal(smoke.checkCanonicalStatuses([task("t1", "review", [hand("worker", "review"), hand("reviewer", "approved")])]).ok, true);
   assert.equal(smoke.checkCanonicalStatuses([task("t1", "review", [hand("worker", "complete")])]).ok, false);
@@ -389,13 +498,66 @@ test("evaluateContract fails when one check fails", () => {
   assert.equal(bad.checks.find((c) => c.name === "no nested loop").ok, false);
 });
 
-test("renderReport says tool calls are not visible and lists tasks and checks", () => {
+test("renderReport names the tool-call source, lists tool calls per run, tasks, and checks", () => {
   const evaluation = smoke.evaluateContract({ tasks: goodTasks(), events: goodEvents(), texts: goodRuns(), runFolders: 2 });
-  const text = smoke.renderReport({ tasks: goodTasks(), events: goodEvents(), evaluation });
+  const runs = [{ source: "reviewer/runs/r1", calls: [{ name: "Bash", input: { command: "node check.mjs" }, denied: false, error: false, output: "ok" }] }];
+  const text = smoke.renderReport({ tasks: goodTasks(), events: goodEvents(), evaluation, runs });
   assert.match(text, /task-0001/);
-  assert.match(text, /tool calls are not visible/i);
+  assert.match(text, /claude-stream\.jsonl/);
+  assert.match(text, /### reviewer\/runs\/r1/);
+  assert.match(text, /- Bash node check\.mjs -> ok: ok/);
   assert.match(text, /planner action/i);
   assert.match(text, /PASS/);
+});
+
+// A stream-json file as Claude 2.1.296 writes it (shortened): a call that ran, a denied call, a failed call.
+const streamLines = [
+  { type: "system", subtype: "init" },
+  { type: "assistant", message: { content: [{ type: "text", text: "I will not run agent-rig loop." }, { type: "tool_use", id: "a", name: "Bash", input: { command: "node check-hello.mjs" } }] } },
+  { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "a", is_error: false, content: "hello.txt ok" }] } },
+  { type: "assistant", message: { content: [{ type: "tool_use", id: "b", name: "Bash", input: { command: "node /x/dist/index.js loop --once" } }] } },
+  { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "b", is_error: true, content: "Permission to use Bash has been denied." }] } },
+  { type: "assistant", message: { content: [{ type: "tool_use", id: "c", name: "Write", input: { file_path: "/w/hello.txt" } }] } },
+  { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "c", is_error: true, content: [{ type: "text", text: "\nEPERM\nmore" }] }] } },
+  { type: "result", result: "Done. I did not start an agent-rig loop.", permission_denials: [{ tool_name: "Bash", tool_use_id: "b" }] }
+].map((e) => JSON.stringify(e)).join("\n") + "\nnot json\n";
+
+test("streamToolCalls pairs each tool call with its result and marks denials", () => {
+  const calls = smoke.streamToolCalls(streamLines);
+  assert.deepEqual(calls.map((c) => [c.name, c.denied, c.error, c.output]), [
+    ["Bash", false, false, "hello.txt ok"],
+    ["Bash", true, true, "Permission to use Bash has been denied."],
+    ["Write", false, true, "EPERM"]
+  ]);
+  assert.equal(smoke.describeCall(calls[1]), "Bash node /x/dist/index.js loop --once -> denied: Permission to use Bash has been denied.");
+  assert.equal(smoke.describeCall(calls[2]), "Write /w/hello.txt -> error: EPERM");
+  assert.deepEqual(smoke.streamToolCalls(""), []);
+});
+
+test("readRunTexts uses the Bash commands of claude-stream.jsonl, not the prose, when the stream exists", () => {
+  const dir = freshDir();
+  const withStream = join(dir, ".agent-rig", "reviewer", "runs", "r1");
+  const without = join(dir, ".agent-rig", "worker", "runs", "w1");
+  mkdirSync(withStream, { recursive: true });
+  mkdirSync(without, { recursive: true });
+  writeFileSync(join(withStream, "claude-stream.jsonl"), streamLines);
+  writeFileSync(join(withStream, "last-message.md"), "I did not start an agent-rig loop.\n");
+  writeFileSync(join(without, "last-message.md"), "plain message\n");
+  const { texts, runFolders, runs } = smoke.readRunTexts(dir);
+  assert.equal(runFolders, 2);
+  assert.deepEqual(runs.map((r) => [r.source, r.calls.length]), [["reviewer/runs/r1", 3]]);
+  assert.deepEqual(texts.filter((t) => t.source.startsWith("reviewer")).map((t) => t.text), ["node check-hello.mjs", "node /x/dist/index.js loop --once"]);
+  assert.deepEqual(texts.filter((t) => t.source.startsWith("worker")).map((t) => t.text), ["plain message\n"]);
+  // The denied loop command is a nested loop attempt; the prose mention is not counted.
+  const check = smoke.checkNoNestedLoop(texts);
+  assert.equal(check.ok, false);
+  assert.deepEqual(check.details, ["reviewer/runs/r1/claude-stream.jsonl Bash: contains an agent-rig loop command"]);
+});
+
+test("workerTickStop stops before the reviewer run unless the worker left the task in review", () => {
+  assert.equal(smoke.workerTickStop({ id: "task-0001", status: "review" }), undefined);
+  assert.match(smoke.workerTickStop({ id: "task-0001", status: "blocked", blocked_reason: "worker worker left task-0001 in_progress after claude run" }), /task-0001 is blocked, not review: worker worker left task-0001 in_progress/);
+  assert.match(smoke.workerTickStop({ id: "task-0001", status: "in_progress" }), /in_progress, not review\. Stopped before the reviewer run/);
 });
 
 // ---- command line: dry run, setup, cleanup, limit (no Claude) ----
@@ -478,8 +640,9 @@ test("setup builds the workspace under the fixed parent, then cleanup deletes it
   for (const agent of ["worker", "reviewer"]) {
     assert.match(readFileSync(join(dir, ".agent-rig", agent, "agent.toml"), "utf8"), /^tool = "claude"$/m, agent);
   }
+  // The role instructions are rendered from the templates (they test what new projects get).
   for (const role of ["planner", "worker", "reviewer"]) {
-    assert.equal(readFileSync(join(dir, ".agent-rig", role, "instructions.md"), "utf8"), readFileSync(join(repo, ".agent-rig", role, "instructions.md"), "utf8"), role);
+    assert.equal(readFileSync(join(dir, ".agent-rig", role, "instructions.md"), "utf8"), readFileSync(join(repo, "templates", "profiles", `${role}.md`), "utf8").replaceAll("<agent>", role), role);
   }
   assert.equal(readFileSync(join(dir, ".agent-rig", "_shared", "context.md"), "utf8"), readFileSync(join(repo, ".agent-rig", "_shared", "context.md"), "utf8"));
   assert.ok(existsSync(join(dir, ".git")));

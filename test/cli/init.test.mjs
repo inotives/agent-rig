@@ -408,6 +408,37 @@ writable_paths = ["logs"]
   assert.equal(result.status, 0, result.stderr);
 });
 
+// Live Claude run (task-0107): the CLI refuses `tasks block` and a second `in_progress` from a
+// loop worker, and accepts reviewer decisions only on fixed routes. The generated instructions
+// must ask only for what the CLI accepts.
+test("worker and reviewer instructions name the blocked handoff and the reviewer decision routes", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["add", "reviewer", "--role", "reviewer", "--tool", "claude"], cwd).status, 0);
+  const flat = (file) => readFileSync(join(cwd, ".agent-rig", file, "instructions.md"), "utf8").replace(/\s+/g, " ");
+  const worker = flat("worker");
+  assert.doesNotMatch(worker, /Set `blocked` only for a real blocker/);
+  assert.match(worker, /For a real blocker, write a `blocked` handoff to `planner`; the planner-manager sets the task to `blocked`\./);
+  assert.doesNotMatch(worker, /manually set the task status to `in_progress`/);
+  assert.match(worker, /When work starts and the task is not already `in_progress`, set it to `in_progress`/);
+  const reviewer = flat("reviewer");
+  assert.match(reviewer, /Write it with `agent-rig tasks handoff`: `approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`\. Leave the task in `review`\./);
+});
+
+// Live Claude run (task-0107): every reviewer run first tried `tasks handoff --help` and got
+// "Task not found: --help" with exit status 1.
+test("tasks <command> --help prints the tasks help", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  for (const command of ["handoff", "set-status", "show", "done"]) {
+    for (const flag of ["--help", "-h"]) {
+      const result = run(["tasks", command, flag], cwd);
+      assert.equal(result.status, 0, `${command} ${flag}: ${result.stderr}`);
+      assert.match(result.stdout, /handoff <task-id> --sender <role> --recipient <role> --status <status> --message <text>/);
+    }
+  }
+});
+
 test("add creates a valid new agent and rejects duplicates", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
@@ -1824,7 +1855,11 @@ test("loop worker action invokes claude print mode with the prompt on stdin", ()
   const result = run(["loop", "--once"], cwd, "", env);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(readFileSync(join(cwd, "fake-claude-log", "args.json"), "utf8")), ["-p"]);
+  const args = JSON.parse(readFileSync(join(cwd, "fake-claude-log", "args.json"), "utf8"));
+  assert.deepEqual(args.slice(0, 3), ["-p", "--permission-mode", "dontAsk"]);
+  assert.ok(args.includes("Edit(/**)"));
+  assert.ok(args.some((arg) => /^Bash\(".+" ".+\/dist\/index\.js" tasks:\*\)$/.test(arg)), "allow rule for the quoted AgentRig command from the prompt");
+  assert.equal(args.includes("--dangerously-skip-permissions"), false);
   const prompt = readFileSync(join(cwd, "fake-claude-log", "stdin.txt"), "utf8");
   assert.match(prompt, /Agent: worker/);
   assert.match(prompt, /Task ID: task-0001/);
@@ -1833,7 +1868,7 @@ test("loop worker action invokes claude print mode with the prompt on stdin", ()
   const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json"), "utf8"));
   assert.equal(record.tool, "claude");
   assert.equal(record.final_task_status, "review");
-  assert.deepEqual(record.command_args, ["-p"]);
+  assert.deepEqual(record.command_args, args);
 });
 
 test("loop exits non-zero when opencode exits non-zero but still writes run records", () => {
@@ -1969,7 +2004,7 @@ test("worker loop prompt includes identity, lifecycle, and local precedence", ()
   assert.match(prompt, /# Agent Instructions File\n\.agent-rig\/worker\/instructions\.md/);
   assert.match(prompt, /# Agent Context File\n\.agent-rig\/worker\/context\.md/);
   assert.match(prompt, /Implement only the assigned task\./);
-  assert.match(prompt, /`review` when the work is ready for review, or `blocked`/);
+  assert.match(prompt, /when the work is ready for review, set the task to `review` and record a `review` handoff to `reviewer`; when you cannot continue, record a `blocked` handoff to `planner`/);
   assert.match(prompt, /Read applicable skills from `\.agent-rig\/worker\/skills\/` first\./);
   assert.match(prompt, /Then read applicable shared skills from `\.agent-rig\/_shared\/skills\/`\./);
   assert.match(prompt, /Use global Codex skills only when no AgentRig-local skill applies\./);
@@ -2001,7 +2036,7 @@ test("reviewer loop prompt includes reviewer lifecycle instructions and local pr
   assert.match(prompt, /# Agent Instructions File\n\.agent-rig\/reviewer\/instructions\.md/);
   assert.match(prompt, /# Agent Context File\n\.agent-rig\/reviewer\/context\.md/);
   assert.match(prompt, /Review the task against the phase docs and current repo behavior\./);
-  assert.match(prompt, /approved.*handoff.*planner.*review/i);
+  assert.match(prompt, /`approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`\. Leave the task in `review`/);
   assert.match(prompt, /Read applicable skills from `\.agent-rig\/reviewer\/skills\/` first\./);
   assert.match(prompt, /Check `\.agent-rig\/reviewer\/tools\/` before `\.agent-rig\/_shared\/tools\/`\./);
 });
