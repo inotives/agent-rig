@@ -31,7 +31,7 @@ and no permission flags.
   `"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "team"`.
 - Model that Claude used (from the session transcript): `claude-sonnet-5-5`.
   Permission mode in the transcript: `default`.
-- Node: `/Users/toni.lim/.local/share/node/node-v24.21.0-darwin-arm64/bin/node`.
+- Node: `~/.local/share/node/node-v24.21.0-darwin-arm64/bin/node`.
 
 Run 1 (the allow-list from task-0104, narrowed as the task-0104 review asked):
 
@@ -45,11 +45,11 @@ The script ran this loop command (one line):
 ```text
 .agent-rig/_shared/tools/sandbox-run.sh
   --allow-write <TMPDIR>/agent-rig-live-smoke/run-20261011-081429-gfdl
-  --allow-write /Users/toni.lim/.claude.json
-  --allow-write /Users/toni.lim/.claude/projects
-  --allow-write /Users/toni.lim/.claude/shell-snapshots
-  --allow-write /Users/toni.lim/Library/Caches/claude-cli-nodejs
-  -- <node> /Users/toni.lim/workspaces/agent-rig/dist/index.js loop --once
+  --allow-write ~/.claude.json
+  --allow-write ~/.claude/projects
+  --allow-write ~/.claude/shell-snapshots
+  --allow-write ~/Library/Caches/claude-cli-nodejs
+  -- <node> <repo>/dist/index.js loop --once
 ```
 
 Run 2 (`~/.claude.json` removed from the allow-list, `CLAUDE_CODE_TMPDIR` set
@@ -72,14 +72,10 @@ loop tick (reviewer) reserves a run even when the loop starts no agent.
 
 ### Run folder evidence
 
-Copies of the run folder files are in:
-
-- `docs/reports/phase-27-live-claude-test/run-1-baseline/`
-- `docs/reports/phase-27-live-claude-test/run-2-narrow-allow-list/`
-
-Each folder has `prompt.md`, `last-message.md`, `result.json`, and the
-smoke-script marker (`marker.json`). The two prompts are equal except for the
-project name.
+The raw run folder copies (`prompt.md`, `last-message.md`, `result.json`, and
+the smoke-script marker) were removed after the phase was accepted. This report
+keeps the relevant parts. The two prompts were equal except for the project
+name.
 
 `result.json` of run 1 (stdout shortened):
 
@@ -237,7 +233,7 @@ Removed after review, with the risk:
 | Path | Risk |
 | ---- | ---- |
 | `.claude/shell-snapshots` | Claude Code sessions outside the sandbox source the `snapshot-zsh-*.sh` files in this folder before each `Bash` command. A sandboxed agent could plant code there that runs later outside the sandbox. The runs wrote no file there (no `Bash` command ran). If a later run shows "Operation not permitted" there, allow only a file or folder of that run. |
-| `.claude/projects` (the whole folder) | It holds the `memory/` folders and transcripts of other projects, for example `~/.claude/projects/-Users-toni-lim-workspaces-agent-rig/memory/`. Later sessions outside the sandbox load that memory, so an agent could plant instructions there. Only the workspace subfolder is allowed now. |
+| `.claude/projects` (the whole folder) | It holds the `memory/` folders and transcripts of other projects, for example `~/.claude/projects/-<repo-slug>/memory/`. Later sessions outside the sandbox load that memory, so an agent could plant instructions there. Only the workspace subfolder is allowed now. |
 | `Library/Caches/claude-cli-nodejs` (the whole folder) | Logs of other projects. Low risk. Only the workspace subfolder is allowed now. |
 | `.claude/todos`, `.claude/statsig` | They do not exist and the runs did not create them. Not proven to be needed. |
 
@@ -274,7 +270,7 @@ Evidence comes from the session transcripts and the cache folders.
   work. It does not work at all.
 - `~/.claude/CLAUDE.md` (user instructions about the OpenKnowledge vault) was
   loaded: the transcript has an `instructions` attachment with
-  `/Users/toni.lim/.claude/CLAUDE.md`, type `User`. Claude did not act on it.
+  `~/.claude/CLAUDE.md`, type `User`. Claude did not act on it.
 - User MCP servers and plugins were loaded: claude.ai connectors (Claude Docs,
   Atlassian Rovo, Google Drive), plugin data servers (snowflake, databricks,
   definite), and open-knowledge. Evidence: the folders
@@ -496,15 +492,9 @@ node scripts/live-claude-smoke.mjs report                          # Result: PAS
 node scripts/live-claude-smoke.mjs cleanup
 ```
 
-Run folder copies:
-
-- `docs/reports/phase-27-live-claude-test/probe-deny-and-nested-loop/`
-  (prompt, generated arguments, fake CLI log, event stream; the probe path is
-  replaced with `<probe>`).
-- `docs/reports/phase-27-live-claude-test/run-3-happy-before-fixes/`
-- `docs/reports/phase-27-live-claude-test/run-4-happy-and-repair/` (one folder
-  per run, the marker, the full `report` output, and one worker and one
-  reviewer prompt).
+The raw run folder copies (the probe, the happy-path run before the fixes, and
+the happy-path and repair run) were removed after the phase was accepted. This
+report keeps the relevant parts.
 
 ### First happy-path run (before the fixes)
 
