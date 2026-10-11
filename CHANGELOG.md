@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.9 - 2026-10-11
 
 - Added a landing page to the UI. It lists the phases as cards with a state badge, a progress bar, status chips, the last update time, and a Detail button. It loads no task flow.
 - Changed the task board into a phase view. It loads only the tasks of one phase and has a breadcrumb header ("All phases / Phase N"). The phase dropdown and the all-phases board are removed.
@@ -8,6 +8,9 @@
 - Added an "N external" marker on tasks with dependencies in other phases, and a list of those dependencies in the task panel.
 - Added `GET /api/phases` for the phase summaries and a `phase` query on `GET /api/workflow`. An unknown phase returns `404`.
 - Added the sandbox runner `.agent-rig/_shared/tools/sandbox-run.sh` and safe-operations rules in the profile templates and the generated instructions.
+- Changed the Claude launcher to use role-scoped permissions.
+- Added a safe live Claude smoke test script and a live-run report.
+- Committed the workflow store with local paths redacted.
 
 ## 0.1.8 - 2026-10-10
 
