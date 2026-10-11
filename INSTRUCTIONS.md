@@ -82,13 +82,15 @@ task:
 1. The planner-manager starts the assigned worker.
 2. The worker implements the task and leaves it in `review` or `blocked`.
 3. The planner-manager starts an independent reviewer after the worker handoff.
-4. The reviewer records one handoff decision: `approved`, `changes_requested`,
-   or `blocked`. The reviewer does not change task status.
-5. For `changes_requested`, the planner-manager returns the same task to
-   `in_progress`, routes the findings to the same worker, and sends the fix
-   through independent review again.
+4. The reviewer records one handoff decision: `approved` to `planner`,
+   `changes_requested` to `worker`, or `blocked` to `planner`. The reviewer
+   does not change task status.
+5. For `changes_requested`, the task stays in `review`. The same worker
+   repairs the task and writes a new `review` handoff. Then an independent
+   reviewer reviews the task again.
 6. For `approved`, the planner-manager marks the task `done` and unblocks only
-   the next selected dependent task.
+   the next selected dependent task. For `blocked`, the planner-manager sets
+   the task to `blocked` and resolves the blocker with the human.
 7. The planner-manager runs the final integrated review and repeats the same
    repair cycle until all acceptance criteria pass.
 
@@ -96,7 +98,7 @@ The normal lifecycle is:
 
 ```text
 ready -> in_progress -> review -> done
-                         \-> in_progress
+                         \-> review (changes_requested: the same worker repairs)
                          \-> blocked
 ```
 

@@ -174,10 +174,13 @@ For each new phase:
      reviewer handoff.
    - If review is clean, record the `approved` handoff decision, mark the task `done`, and unblock only the next
      selected dependent task.
-   - If review finds a problem, record the `changes_requested` handoff decision, set the same task back to `in_progress` and
-     spawn a worker to read both handoffs, implement the focused fix, add
-     regression coverage where needed, verify it, and write a new handoff.
-     Repeat independent review until clean; do not unlock downstream work.
+   - If review finds a problem, the reviewer sends the `changes_requested`
+     handoff to the worker. The task stays in `review`. Spawn the same worker
+     to read both handoffs, implement the focused fix, add regression coverage
+     where needed, verify it, and write a new `review` handoff. Repeat
+     independent review until clean; do not unlock downstream work.
+   - If the reviewer sends a `blocked` handoff to the planner, set the task to
+     `blocked` and resolve the blocker with the human.
 
    - If implementation or review exposes a limitation that changes the plan,
      pause the affected task graph. Do not silently work around a material

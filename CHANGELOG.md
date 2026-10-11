@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Added a landing page to the UI. It lists the phases as cards with a state badge, a progress bar, status chips, the last update time, and a Detail button. It loads no task flow.
+- Changed the task board into a phase view. It loads only the tasks of one phase and has a breadcrumb header ("All phases / Phase N"). The phase dropdown and the all-phases board are removed.
+- Kept the URLs `#/`, `#/?phase=<phase>`, and `#/tasks/<id>?phase=<phase>`. A task link without `?phase=` reads the phase of the task first.
+- Added an "N external" marker on tasks with dependencies in other phases, and a list of those dependencies in the task panel.
+- Added `GET /api/phases` for the phase summaries and a `phase` query on `GET /api/workflow`. An unknown phase returns `404`.
+- Added the sandbox runner `.agent-rig/_shared/tools/sandbox-run.sh` and safe-operations rules in the profile templates and the generated instructions.
+
 ## 0.1.8 - 2026-10-10
 
 - Upgraded `better-sqlite3` to `^13.0.3` to fix a native crash on Node.js 24 (see ADR 0008).

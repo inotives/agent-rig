@@ -61,15 +61,17 @@ For each selected task:
 3. An independent reviewer reads the reviewer profile, task, worker handoff,
    project docs, and current diff; verifies the acceptance criteria without
    editing implementation files; and writes a reviewer handoff.
-4. The reviewer records one handoff decision: `approved`, `changes_requested`,
-   or `blocked`. The reviewer does not change task status.
+4. The reviewer records one handoff decision: `approved` to `planner`,
+   `changes_requested` to `worker`, or `blocked` to `planner`. The reviewer
+   does not change task status.
 5. If review is clean, the planner-manager marks the task `done` and unlocks
    only the next selected dependent task.
-6. If review finds an issue, the planner-manager returns the same task to
-   `in_progress`. The same worker reads both handoffs, applies the focused fix,
-   verifies it, and writes a new handoff. Review again before unlocking
-   downstream work.
-7. Child agents do not start nested AgentRig loops.
+6. If review finds an issue, the task stays in `review`. The same worker reads
+   both handoffs, applies the focused fix, verifies it, and writes a new
+   `review` handoff. Review again before unlocking downstream work.
+7. If the reviewer records `blocked`, the planner-manager sets the task to
+   `blocked` and resolves the blocker with the human.
+8. Child agents do not start nested AgentRig loops.
 
 ## 4. Replan When Reality Changes The Plan
 

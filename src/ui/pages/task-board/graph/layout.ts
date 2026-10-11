@@ -1,9 +1,10 @@
 import { TaskSummaryDto } from "../../../core/contracts.js";
 import { LANE_MARGIN, routeEdges } from "./edges.js";
+import { externalDependencyCount } from "./external.js";
 
 type TaskSummary = TaskSummaryDto;
 
-export type TaskGraphNode = { task: TaskSummary; layer: number; row: number; x: number; y: number; width: number; height: number; compact: boolean };
+export type TaskGraphNode = { task: TaskSummary; layer: number; row: number; x: number; y: number; width: number; height: number; compact: boolean; external: number };
 export type TaskGraphEdge = { from: string; to: string };
 export type TaskGraphLayout = { nodes: TaskGraphNode[]; edges: TaskGraphEdge[]; width: number; height: number; hasCycle: boolean };
 
@@ -87,6 +88,7 @@ export function computeLineage(layout: TaskGraphLayout, taskId: string): TaskLin
 export function layoutTaskGraph(tasks: readonly TaskSummary[], compactIds: ReadonlySet<string> = new Set()): TaskGraphLayout {
   const ordered = [...tasks].sort((a, b) => a.id.localeCompare(b.id));
   const byId = new Map(ordered.map((task) => [task.id, task]));
+  const loaded = new Set(byId.keys());
   const dependencies = new Map(ordered.map((task) => [task.id, (task.depends_on ?? []).filter((id) => byId.has(id)).sort()]));
   const dependents = new Map(ordered.map((task) => [task.id, [] as string[]]));
   for (const [id, deps] of dependencies) for (const dependency of deps) dependents.get(dependency)?.push(id);
@@ -130,7 +132,7 @@ export function layoutTaskGraph(tasks: readonly TaskSummary[], compactIds: Reado
     row += 1;
   }
   if (hasCycle) { const cycleIds = [...remaining].sort(); const cycleRow = Math.max(1, row); cycleIds.forEach((id, index) => positions.set(id, { x: index * (width + gapX) + 18, y: rowY + 18, row: cycleRow })); maxWidth = Math.max(maxWidth, cycleIds.length * (width + gapX) + 36); rowY += height + rowGap; row = cycleRow + 1; }
-  let nodes = ordered.map((task) => { const position = positions.get(task.id)!; return { task, layer: layers.get(task.id) ?? 0, row: position.row, x: position.x, y: position.y, width, height: heightOf(task.id), compact: compactIds.has(task.id) }; });
+  let nodes = ordered.map((task) => { const position = positions.get(task.id)!; return { task, layer: layers.get(task.id) ?? 0, row: position.row, x: position.x, y: position.y, width, height: heightOf(task.id), compact: compactIds.has(task.id), external: externalDependencyCount(task, loaded) }; });
   const edges = ordered.flatMap((task) => (dependencies.get(task.id) ?? []).map((from) => ({ from, to: task.id })));
   const maxY = Math.max(0, ...nodes.map((node) => node.y + node.height));
   let layoutHeight = Math.max(height, maxY + 18);

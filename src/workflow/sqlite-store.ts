@@ -1,8 +1,8 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import { validateNewHandoff, validateTaskTransition } from "./model.js";
-import type { ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
+import { resolveTaskPhase, summarizePhases, validateNewHandoff, validateTaskTransition } from "./model.js";
+import type { PhaseSummary, ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
 import type { WorkflowStore } from "./store.js";
 
 export type SQLiteWorkflowStoreOptions = {
@@ -65,8 +65,16 @@ export class SQLiteWorkflowStore implements WorkflowStore {
     const values: unknown[] = [projectIdentifier];
     if (typeof query.status !== "undefined") { clauses.push("status = ?"); values.push(query.status); }
     if (typeof query.assignedTo !== "undefined") { clauses.push("assigned_to = ?"); values.push(query.assignedTo); }
-    const rows = this.db.prepare(`SELECT * FROM tasks WHERE ${clauses.join(" AND ")} ORDER BY task_id`).all(...values) as SQLiteTaskRow[];
+    let rows = this.db.prepare(`SELECT * FROM tasks WHERE ${clauses.join(" AND ")} ORDER BY task_id`).all(...values) as SQLiteTaskRow[];
+    if (typeof query.phase !== "undefined") rows = rows.filter((row) => resolveTaskPhase(phaseInput(row)) === query.phase);
     return rows.map((row) => this.toTask(row));
+  }
+
+  /** Summaries read no task bodies. Rows without a phase column value also read their small metadata JSON. */
+  listPhaseSummaries(projectIdentifier: ProjectIdentifier): PhaseSummary[] {
+    this.assertProject(projectIdentifier);
+    const rows = this.db.prepare("SELECT title, status, phase, updated_on, CASE WHEN phase IS NULL THEN metadata_json END AS metadata_json FROM tasks WHERE project_identifier = ?").all(projectIdentifier) as Array<Pick<SQLiteTaskRow, "title" | "status" | "phase" | "updated_on"> & { metadata_json: string | null }>;
+    return summarizePhases(rows.map((row) => ({ ...phaseInput(row), status: row.status, updatedOn: row.updated_on })));
   }
 
   createTask(task: WorkflowTask): WorkflowTask {
@@ -289,6 +297,13 @@ export class SQLiteWorkflowStore implements WorkflowStore {
   private assertProject(projectIdentifier: string): void {
     if (projectIdentifier !== this.projectIdentifier) throw new Error(`Unknown project identifier: ${projectIdentifier}`);
   }
+}
+
+/** Same phase value that `toTask` builds: the column, else `metadata.phase`. */
+function phaseInput(row: { title: string; phase: string | null; metadata_json: string | null }): { title: string; phase?: string } {
+  const metadata = row.metadata_json === null ? {} : parseMetadata(row.metadata_json);
+  const phase = row.phase ?? (typeof metadata.phase === "string" && metadata.phase.trim() ? metadata.phase.trim() : undefined);
+  return { title: row.title, ...(phase ? { phase } : {}) };
 }
 
 function parseMetadata(value: string): Record<string, unknown> {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -64,6 +64,7 @@ const githubTypeLabels = new Map([
 export function runTasks(args: string[], cwd: string) {
   const [command, ...rest] = args;
   if (!command || command === "--help" || command === "-h" || command === "help") return tasksHelp();
+  if (rest[0] === "--help" || rest[0] === "-h") return tasksHelp(); // for example `tasks handoff --help`
   if (command === "create") return tasksCreate(rest, cwd);
   if (command === "mark-final-review") return tasksMarkFinalReview(rest, cwd);
   if (command === "show") return tasksShow(rest, cwd);
@@ -510,9 +511,7 @@ export function assemblePrompt(root: string, agent: Agent, task: SharedTask) {
   const sharedToolsPath = join(".agent-rig", "_shared", "tools");
   const phaseDocPath = inferPhaseDocPath(task);
   const provider = readWorkspaceWorkflowConfig(task.cwd).workflow_store.provider;
-  const cli = process.argv[1]?.endsWith("/dist/index.js")
-    ? `"${process.execPath}" "${resolve(process.argv[1])}"`
-    : "agent-rig";
+  const cli = agentRigCommand();
   const recentHandoffs = task.store.listHandoffs(task.projectIdentifier, task.id).slice(-6);
   return [
     "# AgentRig Loop Prompt",
@@ -523,6 +522,7 @@ export function assemblePrompt(root: string, agent: Agent, task: SharedTask) {
     `Active workflow provider: ${provider}`,
     `AgentRig command for this run: ${cli}`,
     "Use that command for task status and handoff mutations. In SQLite mode, never edit migrated task or handoff Markdown; it is historical reference only.",
+    ...(agent.tool === "claude" ? [claudePromptNote(agent.role)] : []),
     phaseDocPath ? `Phase doc: ${phaseDocPath}` : "Phase doc: not inferred",
     "",
     "# Required Task Outcome",
@@ -562,6 +562,21 @@ export function assemblePrompt(root: string, agent: Agent, task: SharedTask) {
     "",
     task.body.trim()
   ].join("\n") + "\n";
+}
+
+// The AgentRig command that the loop prompt prints. The Claude allow rules use
+// the same text, so a rule matches the exact command that the agent runs.
+function agentRigCommand() {
+  return process.argv[1]?.endsWith("/dist/index.js")
+    ? `"${process.execPath}" "${resolve(process.argv[1])}"`
+    : "agent-rig";
+}
+
+function claudePromptNote(role: string) {
+  const files = role === "reviewer"
+    ? "Do not edit or write files."
+    : "Write and change files with the `Write` or `Edit` tool, not with a shell redirection such as `>`.";
+  return `Claude permissions: run the AgentRig command as one literal command, exactly as written above. Do not put it in a shell variable; Claude Code refuses a command that it cannot check. Run each Bash command as one simple command: no \`;\`, \`&&\`, \`||\`, a pipe, or a redirection, and no shell variable such as \`$?\`. Claude Code denies such a command even when the simple command is allowed, and the tool result already shows the exit status. If a command is denied, run it again once in its simplest form. ${files}`;
 }
 
 export function buildLoopPrompt(cwd: string, agentName: string, taskId: string) {
@@ -668,20 +683,142 @@ function runClaudeLoop(root: string, cwd: string, agent: Agent, task: SharedTask
   const runId = nextRunId(join(root, agent.name, "runs"), task.id, started);
   const runDir = join(root, agent.name, "runs", runId);
   const prompt = assemblePrompt(root, agent, task);
-  const args = ["-p"];
+  const args = claudeLoopArgs(agent.role, cwd, agentRigCommand());
 
   mkdirSync(runDir, { recursive: true });
   writeFileSync(join(runDir, "prompt.md"), prompt, "utf8");
-  const result = spawnSync("claude", args, { cwd, input: prompt, encoding: "utf8", env: { ...process.env, AGENT_RIG_ROLE: agent.role, ...(agent.role === "reviewer" ? { AGENT_RIG_LOOP_REVIEW_TASK: task.id } : {}) } });
+  // The stream of a real task is larger than the 1 MiB stdout buffer of
+  // spawnSync (ENOBUFS kills Claude). Claude writes stdout straight to the file.
+  const streamPath = join(runDir, "claude-stream.jsonl");
+  const streamFd = openSync(streamPath, "w");
+  let result: ReturnType<typeof spawnSync>;
+  try {
+    result = spawnSync("claude", args, { cwd, input: prompt, encoding: "utf8", stdio: ["pipe", streamFd, "pipe"], env: { ...process.env, AGENT_RIG_ROLE: agent.role, ...(agent.role === "reviewer" ? { AGENT_RIG_LOOP_REVIEW_TASK: task.id } : {}) } });
+  } finally {
+    closeSync(streamFd);
+  }
   const finalTask = requireSharedTask(cwd, task.id);
   const exitStatus = result.status ?? (result.error ? 1 : 0);
-  const stdout = spawnText(result.stdout);
+  const stream = readFileSync(streamPath, "utf8");
+  const stdout = claudeResultText(spawnText(stream));
   const stderr = spawnText(result.stderr);
   const error = result.error ? message(result.error) : "";
   writeFileSync(join(runDir, "last-message.md"), stdout, "utf8");
   const failureSummary = exitStatus === 0 ? "" : loopFailureMessage(agent.tool, exitStatus, agent.name, agent.role, task.id, stderr, error);
   writeJson(join(runDir, "result.json"), loopResultRecord(agent, task.id, args, exitStatus, started, finalTask.status, stdout, stderr, error, failureSummary));
   return { exitStatus, stdout, stderr, error, failureSummary, runDir };
+}
+
+// With `--output-format stream-json`, Claude prints one JSON event per line:
+// every tool call, its result, and a final `result` event. The run folder keeps
+// the stream in `claude-stream.jsonl` as tool-call evidence. The agent message
+// is the text of the last `result` event. Output with no JSON event is used as
+// it is. Raw JSON events never go into the message.
+function claudeResultText(stream: string) {
+  const lines = stream.split(/\r?\n/);
+  let events = false;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index].trim();
+    if (!line.startsWith("{")) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event && typeof event === "object" && typeof event.type === "string") events = true;
+      if (event?.type === "result" && typeof event.result === "string") return spawnText(event.result.replace(/\n*$/, "\n"));
+    } catch {
+      // Not a JSON event.
+    }
+  }
+  return events ? "Claude printed no result event. See claude-stream.jsonl in the run folder.\n" : stream;
+}
+
+// Claude permission rules for loop agents. Claude Code evaluates deny rules
+// first, then allow rules. A deny rule wins over an allow rule. With
+// `--permission-mode dontAsk`, a call that no allow rule matches is denied
+// without a prompt. Bash rules match the command text that the agent writes;
+// `:*` at the end is a trailing wildcard. Do not combine `:*` with another `*`:
+// Claude 2.1.296 then reads the `*` literally. A `/path` rule from the command
+// line is relative to the primary working directory (the project).
+
+// Reads in the project. Claude 2.1.296 checks file permissions against
+// `Read(path)` and `Edit(path)` rules only, so `Read(/**)` also covers the
+// `Glob` and `Grep` tools. A `Glob(path)` or `Grep(path)` rule is never used.
+const CLAUDE_READ_RULES = [
+  "Read(/**)" // read, find, and search files in the project
+];
+
+// Commands that both roles can run.
+const CLAUDE_SHARED_BASH_RULES = [
+  "Bash(agent-rig tasks:*)", // AgentRig task and handoff commands (global command)
+  "Bash(node:*)", // project scripts and checks; the sandbox runner limits writes
+  "Bash(npm test:*)", // the project test script
+  "Bash(npm run:*)", // other project package scripts, for example `npm run build`
+  "Bash(git status:*)", // read-only git
+  "Bash(git diff:*)", // read-only git
+  "Bash(git log:*)", // read-only git
+  "Bash(git show:*)" // read-only git
+];
+
+// The worker can also create and change files in the project. An `Edit` path
+// rule covers every built-in tool that writes files, including `Write`.
+const CLAUDE_WORKER_ALLOWED_TOOLS = [...CLAUDE_READ_RULES, "Edit(/**)", ...CLAUDE_SHARED_BASH_RULES];
+
+// The reviewer reads, searches, and runs checks. It cannot edit or write.
+const CLAUDE_REVIEWER_ALLOWED_TOOLS = [...CLAUDE_READ_RULES, ...CLAUDE_SHARED_BASH_RULES];
+
+// Commands that no loop agent may run, even when an allow rule matches.
+const CLAUDE_DISALLOWED_TOOLS = [
+  "Bash(rm:*)", // delete files
+  "Bash(rmdir:*)", // delete folders
+  "Bash(mv:*)", // move or overwrite files
+  "Bash(sudo:*)", // run as another user
+  "Bash(chmod:*)", // change file modes
+  "Bash(chown:*)", // change file owners
+  "Bash(curl:*)", // network download or upload
+  "Bash(wget:*)", // network download
+  "Bash(git push:*)", // publish commits
+  "Bash(git commit:*)", // only the human commits
+  "Bash(git reset:*)", // discard work
+  "Bash(git clean:*)", // delete untracked files
+  "Bash(git checkout:*)", // discard changes or switch branches
+  "Bash(git branch -D:*)", // delete branches
+  "Bash(agent-rig loop:*)", // no nested AgentRig loop (global command)
+  // No nested AgentRig loop through `node` (Bash(node:*) is allowed). Claude
+  // does not expand a `*` in a rule that ends with `:*`, so these use `loop*`.
+  "Bash(node *index.js loop*)",
+  "Bash(node *index.js\" loop*)", // the same, with a quoted script path
+  "WebFetch", // no web access
+  "WebSearch" // no web access
+];
+
+// The reviewer must not change files.
+const CLAUDE_REVIEWER_DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit"];
+
+// Build the `claude` arguments for a loop agent. `cli` is the AgentRig command
+// that the prompt prints. The prompt goes on stdin, so no positional prompt
+// follows the variadic `--allowedTools` and `--disallowedTools` options.
+export function claudeLoopArgs(role: string, cwd: string, cli: string) {
+  const reviewer = role === "reviewer";
+  const quotedCli = cli === "agent-rig" ? [] : [cli];
+  const allowed = [
+    ...(reviewer ? CLAUDE_REVIEWER_ALLOWED_TOOLS : CLAUDE_WORKER_ALLOWED_TOOLS),
+    ...quotedCli.map((command) => `Bash(${command} tasks:*)`) // the exact command form from the prompt
+  ];
+  const disallowed = [
+    ...CLAUDE_DISALLOWED_TOOLS,
+    ...quotedCli.map((command) => `Bash(${command} loop:*)`), // no nested loop in the prompt command form
+    ...(reviewer ? CLAUDE_REVIEWER_DISALLOWED_TOOLS : [])
+  ];
+  return [
+    "-p",
+    "--permission-mode", "dontAsk",
+    "--no-session-persistence",
+    "--strict-mcp-config", // load no user MCP servers
+    "--setting-sources", "project", // ignore user and local settings files
+    "--output-format", "stream-json", "--verbose", // tool calls in the run folder (`claude-stream.jsonl`)
+    "--add-dir", cwd,
+    "--allowedTools", ...allowed,
+    "--disallowedTools", ...disallowed
+  ];
 }
 
 function loopResultRecord(agent: Agent, taskId: string, args: string[], exitStatus: number, started: Date, finalTaskStatus: string, stdout: string, stderr: string, error: string, failureSummary: string) {
@@ -710,6 +847,11 @@ export function handleLoopResult(cwd: string, result: LoopRunResult, agent: Agen
     && handoffs.length > handoffCount
     && latestHandoff?.sender === agent.role
     && ["approved", "changes_requested", "done"].includes(latestHandoff.status);
+  // A loop agent cannot set `blocked` itself; it records a `blocked` handoff to the planner.
+  const blockedHandoff = handoffs.length > handoffCount
+    && latestHandoff?.sender === agent.role
+    && latestHandoff.status === "blocked"
+    && ["in_progress", "review"].includes(task.status);
   if (result.exitStatus !== 0) {
     const reason = result.failureSummary || loopFailureMessage(agent.tool, result.exitStatus, agent.name, agent.role, taskId, result.stderr, result.error);
     if (isInfrastructureFailure(result)) {
@@ -717,6 +859,8 @@ export function handleLoopResult(cwd: string, result: LoopRunResult, agent: Agen
     } else {
       blockLoopTask(task, reason);
     }
+  } else if (blockedHandoff) {
+    blockLoopTask(task, `${agent.role} ${agent.name} recorded a blocked handoff for ${taskId}: ${firstNonEmptyLine(latestHandoff.message)}`);
   } else if (agent.role === "worker" && task.status === "in_progress") {
     blockLoopTask(task, staleLoopTaskMessage(agent, taskId, "in_progress"));
   } else if (agent.role === "reviewer" && task.status === "review" && task.meta.pending_completion !== true && !reviewerDecision) {
@@ -823,11 +967,14 @@ function staleLoopTaskMessage(agent: Agent, taskId: string, status: string) {
   return `${agent.role} ${agent.name} left ${taskId} ${location} after ${agent.tool} run`;
 }
 
+// Only the planner can set `blocked` or `done`, and the reviewer cannot change
+// the task state (see validateTaskTransition). The outcome text asks only for
+// what the CLI accepts from a loop agent.
 function lifecycleInstructions(role: string) {
   if (role === "reviewer") {
-    return "Review the task against the phase docs and current repo behavior. Send an `approved` handoff to the planner when accepted and leave the task in `review`; leave it `ready` when fixes are required, or `blocked` if progress is impossible.";
+    return "Review the task against the phase docs and current repo behavior. Record exactly one decision with the AgentRig `tasks handoff` command: `approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`. Leave the task in `review`; do not change the task state. The loop sends `changes_requested` back to the worker, and the planner acts on `approved` and `blocked`.";
   }
-  return "Implement only the assigned task. Before you finish, leave the task in exactly one terminal state for this run: `review` when the work is ready for review, or `blocked` when you cannot continue.";
+  return "Implement only the assigned task. Before you finish, do one of these: when the work is ready for review, set the task to `review` and record a `review` handoff to `reviewer`; when you cannot continue, record a `blocked` handoff to `planner` with the reason and leave the task state as it is. The loop then sets the task to `blocked`.";
 }
 
 function inferPhaseDocPath(task: SharedTask) {
@@ -923,7 +1070,20 @@ export function loopHelp() {
 
 Supports loop agents with \`tool = "codex"\`, \`tool = "opencode"\`, or \`tool = "claude"\`.
 OpenCode uses its configured default model; AgentRig does not pass \`--model\` or \`--auto\`.
-Claude receives the assembled prompt on stdin.
+Claude receives the assembled prompt on stdin. AgentRig runs \`claude -p\` with
+\`--permission-mode dontAsk\`, \`--no-session-persistence\`, \`--strict-mcp-config\`,
+\`--setting-sources project\`, \`--output-format stream-json --verbose\`, and
+\`--add-dir <project>\`. A tool call that the role does not allow is denied
+without a prompt. Each run folder keeps the tool calls in claude-stream.jsonl.
+AgentRig never passes \`--dangerously-skip-permissions\` or \`bypassPermissions\`.
+  worker:   read, search, edit, and write inside the project; Bash for
+            AgentRig task commands, node, npm test, npm run, and read-only git
+  reviewer: the same, without edit or write tools
+  denied:   rm, rmdir, mv, sudo, chmod, chown, curl, wget, git push, commit,
+            reset, clean, checkout, branch -D, a nested agent-rig loop,
+            WebFetch, and WebSearch
+When the loop runs inside the sandbox runner, set CLAUDE_CODE_TMPDIR to a folder
+that the sandbox allows. AgentRig passes the environment to Claude unchanged.
 
 Options:
   --once                Run one loop tick and exit

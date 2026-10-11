@@ -86,6 +86,24 @@ generated shared context or role instructions, compare the release files with
 the backup and copy only those generated files. Preserve project-specific
 instructions and accepted local decisions.
 
+The new safe-operations rules name `.agent-rig/_shared/tools/sandbox-run.sh`.
+`init` installs this file in a new workspace only. In an existing deployment,
+copy it once from `templates/tools/sandbox-run.sh` in the AgentRig release, and
+keep the executable bit. `<release>` is the AgentRig package folder. For an npm
+install, it is `$(npm root -g)/@inotives/agent-rig`. For a repository checkout,
+it is the root of the checkout, and the file is `templates/tools/sandbox-run.sh`.
+
+```bash
+# npm install
+cp "$(npm root -g)/@inotives/agent-rig/templates/tools/sandbox-run.sh" .agent-rig/_shared/tools/sandbox-run.sh
+# repository checkout (run this in the checkout)
+cp templates/tools/sandbox-run.sh <your-project>/.agent-rig/_shared/tools/sandbox-run.sh
+chmod 755 .agent-rig/_shared/tools/sandbox-run.sh
+```
+
+If the file exists and differs, do not overwrite it. Compare the two files and
+keep your local changes.
+
 Never overwrite these local deployment records:
 
 - `.agent-rig/*/skills/`

@@ -28,6 +28,18 @@ export type WorkflowSummaryDto = {
   tasks: TaskSummaryDto[];
 };
 
+export type PhaseSummaryDto = {
+  phase: string;
+  total: number;
+  counts: Record<"todo" | "ready" | "in_progress" | "blocked" | "review" | "done", number>;
+  latest_updated_on: string;
+};
+
+export type PhasesResponseDto = {
+  project_identifier: string;
+  phases: PhaseSummaryDto[];
+};
+
 export type TaskDetailDto = TaskDto & {
   parent: string;
   depends_on: string[];

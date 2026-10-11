@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { applyTheme, beginUiLoad, completeUiLoad, createUiState, failUiLoad, filterHandoffs, filterTasks, layoutTaskGraph, mountBoard, openHandoffModal, parseRoute, positionTaskPreview, preferredTheme, renderTaskPreview, routeHash, setUiRoute, sortHandoffs, sortTasks, STATUS_COLUMNS, taskPreviewHeaderClass, taskPreviewMetadata, taskPreviewTone } from "../../../dist/ui/pages/task-board/index.js";
+import { applyTheme, beginUiLoad, completeUiLoad, createUiState, failUiLoad, filterHandoffs, layoutTaskGraph, mountBoard, openHandoffModal, parseRoute, positionTaskPreview, preferredTheme, renderTaskPreview, routeHash, setUiRoute, sortHandoffs, sortTasks, STATUS_COLUMNS, taskPreviewHeaderClass, taskPreviewMetadata, taskPreviewTone } from "../../../dist/ui/pages/task-board/index.js";
 import { resolveTaskPhase } from "../../../dist/workflow/index.js";
 
 const task = (id, priority, updated_on, phase = "phase-17") => ({ id, title: id, type: "task", status: "ready", assigned_to: "worker", priority, phase, updated_on, handoff_count: 0 });
@@ -17,8 +17,12 @@ test("board utilities preserve status order, sort tasks, and filter phases", () 
   assert.deepEqual(STATUS_COLUMNS, ["todo", "ready", "in_progress", "blocked", "review", "done"]);
   const tasks = [task("low", "low", "2026-01-01"), task("new", "high", "2026-02-01"), task("old", "high", "2026-01-01", "phase-16")];
   assert.deepEqual(sortTasks(tasks).map(({ id }) => id), ["new", "old", "low"]);
-  assert.deepEqual(filterTasks(tasks, "phase-16").map(({ id }) => id), ["old"]);
-  assert.equal(filterTasks(tasks, "__all__").length, 3);
+});
+
+test("the all-phases path is removed from the board source", () => {
+  const source = readFileSync(new URL("../../../src/ui/pages/task-board/index.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /__all__|ALL_PHASES|filterTasks/);
+  assert.doesNotMatch(source, /"\/api\/workflow"/, "the UI never asks for the workflow without a phase");
 });
 
 test("task graph layout is deterministic, layered, and exposes cycles", () => {
@@ -185,7 +189,21 @@ test("phase selection persists in the hash and restores after UI state recreatio
   const hash = routeHash(route, "phase-19");
   assert.equal(hash, "#/?phase=phase-19");
   assert.equal(createUiState(hash).selectedPhase, "phase-19");
-  assert.equal(createUiState("#/?phase=not-a-phase").selectedPhase, "__all__");
+  assert.equal(createUiState("#/?phase=%00").selectedPhase, null);
+  assert.equal(createUiState("#/?phase=").selectedPhase, null);
+  assert.equal(createUiState("#/?phase=%E0%A4%A").selectedPhase, null);
+  assert.equal(createUiState(`#/?phase=${"a".repeat(201)}`).selectedPhase, null);
+  assert.equal(createUiState("#/").selectedPhase, null);
+  assert.equal(createUiState("#/?phase=26").selectedPhase, "26");
+  assert.equal(createUiState("#/?phase=phase-27").selectedPhase, "phase-27");
+  assert.equal(createUiState("#/?phase=nope").selectedPhase, "nope");
+  assert.equal(createUiState("#/tasks/task-0090").selectedPhase, null);
+  assert.equal(routeHash(route), "#/");
+  assert.equal(routeHash(route, null), "#/");
+  assert.equal(routeHash(route, "26"), "#/?phase=26");
+  assert.equal(routeHash({ kind: "task", taskId: "task-0090" }), "#/tasks/task-0090");
+  assert.equal(setUiRoute(createUiState("#/?phase=phase-19"), "#/").selectedPhase, null, "a link without a phase does not keep the old phase");
+  assert.equal(setUiRoute(createUiState("#/"), "#/?phase=phase-20").selectedPhase, "phase-20");
   assert.deepEqual(createUiState("#/tasks/task-0050?phase=phase-19").route, { kind: "task", taskId: "task-0050" });
   assert.equal(routeHash({ kind: "task", taskId: "task-0050" }, "phase-19"), "#/tasks/task-0050?phase=phase-19");
 });
@@ -218,17 +236,17 @@ test("mountBoard preserves a task route from the current location", async () => 
   globalThis.document = { createElement: (tag) => new Element(tag), documentElement: new Element("html") };
   globalThis.fetch = async (path) => {
     requests.push(path);
-    if (path === "/api/workflow") return { ok: true, json: async () => ({ project_identifier: "agent-rig", phases: [], tasks: [] }) };
+    if (path.startsWith("/api/workflow?phase=")) return { ok: true, json: async () => ({ project_identifier: "agent-rig", phases: [], tasks: [] }) };
     return { ok: true, json: async () => path.endsWith("/handoffs") ? { handoffs: [] } : { task: { ...task("task-0037", "high", "2026-10-06"), body: "", depends_on: [], dependency_ready: true, blocked_by: [], created_by: "planner", created_on: "2026-10-06", metadata: {} } } };
   };
-  globalThis.history = { back() {} };
-  globalThis.location = { hash: "#/tasks/task-0037" };
+  globalThis.history = { back() {}, replaceState() {} };
+  globalThis.location = { hash: "#/tasks/task-0037?phase=phase-17" };
   globalThis.Option = class extends Element { constructor(text, value) { super("option"); this.textContent = text; this.value = value; } };
   globalThis.window = { matchMedia: () => ({ matches: false }), scrollY: 0, addEventListener() {}, scrollTo() {} };
   try {
     mountBoard(new Element("div"));
     await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(requests, ["/api/workflow", "/api/tasks/task-0037", "/api/tasks/task-0037/handoffs"]);
+    assert.deepEqual(requests, ["/api/workflow?phase=phase-17", "/api/tasks/task-0037", "/api/tasks/task-0037/handoffs"]);
   } finally {
     Object.assign(globalThis, previous);
   }
@@ -297,4 +315,238 @@ test("board has one status legend, inside the graph", () => {
   const toolbar = readFileSync(new URL("../../../src/ui/pages/task-board/graph/toolbar.ts", import.meta.url), "utf8");
   assert.equal(source.match(/renderGraphToolbar\(/g).length, 1, "graph toolbar is rendered once");
   assert.equal(toolbar.match(/renderGraphLegend\(/g).length, 1, "the toolbar renders the one legend");
+});
+
+function fakeBrowser({ hash, respond }) {
+  class Element {
+    constructor(tag) { this.tagName = tag; this.children = []; this.dataset = {}; this.classList = { toggle() {} }; this.textContent = ""; this.value = ""; }
+    append(...children) { this.children.push(...children); }
+    replaceChildren(...children) { this.children = children; }
+    remove() {}
+    setAttribute() {}
+    addEventListener(type, listener) { (this.listeners ??= {})[type] = listener; }
+    querySelector() { return null; }
+  }
+  const walk = (element, found = []) => { found.push(element); for (const child of element.children ?? []) walk(child, found); return found; };
+  const previous = { document: globalThis.document, fetch: globalThis.fetch, history: globalThis.history, location: globalThis.location, Option: globalThis.Option, window: globalThis.window };
+  const requests = [];
+  const replaced = [];
+  const listeners = {};
+  globalThis.document = { createElement: (tag) => new Element(tag), documentElement: new Element("html") };
+  globalThis.fetch = async (path) => { requests.push(path); const answer = respond(path); return typeof answer.ok === "boolean" ? answer : { ok: true, json: async () => answer }; };
+  globalThis.location = { hash };
+  globalThis.history = { back() {}, replaceState(_state, _title, url) { replaced.push(url); globalThis.location.hash = url; } };
+  globalThis.Option = class extends Element { constructor(text, value) { super("option"); this.textContent = text; this.value = value; } };
+  globalThis.window = { matchMedia: () => ({ matches: false }), scrollY: 0, addEventListener(type, listener) { listeners[type] = listener; }, scrollTo() {} };
+  const root = new Element("div");
+  return {
+    root, requests, replaced, inputs: () => walk(root).filter((item) => item.tagName === "input"), links: () => walk(root).filter((item) => item.tagName === "a"), texts: () => walk(root).map((item) => item.textContent).filter(Boolean),
+    navigate: async (next) => { globalThis.location.hash = next; listeners.hashchange(); await new Promise((resolve) => setImmediate(resolve)); },
+    restore: () => Object.assign(globalThis, previous)
+  };
+}
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+const phasesBody = { project_identifier: "agent-rig", phases: [{ phase: "phase-27", total: 3, counts: { todo: 0, ready: 1, in_progress: 0, blocked: 0, review: 0, done: 2 }, latest_updated_on: "2026-10-09" }, { phase: "26", total: 2, counts: { todo: 0, ready: 0, in_progress: 0, blocked: 0, review: 0, done: 2 }, latest_updated_on: "2026-09-09" }] };
+const workflowBody = (phase) => ({ project_identifier: "agent-rig", phases: [phase], tasks: [task("task-0090", "high", "2026-10-06", phase)] });
+const detailBody = (phase) => ({ task: { ...task("task-0090", "high", "2026-10-06", phase), body: "", depends_on: [], dependency_ready: true, blocked_by: [], created_by: "planner", created_on: "2026-10-06", metadata: {} } });
+const respondFor = (path) => {
+  if (path === "/api/phases") return phasesBody;
+  if (path.startsWith("/api/workflow?phase=")) return workflowBody(decodeURIComponent(path.split("=")[1]));
+  if (path === "/api/tasks/task-0090") return detailBody("phase-25");
+  if (path === "/api/tasks/task-0090/handoffs") return { handoffs: [] };
+  throw new Error(`unexpected request ${path}`);
+};
+
+test("landing route requests only the phase list and links each phase", async () => {
+  const browser = fakeBrowser({ hash: "#/", respond: respondFor });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/phases"]);
+    assert.deepEqual(browser.links().map((link) => link.href).filter((href) => href?.includes("phase=")), ["#/?phase=phase-27", "#/?phase=26"]);
+  } finally { browser.restore(); }
+});
+
+test("phase route requests only that phase and never the unfiltered workflow", async () => {
+  for (const phase of ["26", "phase-27"]) {
+    const browser = fakeBrowser({ hash: `#/?phase=${phase}`, respond: respondFor });
+    try {
+      mountBoard(browser.root);
+      await settle();
+      assert.deepEqual(browser.requests, [`/api/workflow?phase=${phase}`]);
+    } finally { browser.restore(); }
+  }
+});
+
+test("invalid phase value opens the landing page", async () => {
+  const browser = fakeBrowser({ hash: "#/?phase=%00", respond: respondFor });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/phases"]);
+  } finally { browser.restore(); }
+});
+
+test("task route with a phase opens the panel in its phase view", async () => {
+  const browser = fakeBrowser({ hash: "#/tasks/task-0090?phase=phase-25", respond: respondFor });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/workflow?phase=phase-25", "/api/tasks/task-0090", "/api/tasks/task-0090/handoffs"]);
+    assert.deepEqual(browser.replaced, []);
+  } finally { browser.restore(); }
+});
+
+test("task link without a phase reads the task phase and replaces the URL", async () => {
+  const browser = fakeBrowser({ hash: "#/tasks/task-0090", respond: respondFor });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/tasks/task-0090", "/api/workflow?phase=phase-25", "/api/tasks/task-0090", "/api/tasks/task-0090/handoffs"]);
+    assert.deepEqual(browser.replaced, ["#/tasks/task-0090?phase=phase-25"]);
+  } finally { browser.restore(); }
+});
+
+test("unknown phase shows Phase not found with a link to the landing page", async () => {
+  const respond = (path) => path.startsWith("/api/workflow") ? { ok: false, status: 404, json: async () => ({ error: "Phase not found" }) } : respondFor(path);
+  const browser = fakeBrowser({ hash: "#/?phase=nope", respond });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/workflow?phase=nope"]);
+    assert.ok(browser.texts().some((value) => value.includes("Phase not found")));
+    assert.ok(browser.links().some((link) => link.href === "#/"));
+  } finally { browser.restore(); }
+});
+
+test("each navigation loads fresh data and Refresh reloads the current page only", async () => {
+  const browser = fakeBrowser({ hash: "#/", respond: respondFor });
+  try {
+    const board = mountBoard(browser.root);
+    await settle();
+    await browser.navigate("#/?phase=phase-27");
+    await browser.navigate("#/");
+    await board.refresh();
+    await browser.navigate("#/?phase=26");
+    await board.refresh();
+    assert.deepEqual(browser.requests, ["/api/phases", "/api/workflow?phase=phase-27", "/api/phases", "/api/phases", "/api/workflow?phase=26", "/api/workflow?phase=26"]);
+  } finally { browser.restore(); }
+});
+
+test("a failed load keeps the last good phase data and offers Retry", async () => {
+  let fail = false;
+  const respond = (path) => fail && path.startsWith("/api/workflow") ? { ok: false, status: 500, json: async () => ({}) } : respondFor(path);
+  const browser = fakeBrowser({ hash: "#/?phase=phase-27", respond });
+  try {
+    const board = mountBoard(browser.root);
+    await settle();
+    fail = true;
+    await board.refresh(true);
+    assert.ok(browser.texts().some((value) => value.includes("Showing last successful data")));
+    assert.ok(browser.texts().includes("Retry"));
+    assert.ok(browser.texts().some((value) => value.includes("task-0090")) || browser.root.children.length > 0);
+  } finally { browser.restore(); }
+});
+
+test("landing shows one Detail link per phase card and makes no task request", async () => {
+  const browser = fakeBrowser({ hash: "#/", respond: respondFor });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/phases"]);
+    assert.ok(browser.texts().includes("Phase 27"));
+    assert.ok(browser.texts().includes("Phase 26"));
+    assert.equal(browser.links().filter((link) => link.textContent === "Detail").length, 2);
+  } finally { browser.restore(); }
+});
+
+test("landing filters from the URL, updates the URL while typing, and never requests again", async () => {
+  const browser = fakeBrowser({ hash: "#/?q=26&from=2026-09-01", respond: respondFor });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/phases"]);
+    assert.deepEqual(browser.links().filter((link) => link.textContent === "Detail").map((link) => link.href), ["#/?phase=26"]);
+    const search = browser.inputs().find((item) => item.id === "phase-filter-q");
+    assert.equal(search.value, "26");
+    search.value = "27"; search.listeners.input();
+    assert.deepEqual(browser.links().filter((link) => link.textContent === "Detail").map((link) => link.href), ["#/?phase=phase-27"]);
+    assert.deepEqual(browser.replaced, ["#/?q=27&from=2026-09-01"]);
+    assert.deepEqual(browser.requests, ["/api/phases"]);
+    search.value = "zzz"; search.listeners.input();
+    assert.ok(browser.texts().includes("No phases match"));
+    assert.equal(browser.replaced.at(-1), "#/?q=zzz&from=2026-09-01");
+    assert.deepEqual(browser.requests, ["/api/phases"]);
+  } finally { browser.restore(); }
+});
+
+test("landing with no phases shows the empty state", async () => {
+  const browser = fakeBrowser({ hash: "#/", respond: () => ({ project_identifier: "agent-rig", phases: [] }) });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.ok(browser.texts().includes("No phases yet"));
+  } finally { browser.restore(); }
+});
+
+test("a landing load error with no data shows Retry and no cards", async () => {
+  let fail = true;
+  const respond = (path) => fail && path === "/api/phases" ? { ok: false, status: 500, json: async () => ({}) } : respondFor(path);
+  const browser = fakeBrowser({ hash: "#/", respond });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.ok(browser.texts().includes("Retry"));
+    assert.equal(browser.links().filter((link) => link.textContent === "Detail").length, 0);
+  } finally { browser.restore(); }
+});
+
+test("a failed landing refresh keeps the last good cards and offers Retry", async () => {
+  let fail = false;
+  const respond = (path) => fail && path === "/api/phases" ? { ok: false, status: 500, json: async () => ({}) } : respondFor(path);
+  const browser = fakeBrowser({ hash: "#/", respond });
+  try {
+    const board = mountBoard(browser.root);
+    await settle();
+    fail = true;
+    await board.refresh(true);
+    assert.ok(browser.texts().some((value) => value.includes("Showing last successful data")));
+    assert.ok(browser.texts().includes("Retry"));
+    assert.equal(browser.links().filter((link) => link.textContent === "Detail").length, 2);
+  } finally { browser.restore(); }
+});
+
+test("the phase dropdown is removed and the breadcrumb is shown on a phase page", async () => {
+  const source = readFileSync(new URL("../../../src/ui/pages/task-board/index.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /Filter by phase|createElement\("select"\)|new Option/);
+  const browser = fakeBrowser({ hash: "#/?phase=phase-25", respond: (path) => path.startsWith("/api/workflow") ? { project_identifier: "agent-rig", phases: ["phase-25"], tasks: [{ ...task("task-0090", "high", "2026-10-06", "phase-25"), status: "done", depends_on: ["task-0088"] }, task("task-0091", "high", "2026-10-06", "phase-25")] } : respondFor(path) });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.ok(browser.texts().includes("Phase 25"));
+    assert.ok(browser.texts().some((value) => value === "1 of 2 done"));
+    assert.ok(browser.texts().includes("active"));
+    assert.ok(browser.links().some((link) => link.href === "#/" && link.textContent === "All phases"));
+  } finally { browser.restore(); }
+});
+
+test("the task panel lists external dependencies of the open task", async () => {
+  const respond = (path) => {
+    if (path.startsWith("/api/workflow?phase=")) return { project_identifier: "agent-rig", phases: ["phase-25"], tasks: [{ ...task("task-0090", "high", "2026-10-06", "phase-25"), depends_on: ["task-0088", "task-0077"] }] };
+    if (path === "/api/tasks/task-0090") return { task: { ...task("task-0090", "high", "2026-10-06", "phase-25"), body: "", depends_on: ["task-0088", "task-0077"], dependency_ready: true, blocked_by: [], created_by: "planner", created_on: "2026-10-06", metadata: {} } };
+    if (path === "/api/tasks/task-0090/handoffs") return { handoffs: [] };
+    if (path === "/api/tasks/task-0088") return { task: { ...task("task-0088", "high", "2026-10-06", "phase-24"), title: "Earlier work", status: "done", body: "", depends_on: [], dependency_ready: true, blocked_by: [], created_by: "planner", created_on: "2026-10-06", metadata: {} } };
+    if (path === "/api/tasks/task-0077") return { ok: false, status: 404, json: async () => ({}) };
+    throw new Error(`unexpected request ${path}`);
+  };
+  const browser = fakeBrowser({ hash: "#/tasks/task-0090?phase=phase-25", respond });
+  try {
+    mountBoard(browser.root);
+    await settle();
+    assert.deepEqual(browser.requests, ["/api/workflow?phase=phase-25", "/api/tasks/task-0090", "/api/tasks/task-0090/handoffs", "/api/tasks/task-0088", "/api/tasks/task-0077"]);
+    assert.ok(browser.texts().includes("Dependencies in other phases"));
+    assert.ok(browser.texts().includes("Earlier work"));
+    assert.ok(browser.texts().includes("not found"));
+    assert.ok(browser.links().some((link) => link.href === "#/tasks/task-0088?phase=phase-24"));
+  } finally { browser.restore(); }
 });

@@ -325,3 +325,99 @@ test("Markdown task lookup accepts YAML scalar identifiers", () => {
   store.updateTask("fixture", "1", { status: "done" });
   assert.equal(store.getTask("fixture", "1").status, "done");
 });
+
+// Phase summaries (task-0108): both providers must give identical results for the same fixtures.
+const phaseFixtureTasks = [
+  { id: "task-0001", title: "Explicit field", status: "done", phase: "phase-27", updatedOn: "2026-10-01" },
+  { id: "task-0002", title: "Another explicit", status: "ready", phase: "phase-27", updatedOn: "2026-10-05T10:00:00.000Z" },
+  { id: "task-0003", title: "Phase 26 work in the title", status: "in_progress", updatedOn: "2026-10-03" },
+  { id: "task-0004", title: "Field beats title phase-30", status: "review", phase: "phase-26", updatedOn: "2026-10-02" },
+  { id: "task-0005", title: "No phase at all", status: "blocked", updatedOn: "2026-09-01" },
+  { id: "task-0006", title: "Todo item", status: "todo", phase: "phase-27", updatedOn: "2026-10-04" }
+];
+
+function phaseTask(partial) {
+  return {
+    projectIdentifier: "fixture", type: "task", assignedTo: "worker", priority: "normal", parent: "",
+    dependsOn: [], dependencyReady: true, blockedBy: [], createdBy: "human", createdOn: "2026-09-01",
+    body: "# Task\n", metadata: {}, ...partial
+  };
+}
+
+const phaseProviders = {
+  markdown() {
+    const { store } = storeFixture();
+    return { store, close() {} };
+  },
+  sqlite() {
+    const { store } = sqliteFixture();
+    return { store, close: () => store.close() };
+  }
+};
+
+for (const [provider, make] of Object.entries(phaseProviders)) {
+  test(`${provider} listPhaseSummaries returns an empty list for an empty store`, () => {
+    const { store, close } = make();
+    try { assert.deepEqual(store.listPhaseSummaries("fixture"), []); } finally { close(); }
+  });
+
+  test(`${provider} listPhaseSummaries resolves phases and counts every status`, () => {
+    const { store, close } = make();
+    try {
+      for (const task of phaseFixtureTasks) store.createTask(phaseTask(task));
+      const summaries = store.listPhaseSummaries("fixture");
+      assert.deepEqual(summaries.map((summary) => summary.phase), ["phase-26", "phase-27", "Unassigned"]);
+      const by = Object.fromEntries(summaries.map((summary) => [summary.phase, summary]));
+      assert.deepEqual(by["phase-27"], { phase: "phase-27", total: 3, counts: { todo: 1, ready: 1, in_progress: 0, blocked: 0, review: 0, done: 1 }, latestUpdatedOn: "2026-10-05T10:00:00.000Z" });
+      assert.deepEqual(by["phase-26"], { phase: "phase-26", total: 2, counts: { todo: 0, ready: 0, in_progress: 1, blocked: 0, review: 1, done: 0 }, latestUpdatedOn: "2026-10-03" });
+      assert.deepEqual(by.Unassigned, { phase: "Unassigned", total: 1, counts: { todo: 0, ready: 0, in_progress: 0, blocked: 1, review: 0, done: 0 }, latestUpdatedOn: "2026-09-01" });
+      for (const summary of summaries) assert.equal(Object.values(summary.counts).reduce((a, b) => a + b, 0), summary.total);
+    } finally { close(); }
+  });
+
+  test(`${provider} listTasks filters by resolved phase`, () => {
+    const { store, close } = make();
+    try {
+      for (const task of phaseFixtureTasks) store.createTask(phaseTask(task));
+      assert.deepEqual(store.listTasks("fixture", { phase: "phase-27" }).map((task) => task.id), ["task-0001", "task-0002", "task-0006"]);
+      assert.deepEqual(store.listTasks("fixture", { phase: "phase-26" }).map((task) => task.id), ["task-0003", "task-0004"]);
+      assert.deepEqual(store.listTasks("fixture", { phase: "Unassigned" }).map((task) => task.id), ["task-0005"]);
+      assert.deepEqual(store.listTasks("fixture", { phase: "phase-27", status: "done" }).map((task) => task.id), ["task-0001"]);
+      assert.deepEqual(store.listTasks("fixture", { phase: "phase-99" }), []);
+    } finally { close(); }
+  });
+}
+
+test("SQLite and Markdown phase results are equal for the same fixtures", () => {
+  const results = Object.values(phaseProviders).map((make) => {
+    const { store, close } = make();
+    try {
+      for (const task of phaseFixtureTasks) store.createTask(phaseTask(task));
+      return { summaries: store.listPhaseSummaries("fixture"), ids: store.listTasks("fixture", { phase: "phase-26" }).map((task) => task.id) };
+    } finally { close(); }
+  });
+  assert.deepEqual(results[0], results[1]);
+});
+
+test("SQLite resolves a blank phase column from metadata before the title", () => {
+  const { store } = sqliteFixture();
+  try {
+    store.createTask(phaseTask({ id: "task-0001", title: "Phase 3 title", status: "ready", updatedOn: "2026-10-01", metadata: { phase: "phase-8" } }));
+    assert.deepEqual(store.listPhaseSummaries("fixture").map((summary) => summary.phase), ["phase-8"]);
+    assert.equal(store.listTasks("fixture", { phase: "phase-8" }).length, 1);
+  } finally { store.close(); }
+});
+
+test("SQLite summaries handle 1000 tasks quickly", () => {
+  const { store } = sqliteFixture();
+  try {
+    for (let i = 1; i <= 1000; i += 1) {
+      const id = `task-${String(i).padStart(4, "0")}`;
+      store.createTask(phaseTask({ id, title: i % 10 === 0 ? `Phase 5 item ${i}` : `Item ${i}`, status: ["todo", "ready", "in_progress", "blocked", "review", "done"][i % 6], ...(i % 3 === 0 ? { phase: `phase-${i % 7}` } : {}), updatedOn: "2026-10-01" }));
+    }
+    const started = Date.now();
+    const summaries = store.listPhaseSummaries("fixture");
+    assert.ok(Date.now() - started < 2000);
+    assert.equal(summaries.reduce((sum, summary) => sum + summary.total, 0), 1000);
+  } finally { store.close(); }
+});

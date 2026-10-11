@@ -67,6 +67,13 @@ test("task transitions and handoffs enforce the planner-manager contract", () =>
   assert.throws(() => validateNewHandoff({ sender: "planner", recipient: "reviewer", status: "approved" }), /Invalid handoff route/);
   assert.doesNotThrow(() => validateNewHandoff({ sender: "planner", recipient: "worker", status: "changes_requested" }));
   assert.doesNotThrow(() => validateNewHandoff({ sender: "reviewer", recipient: "planner", status: "approved" }));
+  // The contract lets the reviewer record `blocked`. The reviewer -> planner `approved` route
+  // must not hide the blocked route (found in the live Claude run of task-0107).
+  assert.doesNotThrow(() => validateNewHandoff({ sender: "reviewer", recipient: "planner", status: "blocked" }));
+  assert.doesNotThrow(() => validateNewHandoff({ sender: "worker", recipient: "planner", status: "blocked" }));
+  assert.throws(() => validateNewHandoff({ sender: "reviewer", recipient: "planner", status: "changes_requested" }), /Invalid handoff decision for reviewer -> planner: expected approved or blocked/);
+  assert.throws(() => validateNewHandoff({ sender: "worker", recipient: "planner", status: "review" }), /expected blocked$/);
+  assert.throws(() => validateNewHandoff({ sender: "reviewer", recipient: "worker", status: "blocked" }), /expected changes_requested$/);
 });
 
 test("dependency gating keeps a worker task out of the actionable queue", () => {

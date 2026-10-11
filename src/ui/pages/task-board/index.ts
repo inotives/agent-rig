@@ -1,4 +1,10 @@
-import { HandoffDto, TaskDetailDto, TaskSummaryDto, WorkflowSummaryDto } from "../../core/contracts.js";
+import { HandoffDto, PhasesResponseDto, TaskDetailDto, TaskSummaryDto, WorkflowSummaryDto } from "../../core/contracts.js";
+import { relativeTime } from "../../common/time.js";
+import { parsePhaseFilter, phaseFilterHash, renderPhaseLanding, renderPhaseSkeleton } from "../phase-list/index.js";
+import { loadExternalDependencies, renderExternalDependencies } from "./external-panel.js";
+import type { ExternalDependencies } from "./external-panel.js";
+import { externalDependencyIds } from "./graph/external.js";
+import { renderPhaseBreadcrumb } from "./phase-header.js";
 import { collapseDoneDefault, compactTaskIds } from "./graph/compact.js";
 import { layoutTaskGraph } from "./graph/layout.js";
 import { applyGraphFocus, computeGraphFocus, focusTarget } from "./graph/focus.js";
@@ -15,19 +21,19 @@ export type TaskSummary = TaskSummaryDto;
 export type WorkflowSummary = WorkflowSummaryDto;
 export type TaskDetail = TaskDetailDto;
 export type Handoff = HandoffDto;
+export { relativeTime };
 export type UiRoute = { kind: "board" } | { kind: "task"; taskId: string };
 export type UiLoadState = "idle" | "loading" | "ready" | "error";
-export type UiState = { route: UiRoute; selectedPhase: string; selectedTaskId: string | null; loadState: UiLoadState; error: string | null; data?: WorkflowSummary; lastGoodData?: WorkflowSummary; theme: "light" | "dark" };
+export type UiState = { route: UiRoute; selectedPhase: string | null; selectedTaskId: string | null; loadState: UiLoadState; error: string | null; data?: WorkflowSummary; lastGoodData?: WorkflowSummary; theme: "light" | "dark" };
 
 const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, normal: 3, low: 4 };
 const THEME_KEY = "agent-rig-theme";
-const UNASSIGNED_PHASE = "Unassigned";
-const ALL_PHASES = "__all__";
 const PHASE_QUERY_KEY = "phase";
-const PHASE_PATTERN = /^phase-\d+$/;
+const MAX_PHASE_LENGTH = 200;
+/** A phase value is any non-empty text with no control or replacement character. The server decides whether the phase exists. */
+function validPhase(value: string) { return value.length > 0 && value.length <= MAX_PHASE_LENGTH && !/[\u0000-\u001f\u007f\ufffd]/.test(value); }
 
 export function sortTasks(tasks: readonly TaskSummary[]) { return [...tasks].sort((a, b) => { const priority = (PRIORITY_ORDER[a.priority.toLowerCase()] ?? 99) - (PRIORITY_ORDER[b.priority.toLowerCase()] ?? 99); return priority || Date.parse(b.updated_on) - Date.parse(a.updated_on) || a.id.localeCompare(b.id); }); }
-export function filterTasks(tasks: readonly TaskSummary[], phase: string) { return phase === "__all__" ? [...tasks] : tasks.filter((task) => task.phase === phase); }
 export function sortHandoffs(handoffs: readonly Handoff[]) { return [...handoffs].sort((a, b) => b.sequence - a.sequence); }
 export function filterHandoffs(handoffs: readonly Handoff[], query: string) { const needle = query.trim().toLowerCase(); return handoffs.filter((item) => [item.sequence, item.sender, item.recipient, item.status, item.message, item.created_at, JSON.stringify(item.metadata)].some((value) => String(value ?? "").toLowerCase().includes(needle))); }
 export function preferredTheme(): "light" | "dark" { const saved = localStorage.getItem(THEME_KEY); if (saved === "light" || saved === "dark") return saved; return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
@@ -37,18 +43,18 @@ export function parseRoute(hash = typeof location === "undefined" ? "#/" : locat
   if (!match) return { kind: "board" };
   try { return { kind: "task", taskId: decodeURIComponent(match[1]) }; } catch { return { kind: "board" }; }
 }
-function phaseFromHash(hash: string) {
+function phaseFromHash(hash: string): string | null {
   const query = hash.split("?", 2)[1];
-  if (!query) return ALL_PHASES;
+  if (!query) return null;
   const value = new URLSearchParams(query).get(PHASE_QUERY_KEY)?.trim() ?? "";
-  return value === UNASSIGNED_PHASE || PHASE_PATTERN.test(value) ? value : ALL_PHASES;
+  return validPhase(value) ? value : null;
 }
-export function routeHash(route: UiRoute, selectedPhase = ALL_PHASES) {
+export function routeHash(route: UiRoute, selectedPhase: string | null = null) {
   const path = route.kind === "board" ? "#/" : `#/tasks/${encodeURIComponent(route.taskId)}`;
-  return selectedPhase === ALL_PHASES ? path : `${path}?${PHASE_QUERY_KEY}=${encodeURIComponent(selectedPhase)}`;
+  return selectedPhase === null ? path : `${path}?${PHASE_QUERY_KEY}=${encodeURIComponent(selectedPhase)}`;
 }
 export function createUiState(hash = typeof location === "undefined" ? "#/" : location.hash): UiState { const route = parseRoute(hash); return { route, selectedPhase: phaseFromHash(hash), selectedTaskId: route.kind === "task" ? route.taskId : null, loadState: "idle", error: null, theme: preferredTheme() }; }
-export function setUiRoute(state: UiState, hash: string): UiState { const route = parseRoute(hash); const hasPhase = hash.includes("phase="); return { ...state, route, selectedPhase: hasPhase ? phaseFromHash(hash) : state.selectedPhase, selectedTaskId: route.kind === "task" ? route.taskId : null, error: null }; }
+export function setUiRoute(state: UiState, hash: string): UiState { const route = parseRoute(hash); return { ...state, route, selectedPhase: phaseFromHash(hash), selectedTaskId: route.kind === "task" ? route.taskId : null, error: null }; }
 export function beginUiLoad(state: UiState): UiState { return { ...state, loadState: "loading", error: null }; }
 export function completeUiLoad(state: UiState, data: WorkflowSummary): UiState { return { ...state, loadState: "ready", data, lastGoodData: data, error: null }; }
 export function failUiLoad(state: UiState, error: string): UiState { return { ...state, loadState: "error", error, data: state.lastGoodData }; }
@@ -173,11 +179,14 @@ function graphCanvas(tasks: readonly TaskSummary[], selectedTaskId: string | nul
   viewport.append(graph); wrapper.append(viewport); return wrapper;
 }
 
-function taskCard(task: TaskSummary) { const card = node("article", "card card-compact bg-base-100 shadow-sm"); const body = node("div", "card-body"); const heading = node("div", "flex items-start justify-between gap-2"); const title = node("h3", "card-title line-clamp-2 text-sm"); title.textContent = text(task.title); const id = node("a", "link link-primary shrink-0 font-mono text-[11px]"); id.href = `#/tasks/${encodeURIComponent(task.id)}`; id.textContent = task.id; heading.append(title, id); const details = node("dl", "mt-3 grid grid-cols-2 gap-x-3 gap-y-2"); details.append(labelValue("Priority", task.priority), labelValue("Assignee", task.assigned_to), labelValue("Phase", task.phase), labelValue("Handoffs", task.handoff_count), labelValue("Updated", formatDate(task.updated_on))); body.append(heading, details); card.append(body); return card; }
+function taskCard(task: TaskSummary) { const card = node("article", "card card-compact bg-base-100 shadow-sm"); const body = node("div", "card-body"); const heading = node("div", "flex items-start justify-between gap-2"); const title = node("h3", "card-title line-clamp-2 text-sm"); title.textContent = text(task.title); const id = node("a", "link link-primary shrink-0 font-mono text-[11px]"); id.href = routeHash({ kind: "task", taskId: task.id }, task.phase); id.textContent = task.id; heading.append(title, id); const details = node("dl", "mt-3 grid grid-cols-2 gap-x-3 gap-y-2"); details.append(labelValue("Priority", task.priority), labelValue("Assignee", task.assigned_to), labelValue("Phase", task.phase), labelValue("Handoffs", task.handoff_count), labelValue("Updated", formatDate(task.updated_on))); body.append(heading, details); card.append(body); return card; }
 function column(status: StatusColumn, tasks: readonly TaskSummary[]) { const section = node("section", "card min-h-48 min-w-[18rem] flex-1 bg-base-200 p-3"); const header = node("div", "mb-3 flex items-center justify-between"); const heading = node("h2", "text-sm font-bold"); heading.textContent = status.replaceAll("_", " "); const count = node("span", `badge badge-${STATUS_TONES[status]} badge-sm`); count.textContent = String(tasks.length); header.append(heading, count); const cards = node("div", "space-y-2"); if (!tasks.length) { const empty = node("div", "alert alert-info py-3 text-xs"); empty.textContent = "No tasks"; cards.append(empty); } else for (const task of tasks) cards.append(taskCard(task)); section.append(header, cards); return section; }
 function skeleton() { const element = node("div", "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"); for (const status of STATUS_COLUMNS) { const block = node("div", "h-56 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800"); block.setAttribute("aria-label", `Loading ${status} column`); element.append(block); } return element; }
-async function getJson<T>(path: string): Promise<T> { const response = await fetch(path, { headers: { Accept: "application/json" } }); if (!response.ok) throw new Error(response.status === 404 ? "Task not found" : `Request failed (${response.status})`); return response.json() as Promise<T>; }
-async function loadSummary() { return getJson<WorkflowSummary>("/api/workflow"); }
+async function getJson<T>(path: string, notFound = "Task not found"): Promise<T> { const response = await fetch(path, { headers: { Accept: "application/json" } }); if (!response.ok) throw new Error(response.status === 404 ? notFound : `Request failed (${response.status})`); return response.json() as Promise<T>; }
+const PHASE_NOT_FOUND = "Phase not found";
+function phaseNotFound(phase: string) { const box = node("section", "card bg-base-100 p-6 shadow-sm"); box.dataset.phaseNotFound = "true"; const heading = node("h2", "text-lg font-bold"); heading.textContent = PHASE_NOT_FOUND; const detail = node("p", "mt-1 text-sm opacity-70"); detail.textContent = `No phase named "${phase}" exists in this project.`; const back = node("a", "btn btn-primary btn-sm mt-4 w-fit"); back.href = "#/"; back.textContent = "Back to all phases"; box.append(heading, detail, back); return box; }
+function loadPhases() { return getJson<PhasesResponseDto>("/api/phases"); }
+function loadPhase(phase: string) { return getJson<WorkflowSummary>(`/api/workflow?phase=${encodeURIComponent(phase)}`, PHASE_NOT_FOUND); }
 
 /** Escape first, then apply a small Markdown subset. Raw HTML is never interpreted. */
 export function renderMarkdown(markdown: string): string { const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"); const inline = (value: string) => value.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => /^(?:https?:\/\/|mailto:)/i.test(href) ? `<a href="${href}" rel="noreferrer">${label}</a>` : label); const lines = escape(markdown || "").split("\n"); const output: string[] = []; let list = false; let code = false; for (const line of lines) { if (line.trimStart().startsWith("```")) { code = !code; output.push(code ? "<pre><code>" : "</code></pre>"); continue; } if (code) { output.push(line); continue; } const heading = line.match(/^(#{1,3})\s+(.+)$/); const bullet = line.match(/^\s*[-*]\s+(.+)$/); if (!line.trim()) { if (list) { output.push("</ul>"); list = false; } continue; } if (bullet) { if (!list) { output.push("<ul>"); list = true; } output.push(`<li>${inline(bullet[1])}</li>`); continue; } if (list) { output.push("</ul>"); list = false; } if (heading) output.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`); else output.push(`<p>${inline(line)}</p>`); } if (list) output.push("</ul>"); if (code) output.push("</code></pre>"); return output.join(""); }
@@ -191,22 +200,6 @@ const HANDOFF_BADGE_CLASSES: Record<string, string> = { success: "badge-success"
 
 /** Map a handoff status to a DaisyUI color token. An unknown status is neutral. */
 export function handoffStatusTone(status: string) { return Object.prototype.hasOwnProperty.call(HANDOFF_TONES, status) ? HANDOFF_TONES[status] : "neutral"; }
-
-/** Short English time since `value`. After 30 days, show the date. */
-export function relativeTime(value: string, now: number = Date.now()) {
-  const time = new Date(value).getTime();
-  if (!value) return "—";
-  if (Number.isNaN(time)) return value;
-  const seconds = Math.floor((now - time) / 1000);
-  if (seconds < 60) return "just now";
-  const unit = (amount: number, name: string) => `${amount} ${name}${amount === 1 ? "" : "s"} ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return unit(minutes, "minute");
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return unit(hours, "hour");
-  const days = Math.floor(hours / 24);
-  return days <= 30 ? unit(days, "day") : new Date(time).toLocaleDateString();
-}
 
 /** Plain one-line text from a Markdown message. */
 export function handoffPreviewText(markdown: string) {
@@ -328,10 +321,10 @@ export function renderHandoffTimeline(handoffs: Handoff[]) {
   return section;
 }
 
-function renderTaskDetail(task: TaskDetail, handoffs: Handoff[], onBack: () => void) {
+function renderTaskDetail(task: TaskDetail, handoffs: Handoff[], onBack: () => void, external: ExternalDependencies = { entries: [], more: 0 }) {
   const main = node("main", "mx-auto max-w-screen-xl px-4 py-5");
   const back = node("a", "mb-4 inline-flex text-sm text-primary hover:underline");
-  back.href = "#/";
+  back.href = routeHash({ kind: "board" }, task.phase);
   back.textContent = "← Back to board";
   back.addEventListener("click", onBack);
   const heading = node("div", "flex flex-wrap items-start justify-between gap-3");
@@ -372,17 +365,41 @@ function renderTaskDetail(task: TaskDetail, handoffs: Handoff[], onBack: () => v
   const handoffSection = renderHandoffTimeline(handoffs);
   const detailSplit = node("div", "mt-5 grid gap-5");
   detailSplit.append(markdown, handoffSection);
-  main.append(back, heading, summary, detailSplit);
+  const externalSection = renderExternalDependencies(external);
+  main.append(back, heading, summary, ...(externalSection ? [externalSection] : []), detailSplit);
   return main;
 }
 
 
-export function mountBoard(root: HTMLElement) { let state = createUiState(); let graphFilter: GraphFilter = EMPTY_FILTER; let collapseChoice: boolean | null = null; let filterPhase = state.selectedPhase; const app = node("div", "min-h-screen bg-base-200 text-base-content transition-colors"); const header = node("header", "navbar border-b border-base-300 bg-base-100"); const headerInner = node("div", "mx-auto flex w-full max-w-screen-2xl flex-wrap items-center justify-between gap-3 px-4 py-4"); const brand = node("div"); const title = node("h1", "text-xl font-bold"); const subtitle = node("p", "text-sm italic opacity-70"); subtitle.textContent = "Read-only workflow visibility"; brand.append(title, subtitle); const controls = node("div", "flex items-center gap-2"); const phase = document.createElement("select"); phase.className = "select select-bordered select-sm"; phase.setAttribute("aria-label", "Filter by phase"); phase.addEventListener("change", () => { state = { ...state, selectedPhase: phase.value }; renderBoard(); }); const refresh = node("button", "btn btn-primary btn-sm"); refresh.type = "button"; refresh.textContent = "Refresh"; const theme = node("button", "btn btn-ghost btn-sm"); theme.type = "button"; theme.addEventListener("click", () => applyTheme(preferredTheme() === "dark" ? "light" : "dark")); controls.append(phase, refresh, theme); headerInner.append(brand, controls); header.append(headerInner); const main = node("main", "mx-auto max-w-screen-2xl px-4 py-5"); const status = node("p", "mb-2 text-sm opacity-70"); const board = node("div", "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"); const emptyDetail = node("aside", "card mt-5 bg-base-100 p-5 text-sm opacity-70"); emptyDetail.textContent = "Select a task to view its details."; main.append(status, board, emptyDetail); app.append(header, main); root.replaceChildren(app); setTheme(state.theme, false);
-  function renderBoard() { const current = state.data ?? state.lastGoodData; if (!current) return; title.textContent = `AgentRig: ${current.project_identifier}`; const phases = [...new Set([...current.phases, UNASSIGNED_PHASE])].sort((a, b) => a.localeCompare(b)); phase.replaceChildren(new Option("All phases", "__all__")); for (const value of phases) phase.append(new Option(value, value)); phase.value = phases.includes(state.selectedPhase) ? state.selectedPhase : "__all__"; state = { ...state, selectedPhase: phase.value }; const filtered = filterTasks(current.tasks, state.selectedPhase); if (filterPhase !== state.selectedPhase) { filterPhase = state.selectedPhase; graphFilter = EMPTY_FILTER; collapseChoice = null; } if (typeof document.createElementNS === "function") { board.className = "overflow-x-auto"; board.replaceChildren(graphCanvas(sortTasks(filtered), state.selectedTaskId, (id) => { location.hash = routeHash({ kind: "task", taskId: id }, state.selectedPhase); }, graphFilter, (next) => { graphFilter = next; }, collapseChoice ?? collapseDoneDefault(filtered.length), (value) => { collapseChoice = value; renderBoard(); })); } else { board.className = "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"; const grouped = new Map<string, TaskSummary[]>(); for (const task of filtered) grouped.set(task.status, [...(grouped.get(task.status) ?? []), task]); board.replaceChildren(...STATUS_COLUMNS.map((name) => column(name, sortTasks(grouped.get(name) ?? [])))); } status.textContent = `${filtered.length} task${filtered.length === 1 ? "" : "s"}${state.selectedPhase === "__all__" ? "" : ` in ${state.selectedPhase}`}`; theme.textContent = preferredTheme() === "dark" ? "Light theme" : "Dark theme"; }
-  async function renderRoute() { const id = state.selectedTaskId; main.replaceChildren(status, board, emptyDetail); if (!id) { if (state.data || state.lastGoodData) renderBoard(); else board.replaceChildren(skeleton()); return; } renderBoard(); emptyDetail.replaceChildren(skeleton()); try { const [taskResponse, handoffResponse] = await Promise.all([getJson<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(id)}`), getJson<{ handoffs: Handoff[] }>(`/api/tasks/${encodeURIComponent(id)}/handoffs`)]); const detail = renderTaskDetail(taskResponse.task, handoffResponse.handoffs, () => history.back()); const taskMetadata = document.createElement("details"); taskMetadata.className = "mt-5 rounded-lg border border-slate-200 bg-white p-4 text-sm dark:border-slate-700 dark:bg-slate-800"; const taskMetadataSummary = document.createElement("summary"); taskMetadataSummary.className = "cursor-pointer font-medium"; taskMetadataSummary.textContent = "Task metadata"; const taskMetadataJson = node("pre", "mt-3 overflow-x-auto text-xs"); taskMetadataJson.textContent = JSON.stringify(taskResponse.task.metadata ?? {}, null, 2); taskMetadata.append(taskMetadataSummary, taskMetadataJson); detail.append(taskMetadata); emptyDetail.replaceChildren(detail); } catch (error) { const empty = node("div", "rounded-lg border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"); empty.textContent = error instanceof Error && error.message === "Task not found" ? "Task not found." : error instanceof Error ? error.message : "Unable to load task."; const back = node("a", "mt-3 inline-block underline"); back.href = "#/"; back.textContent = "Return to board"; empty.append(document.createElement("br"), back); emptyDetail.replaceChildren(empty); } }
-  async function fetchAndRender(showLoading = false) { const scrollY = window.scrollY; state = beginUiLoad(state); if (showLoading && !state.lastGoodData) board.replaceChildren(skeleton()); refresh.disabled = true; try { state = completeUiLoad(state, await loadSummary()); main.querySelector("[data-workflow-alert]")?.remove(); if (state.route.kind === "board") renderBoard(); else await renderRoute(); } catch (error) { const message = error instanceof Error ? error.message : "Unable to load workflow data"; state = failUiLoad(state, message); const alert = node("div", "alert alert-error mb-4 p-4 text-sm"); alert.dataset.workflowAlert = "true"; alert.textContent = state.lastGoodData ? `${message}. Showing last successful data.` : `${message}.`; const retry = node("button", "btn btn-link btn-sm"); retry.textContent = "Retry"; retry.addEventListener("click", () => void fetchAndRender(true)); main.querySelector("[data-workflow-alert]")?.remove(); if (state.lastGoodData) { if (typeof main.insertBefore === "function") main.insertBefore(alert, board); else main.append(alert); renderBoard(); } else board.replaceChildren(alert); status.textContent = state.lastGoodData ? status.textContent : message; } finally { refresh.disabled = false; window.scrollTo?.(0, scrollY); } }
-  phase.addEventListener("change", () => { location.hash = routeHash(state.route, phase.value); });
-  const onHashChange = () => { state = setUiRoute(state, location.hash); void (state.data || state.lastGoodData ? renderRoute() : fetchAndRender()); }; window.addEventListener("hashchange", onHashChange); refresh.addEventListener("click", () => void fetchAndRender(true)); board.replaceChildren(skeleton()); void fetchAndRender(); return { refresh: fetchAndRender }; }
+export function mountBoard(root: HTMLElement) { let state = createUiState(); let graphFilter: GraphFilter = EMPTY_FILTER; let collapseChoice: boolean | null = null; let filterPhase = state.selectedPhase; let landing: PhasesResponseDto | undefined; let loadToken = 0; const app = node("div", "min-h-screen bg-base-200 text-base-content transition-colors"); const header = node("header", "navbar border-b border-base-300 bg-base-100"); const headerInner = node("div", "mx-auto flex w-full max-w-screen-2xl flex-wrap items-center justify-between gap-3 px-4 py-4"); const brand = node("div"); const title = node("h1", "text-xl font-bold"); title.textContent = "AgentRig"; const subtitle = node("p", "text-sm italic opacity-70"); subtitle.textContent = "Read-only workflow visibility"; brand.append(title, subtitle); const controls = node("div", "flex items-center gap-2"); const crumbs = node("div", "w-full"); const refresh = node("button", "btn btn-primary btn-sm"); refresh.type = "button"; refresh.textContent = "Refresh"; const theme = node("button", "btn btn-ghost btn-sm"); theme.type = "button"; theme.addEventListener("click", () => applyTheme(preferredTheme() === "dark" ? "light" : "dark")); controls.append(refresh, theme); headerInner.append(brand, controls, crumbs); header.append(headerInner); const main = node("main", "mx-auto max-w-screen-2xl px-4 py-5"); const status = node("p", "mb-2 text-sm opacity-70"); const board = node("div", "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"); const emptyDetail = node("aside", "card mt-5 bg-base-100 p-5 text-sm opacity-70"); emptyDetail.textContent = "Select a task to view its details."; main.append(status, board, emptyDetail); app.append(header, main); root.replaceChildren(app); setTheme(state.theme, false); theme.textContent = state.theme === "dark" ? "Light theme" : "Dark theme";
+  function renderLanding(data: PhasesResponseDto) { title.textContent = `AgentRig: ${data.project_identifier}`; crumbs.classList.toggle("hidden", true); emptyDetail.classList.toggle("hidden", true); board.className = ""; board.replaceChildren(renderPhaseLanding(data, parsePhaseFilter(location.hash), (filter) => history.replaceState(null, "", phaseFilterHash(filter)))); status.textContent = `${data.phases.length} phase${data.phases.length === 1 ? "" : "s"}`; theme.textContent = preferredTheme() === "dark" ? "Light theme" : "Dark theme"; }
+  function renderBoard() { const current = state.data ?? state.lastGoodData; const selected = state.selectedPhase; if (!current || selected === null) return; title.textContent = `AgentRig: ${current.project_identifier}`; crumbs.classList.toggle("hidden", false); crumbs.replaceChildren(renderPhaseBreadcrumb(selected, current.tasks)); emptyDetail.classList.toggle("hidden", false); const filtered = current.tasks; if (filterPhase !== selected) { filterPhase = selected; graphFilter = EMPTY_FILTER; collapseChoice = null; } if (typeof document.createElementNS === "function") { board.className = "overflow-x-auto"; board.replaceChildren(graphCanvas(sortTasks(filtered), state.selectedTaskId, (id) => { location.hash = routeHash({ kind: "task", taskId: id }, selected); }, graphFilter, (next) => { graphFilter = next; }, collapseChoice ?? collapseDoneDefault(filtered.length), (value) => { collapseChoice = value; renderBoard(); })); } else { board.className = "grid grid-cols-1 gap-4 overflow-x-auto md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"; const grouped = new Map<string, TaskSummary[]>(); for (const task of filtered) grouped.set(task.status, [...(grouped.get(task.status) ?? []), task]); board.replaceChildren(...STATUS_COLUMNS.map((name) => column(name, sortTasks(grouped.get(name) ?? [])))); } status.textContent = `${filtered.length} task${filtered.length === 1 ? "" : "s"} in ${selected}`; theme.textContent = preferredTheme() === "dark" ? "Light theme" : "Dark theme"; }
+  async function renderRoute() { const id = state.selectedTaskId; main.replaceChildren(status, board, emptyDetail); if (!id) { if (state.data || state.lastGoodData) renderBoard(); else board.replaceChildren(skeleton()); return; } renderBoard(); emptyDetail.replaceChildren(skeleton()); try { const [taskResponse, handoffResponse] = await Promise.all([getJson<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(id)}`), getJson<{ handoffs: Handoff[] }>(`/api/tasks/${encodeURIComponent(id)}/handoffs`)]); const loadedIds = new Set((state.data ?? state.lastGoodData)?.tasks.map((item) => item.id) ?? []); const external = await loadExternalDependencies(externalDependencyIds(taskResponse.task, loadedIds), async (dependency) => (await getJson<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(dependency)}`)).task); if (state.selectedTaskId !== id) return; const detail = renderTaskDetail(taskResponse.task, handoffResponse.handoffs, () => history.back(), external); const taskMetadata = document.createElement("details"); taskMetadata.className = "mt-5 rounded-lg border border-slate-200 bg-white p-4 text-sm dark:border-slate-700 dark:bg-slate-800"; const taskMetadataSummary = document.createElement("summary"); taskMetadataSummary.className = "cursor-pointer font-medium"; taskMetadataSummary.textContent = "Task metadata"; const taskMetadataJson = node("pre", "mt-3 overflow-x-auto text-xs"); taskMetadataJson.textContent = JSON.stringify(taskResponse.task.metadata ?? {}, null, 2); taskMetadata.append(taskMetadataSummary, taskMetadataJson); detail.append(taskMetadata); emptyDetail.replaceChildren(detail); } catch (error) { const empty = node("div", "rounded-lg border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"); empty.textContent = error instanceof Error && error.message === "Task not found" ? "Task not found." : error instanceof Error ? error.message : "Unable to load task."; const back = node("a", "mt-3 inline-block underline"); back.href = routeHash({ kind: "board" }, state.selectedPhase); back.textContent = "Return to board"; empty.append(document.createElement("br"), back); emptyDetail.replaceChildren(empty); } }
+  async function fetchAndRender(showLoading = false) {
+    const token = ++loadToken; const scrollY = window.scrollY; state = beginUiLoad(state);
+    if (showLoading && !(state.selectedPhase === null ? landing : state.lastGoodData)) { if (state.selectedPhase === null) { board.className = ""; board.replaceChildren(renderPhaseSkeleton()); } else { crumbs.classList.toggle("hidden", false); crumbs.replaceChildren(renderPhaseBreadcrumb(state.selectedPhase, null)); board.replaceChildren(skeleton()); } }
+    refresh.disabled = true;
+    try {
+      if (state.route.kind === "task" && state.selectedPhase === null) {
+        const found = await getJson<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(state.route.taskId)}`);
+        if (token !== loadToken) return;
+        const hash = routeHash(state.route, found.task.phase); history.replaceState(null, "", hash); state = setUiRoute(state, hash);
+      }
+      if (state.selectedPhase === null) { const data = await loadPhases(); if (token !== loadToken) return; landing = data; state = { ...state, loadState: "ready", error: null }; main.querySelector("[data-workflow-alert]")?.remove(); renderLanding(data); }
+      else { const data = await loadPhase(state.selectedPhase); if (token !== loadToken) return; state = completeUiLoad(state, data); main.querySelector("[data-workflow-alert]")?.remove(); await renderRoute(); }
+    } catch (error) {
+      if (token !== loadToken) return;
+      const message = error instanceof Error ? error.message : "Unable to load workflow data"; state = failUiLoad(state, message);
+      const onLanding = state.selectedPhase === null; const good = onLanding ? landing : state.lastGoodData; const missing = message === PHASE_NOT_FOUND || message === "Task not found";
+      const alert = node("div", "alert alert-error mb-4 p-4 text-sm"); alert.dataset.workflowAlert = "true"; alert.textContent = good ? `${message}. Showing last successful data.` : `${message}.`;
+      if (missing) { const back = node("a", "btn btn-link btn-sm"); back.href = "#/"; back.textContent = "Back to all phases"; alert.append(back); } else { const retry = node("button", "btn btn-link btn-sm"); retry.textContent = "Retry"; retry.addEventListener("click", () => void fetchAndRender(true)); alert.append(retry); }
+      main.querySelector("[data-workflow-alert]")?.remove();
+      if (message === PHASE_NOT_FOUND && !onLanding && !good) { crumbs.classList.toggle("hidden", false); crumbs.replaceChildren(renderPhaseBreadcrumb(state.selectedPhase as string, null)); board.className = ""; board.replaceChildren(phaseNotFound(state.selectedPhase as string)); emptyDetail.classList.toggle("hidden", true); status.textContent = ""; theme.textContent = preferredTheme() === "dark" ? "Light theme" : "Dark theme"; return; }
+      if (good) { if (typeof main.insertBefore === "function") main.insertBefore(alert, board); else main.append(alert); if (onLanding) renderLanding(landing as PhasesResponseDto); else renderBoard(); } else { board.replaceChildren(alert); emptyDetail.classList.toggle("hidden", true); }
+      status.textContent = good ? status.textContent : message;
+    } finally { if (token === loadToken) { refresh.disabled = false; window.scrollTo?.(0, scrollY); } }
+  }
+  const onHashChange = () => { const previous = state.selectedPhase; state = setUiRoute(state, location.hash); if (state.selectedPhase !== null && state.selectedPhase === previous && (state.data || state.lastGoodData)) { void renderRoute(); return; } state = { ...state, data: undefined, lastGoodData: undefined }; landing = undefined; void fetchAndRender(true); }; window.addEventListener("hashchange", onHashChange); refresh.addEventListener("click", () => void fetchAndRender(true)); board.replaceChildren(skeleton()); void fetchAndRender(); return { refresh: fetchAndRender }; }
 
 export function mountSlidingBoard(root: HTMLElement) {
   mountBoard(root);
