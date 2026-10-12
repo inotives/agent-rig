@@ -102,7 +102,9 @@ blocked -> planner
 6. Add the safe upgrade command for existing deployments.
 7. Deprecate the loop in help and supported documentation.
 8. Add unit, integration, and isolated live worker/reviewer coverage.
-9. Add and verify the planner commit gate between completed tasks.
+9. Add and verify the planner commit gate between completed tasks. This is a
+   planner procedure, not a recurring task. Task 0127 records the one-time
+   implementation of the procedure.
 
 ## Acceptance criteria
 
