@@ -58,7 +58,8 @@ Before starting work:
 1. Read the assigned task with `agent-rig tasks show <task-id>`.
 2. Check `depends_on` and `status`.
 3. Only work on tasks that are ready for your role.
-4. Update the task through AgentRig commands.
+4. Return worker or reviewer handoff content to the planner. Only the planner
+   updates task and handoff state through AgentRig commands.
 
 Useful commands:
 
@@ -74,7 +75,7 @@ agent-rig tasks block <task-id> --reason "<reason>"
 agent-rig tasks handoff <task-id> --sender <role> --recipient <role> --status <status> --message "<summary>"
 ```
 
-Confirm the active provider in `.agent-rig/_shared/agent-rig.json` before
+The planner must confirm the active provider in `.agent-rig/_shared/agent-rig.json` before
 mutating workflow state. Use the project-local `agent-rig tasks ...` command
 for every task and handoff mutation. In SQLite mode, migrated task and handoff
 Markdown is historical reference only and must not be edited directly.
@@ -112,7 +113,7 @@ status: <done|blocked|handoff>
 - Keep edits scoped to the assigned task.
 - Do not overwrite another agent's work unless the task explicitly requires it.
 - Prefer project-local commands and docs over global memory.
-- If blocked, record the blocker in the task and write a handoff.
+- If blocked, return a `blocked` handoff to the planner. The planner records it.
 
 ## Project Phase And Agent Workflow
 
@@ -155,32 +156,64 @@ For each new phase:
    - The planner and human turn the finalized phase into small, independently
      verifiable AgentRig task files.
    - Every new task must include Context, Goal, Scope, Planner Notes, Implementation Plan, and Acceptance Criteria. Create it with `agent-rig tasks create <title> --body-file <path>`.
-   - If the plan changes, update the task brief through `agent-rig tasks update-body <task-id> --body-file <path>` before continuing the loop.
+   - If the plan changes, update the task brief through `agent-rig tasks update-body <task-id> --body-file <path>` before continuing the workflow.
    - Add explicit `depends_on` edges and one final integrated-review task.
    - Set only dependency-free foundation tasks to `ready`.
    - Keep downstream tasks `blocked`; dependency metadata alone does not
      authorize them to start.
 
-4. Run the planner-manager-driven worker/reviewer loop.
-   - The planner-manager owns task selection, dependency unblocking, and final task-state changes.
-   - Unblock and claim one selected eligible worker task.
-   - Spawn a worker sub-agent using the assigned AgentRig profile. It reads
-     the task, project docs, relevant prior handoffs, and affected code; makes
-     only scoped changes; runs focused checks; sets the task to `review`; and
-     writes a worker handoff. It does not commit or push.
-   - Spawn an independent reviewer sub-agent using the reviewer profile. It
-     reads the task, worker handoff, project docs, and current diff; verifies
-     the acceptance criteria; does not edit implementation files; and writes a
-     reviewer handoff.
-   - If review is clean, record the `approved` handoff decision, mark the task `done`, and unblock only the next
-     selected dependent task.
-   - If review finds a problem, the reviewer sends the `changes_requested`
-     handoff to the worker. The task stays in `review`. Spawn the same worker
-     to read both handoffs, implement the focused fix, add regression coverage
-     where needed, verify it, and write a new `review` handoff. Repeat
-     independent review until clean; do not unlock downstream work.
-   - If the reviewer sends a `blocked` handoff to the planner, set the task to
-     `blocked` and resolve the blocker with the human.
+4. Run the planner-mediated worker/reviewer flow.
+
+   The profile token and handoff recipient remain `planner`. The planner-manager
+   is the only task and handoff state writer for both Markdown and SQLite.
+   Workers and reviewers return handoff content to the planner. They do not write
+   task status, dependencies, canonical handoffs, or workflow-store files. They
+   do not commit, push, or start nested AgentRig loops.
+
+   For each selected task:
+
+   1. The planner checks task status and dependencies, selects one eligible task,
+      and sets it to `in_progress` before launching one worker.
+   2. The worker reads the supplied instructions and task, makes scoped changes,
+      runs focused checks, and returns `review` to `reviewer`, or `blocked` to
+      `planner`. The planner records the handoff and sets `review` or `blocked`.
+   3. The planner launches one independent reviewer in the same project workspace.
+      The reviewer inspects the task, worker handoff, docs, and current diff. It
+      does not edit implementation files or repository notes. It runs focused
+      checks and returns exactly one decision: `approved` to `planner`,
+      `changes_requested` to `worker`, or `blocked` to `planner`.
+   4. The planner records the reviewer handoff. For `approved`, it marks the task
+      `done` with completion evidence and unblocks only the next selected task.
+      For `changes_requested`, it sets `review -> in_progress` before sending
+      the same worker the focused findings. The worker reads both handoffs,
+      repairs the task, and returns a new `review` handoff. The planner records
+      it, sets `review`, and launches independent review again. For `blocked`,
+      the planner sets `blocked` and resolves the blocker with the human.
+   5. Human findings use `human -> planner: changes_requested`. The planner
+      records the findings and sends a focused
+      `planner -> worker: changes_requested` handoff. Repairs pass independent review before acceptance.
+
+   Child prompt inputs must include the project repository root, complete role
+   instructions, shared context, the task brief and acceptance criteria, and only
+   the latest relevant handoffs. Preserve local role precedence. Include the
+   worker handoff and current diff for the reviewer. Include both worker and
+   reviewer handoffs for a repair. State the scope, forbidden mutations, required
+   checks, and output format. Use the same project workspace for both children.
+   Do not add provider-specific launch flags to this contract.
+
+   Return the proposed handoff as Markdown with these six fields:
+
+   - **Decision:** `review`, `approved`, `changes_requested`, or `blocked`.
+   - **Recipient:** `reviewer`, `worker`, or `planner`, as defined above.
+   - **Summary:** State what changed or what the review concluded.
+   - **Findings:** List actionable findings with file and line references, or `None`.
+   - **Evidence:** Give exact check commands, results, and any check that could not run.
+   - **Requested action:** State the next action for the recipient.
+
+   The recipient identifies the next role; the planner receives and records every
+   child result before routing it. Child failure does not trigger automatic retry.
+   The planner saves diagnostic output and decides whether to retry or ask the
+   human. Use `blocked` only for a real task or environment blocker.
 
    - If implementation or review exposes a limitation that changes the plan,
      pause the affected task graph. Do not silently work around a material
@@ -199,13 +232,14 @@ For each new phase:
       `changes_requested` repair through the same worker and independent
       reviewer cycle, then repeats the integrated review. The planner-manager
       owns final phase acceptance.
-   - Write the planner-manager handoff with verification evidence and resolved
-     review findings.
+   - Record planner completion evidence and resolved review findings. Do not
+     create a `planner -> planner` self-handoff.
    - Commit, push, or open a pull request only when the human explicitly asks.
    - After merge, archive the completed phase document under `docs/_archived/`
      before beginning the next phase.
-   - Complete the final human end-to-end check for the full workflow before
-     marking the phase complete.
+   - Keep planner integrated review and human final review as separate gates.
+     Complete the human end-to-end check and record acceptance before marking
+     the phase complete. Route human findings through the planner to the worker.
 
 ## Coding Guidelines
 
