@@ -93,12 +93,26 @@ independent reviewer in the same project workspace. Supply the worker handoff
 and current diff to the reviewer. Child agents do not start nested AgentRig loops.
 
 Record each reviewer result. For `approved`, mark `done` with completion
-evidence and unblock only the next selected dependent task. For
+evidence. The next task stays `blocked` until the commit gate passes. For
 `changes_requested`, set `review -> in_progress` and send the same worker
 both handoffs for a focused repair. Record its new handoff, set `review`, and
 launch independent review again. For `blocked`, set `blocked` and resolve the
 real blocker with the human. Save child failure diagnostics and decide whether
 to retry or ask the human. Do not retry automatically.
+
+After independent review and task completion, the planner must pass the commit
+gate before selecting, unblocking, or starting the next task:
+
+- Stage only the completed task's changes with explicit paths. Check the staged
+  diff and commit with a task-specific message that includes the task ID.
+- Verify the commit with `git log -1 --oneline` and `git show --stat HEAD`.
+  Confirm that it contains the completed task's changes. Run
+  `git status --porcelain` and require a clean working tree before proceeding.
+- If commit or verification fails, keep the next task `blocked`. Treat the
+  failure as a planner blocker and resolve it before proceeding. Do not include
+  unrelated changes or discard them to make the working tree clean.
+- Only after the gate passes, select and unblock the next eligible task.
+  Do not push automatically. Workers and reviewers must not commit or push.
 
 Record human findings as `human -> planner: changes_requested`. Send a focused
 `planner -> worker: changes_requested` handoff and use the same repair and

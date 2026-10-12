@@ -25,7 +25,8 @@ For each selected task:
    checks and returns exactly one decision: `approved` to `planner`,
    `changes_requested` to `worker`, or `blocked` to `planner`.
 4. The planner records the reviewer handoff. For `approved`, it marks the task
-   `done` with completion evidence and unblocks only the next selected task.
+   `done` with completion evidence. The next task stays `blocked` until the
+   commit gate passes.
    For `changes_requested`, it sets `review -> in_progress` before sending
    the same worker the focused findings. The worker reads both handoffs,
    repairs the task, and returns a new `review` handoff. The planner records
@@ -34,6 +35,20 @@ For each selected task:
 5. Human findings use `human -> planner: changes_requested`. The planner
    records the findings and sends a focused
    `planner -> worker: changes_requested` handoff. Repairs pass independent review before acceptance.
+
+After independent review and task completion, the planner must pass the commit
+gate before selecting, unblocking, or starting the next task:
+
+- Stage only the completed task's changes with explicit paths. Check the staged
+  diff and commit with a task-specific message that includes the task ID.
+- Verify the commit with `git log -1 --oneline` and `git show --stat HEAD`.
+  Confirm that it contains the completed task's changes. Run
+  `git status --porcelain` and require a clean working tree before proceeding.
+- If commit or verification fails, keep the next task `blocked`. Treat the
+  failure as a planner blocker and resolve it before proceeding. Do not include
+  unrelated changes or discard them to make the working tree clean.
+- Only after the gate passes, select and unblock the next eligible task.
+  Do not push automatically. Workers and reviewers must not commit or push.
 
 Child prompt inputs must include the project repository root, complete role
 instructions, shared context, the task brief and acceptance criteria, and only

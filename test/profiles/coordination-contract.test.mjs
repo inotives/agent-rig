@@ -6,6 +6,25 @@ const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "
 const fields = ["Decision", "Recipient", "Summary", "Findings", "Evidence", "Requested action"];
 const contracts = ["AGENTS.md", ".agent-rig/_shared/context.md", "templates/workflow.md"];
 
+test("planner commit gate precedes selection of the next task", () => {
+  const paths = [...contracts, "templates/profiles/planner.md",
+    ".agent-rig/_shared/profiles/planner.md", ".agent-rig/planner/instructions.md"];
+  for (const path of paths) {
+    const text = read(path).replace(/\s+/g, " ");
+    assert.match(text, /After independent review and task completion, the planner must pass the commit gate before selecting, unblocking, or starting the next task/, path);
+    assert.match(text, /Stage only the completed task's changes with explicit paths/, path);
+    assert.match(text, /Check the staged diff and commit with a task-specific message that includes the task ID/, path);
+    assert.match(text, /git log -1 --oneline/, path);
+    assert.match(text, /git show --stat HEAD/, path);
+    assert.match(text, /git status --porcelain.*require a clean working tree before proceeding/, path);
+    assert.match(text, /If commit or verification fails, keep the next task `blocked`/, path);
+    assert.match(text, /failure as a planner blocker/, path);
+    assert.match(text, /Only after the gate passes, select and unblock the next eligible task/, path);
+    assert.match(text, /Do not push automatically. Workers and reviewers must not commit or push/, path);
+    assert.doesNotMatch(text, /completion evidence and unblock|Commit, push, or open a pull request only/, path);
+  }
+});
+
 test("shared contracts define planner ownership, repair transitions, and human routing", () => {
   for (const path of contracts) {
     const text = read(path).replace(/\s+/g, " ");
