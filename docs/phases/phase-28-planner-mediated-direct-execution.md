@@ -55,6 +55,9 @@ Investigation evidence is recorded in:
 - Existing deployments receive a safe upgrade command that backs up the
   deployment, updates instructions, validates state, and does not launch
   agents.
+- After each task passes review and the planner marks it `done`, the planner
+  must commit the completed task changes before selecting or starting the next
+  task. A failed or unverified commit keeps the next task blocked.
 
 ## Workflow
 
@@ -99,6 +102,7 @@ blocked -> planner
 6. Add the safe upgrade command for existing deployments.
 7. Deprecate the loop in help and supported documentation.
 8. Add unit, integration, and isolated live worker/reviewer coverage.
+9. Add and verify the planner commit gate between completed tasks.
 
 ## Acceptance criteria
 
@@ -121,6 +125,8 @@ blocked -> planner
   `.agent-rig/_shared/tools/sandbox-run.sh`.
 - The phase is not complete until the planner integrated review passes and the
   human final acceptance check is recorded.
+- The next task never starts before the previous task's completed changes have
+  a verified planner commit.
 
 ## Out of scope
 
