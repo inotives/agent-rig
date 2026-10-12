@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { resolveTaskPhase, summarizePhases, validateNewHandoff, validateTaskTransition } from "./model.js";
@@ -6,6 +6,7 @@ import type { PhaseSummary, ProjectIdentifier, WorkflowHandoff, WorkflowTask, Wo
 import type { WorkflowStore } from "./store.js";
 
 export type SQLiteWorkflowStoreOptions = {
+  readonly?: boolean;
   workRole?: string;
   reviewRole?: string;
   actorRole?: string;
@@ -40,15 +41,21 @@ export class SQLiteWorkflowStore implements WorkflowStore {
     private readonly projectIdentifier: ProjectIdentifier,
     options: SQLiteWorkflowStoreOptions = {}
   ) {
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.db = new Database(databasePath);
+    if (!options.readonly) mkdirSync(dirname(databasePath), { recursive: true });
+    // A readonly file connection can still write WAL shared-memory files.
+    // Deserialize a checkpointed snapshot instead, without opening the source database.
+    this.db = options.readonly
+      ? new Database(readOnlySnapshot(databasePath), { readonly: true })
+      : new Database(databasePath);
     this.workRole = options.workRole ?? "worker";
     this.reviewRole = options.reviewRole ?? "reviewer";
     this.actorRole = options.actorRole ?? process.env.AGENT_RIG_ROLE;
     this.db.pragma("foreign_keys = ON");
     this.db.pragma("busy_timeout = 5000");
-    if (databasePath !== ":memory:") this.db.pragma("journal_mode = WAL");
-    this.bootstrap();
+    if (!options.readonly) {
+      if (databasePath !== ":memory:") this.db.pragma("journal_mode = WAL");
+      this.bootstrap();
+    }
   }
 
   close(): void { this.db.close(); }
@@ -297,6 +304,24 @@ export class SQLiteWorkflowStore implements WorkflowStore {
   private assertProject(projectIdentifier: string): void {
     if (projectIdentifier !== this.projectIdentifier) throw new Error(`Unknown project identifier: ${projectIdentifier}`);
   }
+}
+
+function readOnlySnapshot(databasePath: string): Buffer {
+  const wal = `${databasePath}-wal`;
+  const assertCheckpointed = () => {
+    if (existsSync(wal) && statSync(wal).size > 0) {
+      throw new Error("Read-only prompt requires a checkpointed SQLite database. A live WAL cannot be read without filesystem writes.");
+    }
+  };
+  assertCheckpointed();
+  const snapshot = readFileSync(databasePath);
+  assertCheckpointed();
+  if (!snapshot.equals(readFileSync(databasePath))) throw new Error("SQLite database changed while reading the prompt snapshot");
+  if (snapshot.length < 100 || snapshot.subarray(0, 16).toString() !== "SQLite format 3\0") throw new Error("Invalid SQLite prompt snapshot");
+  // Deserialization supports rollback-journal images, not WAL-mode headers.
+  snapshot[18] = 1;
+  snapshot[19] = 1;
+  return snapshot;
 }
 
 /** Same phase value that `toTask` builds: the column, else `metadata.phase`. */

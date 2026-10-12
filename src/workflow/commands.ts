@@ -6,6 +6,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { Agent, readAgents, requireWorkspace, validSlug } from "../workspace/workspace.js";
 import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, resolveTaskPhase, serializeTask, validateNewHandoff, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./index.js";
 import { replaceFrontmatter } from "./migration.js";
+import { buildTaskPrompt } from "./prompt.js";
 
 export type SharedTask = {
   id: string;
@@ -68,6 +69,7 @@ export function runTasks(args: string[], cwd: string) {
   if (command === "create") return tasksCreate(rest, cwd);
   if (command === "mark-final-review") return tasksMarkFinalReview(rest, cwd);
   if (command === "show") return tasksShow(rest, cwd);
+  if (command === "prompt") return tasksPrompt(rest, cwd);
   if (command === "update-body") return tasksUpdateBody(rest, cwd);
   if (command === "set-status") return tasksSetStatus(rest, cwd);
   if (command === "assign") return tasksAssign(rest, cwd);
@@ -89,6 +91,7 @@ Commands:
   create <title>              Create a shared workflow task with --body-file
   mark-final-review <task-id> Mark an eligible planner-owned final review
   show <task-id>              Print the task as Markdown
+  prompt <task-id> --agent <worker|reviewer>  Print a read-only child prompt
   update-body <task-id>       Replace the full task brief with --body-file
   set-status <task-id> <status> [--admin-override]
   assign <task-id> <agent-name>
@@ -109,6 +112,18 @@ List options:
 Statuses: todo, ready, in_progress, blocked, review, done
 Types: task, bug, story, epic, chore, research, doc`);
   return 0;
+}
+
+function tasksPrompt(args: string[], cwd: string) {
+  try {
+    if (args.length !== 3 || args[1] !== "--agent") throw new Error("Usage: agent-rig tasks prompt <task-id> --agent worker|reviewer");
+    const { prompt, estimatedTokens } = buildTaskPrompt(cwd, args[2], args[0]);
+    console.error(`Prompt size: approximately ${estimatedTokens} tokens (UTF-8 bytes / 4); soft limit: 8000.`);
+    process.stdout.write(prompt);
+    return 0;
+  } catch (cause) {
+    return fail(message(cause));
+  }
 }
 
 function tasksCreate(args: string[], cwd: string) {
@@ -1383,13 +1398,17 @@ function defaultTaskBody() {
 function readTaskBrief(file: string) {
   if (!existsSync(file)) throw new Error(`Task brief not found: ${file}`);
   const body = readFileSync(file, "utf8");
+  validateTaskBrief(body);
+  return body;
+}
+
+export function validateTaskBrief(body: string) {
   const required = ["Context", "Goal", "Scope", "Planner Notes", "Implementation Plan", "Acceptance Criteria"];
   const missing = required.filter((section) => {
     const content = taskBriefSection(body, section);
     return !content.trim() || (section === "Acceptance Criteria" && !/^- \[[ xX]\] .+/m.test(content));
   });
   if (missing.length) throw new Error(`Task brief is incomplete. Add non-empty sections and acceptance checkboxes: ${missing.join(", ")}`);
-  return body;
 }
 
 function taskBriefSection(body: string, section: string) {
