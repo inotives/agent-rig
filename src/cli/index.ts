@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInit } from "./init.js";
+import { runUpgrade } from "./upgrade.js";
 import { runValidate } from "./validate.js";
 import { runAdd, runAgents, runCreds, runProfiles, runSkills } from "./manage.js";
 import { runStart, runStatus } from "../workflow/lifecycle.js";
@@ -26,6 +27,7 @@ export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   }
 
   if (command === "init") return runInit(args, cwd);
+  if (command === "upgrade") return runUpgrade(args, cwd);
   if (command === "validate") return runValidate(args, cwd);
   if (command === "add") return runAdd(args, cwd);
   if (command === "agents") return runAgents(args, cwd);
@@ -53,6 +55,7 @@ Usage: agent-rig <command> [options]
 
 Commands:
   init       Scaffold .agent-rig/ in the current project
+  upgrade    Back up and refresh deployed managed instructions
   add        Add an agent to an existing workspace
   profiles   List, show, or update editable agent profiles
   doctor     Check local AgentRig environment and workspace health
