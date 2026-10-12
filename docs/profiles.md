@@ -2,6 +2,11 @@
 
 Agent profiles are editable Markdown templates for new agent instructions.
 
+The planner uses the read-only task prompt command and passes its output through
+stdin to a child. See [Planner Child Execution](provider-execution.md) for launch
+steps, provider expectations, and failure diagnostics. Provider flags remain in
+launch commands. They are not part of the shared role instructions.
+
 `agent-rig init` copies built-in profiles into:
 
 ```text

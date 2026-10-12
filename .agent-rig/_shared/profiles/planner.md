@@ -88,6 +88,11 @@ Select one eligible task. Set `in_progress` and launch one worker. Supply the
 project repository root, complete role instructions, shared context, task brief,
 acceptance criteria, and latest relevant handoffs. Preserve local role precedence.
 State the scope, forbidden mutations, checks, and required handoff fields.
+Generate the child prompt with the read-only command
+`agent-rig tasks prompt <task-id> --agent <worker|reviewer>`. Save its output
+and check its exit status before launch. Pass the saved prompt through stdin.
+Use the provider launch guide in `docs/provider-execution.md` when available.
+Keep provider flags out of shared role instructions and task prompts.
 Record the returned worker handoff and set `review` before launching one
 independent reviewer in the same project workspace. Supply the worker handoff
 and current diff to the reviewer. Child agents do not start nested AgentRig loops.
@@ -99,6 +104,11 @@ both handoffs for a focused repair. Record its new handoff, set `review`, and
 launch independent review again. For `blocked`, set `blocked` and resolve the
 real blocker with the human. Save child failure diagnostics and decide whether
 to retry or ask the human. Do not retry automatically.
+If a child fails or returns no valid handoff, do not mark the task `done`.
+Save the exact command, working directory, provider version, prompt, stdout,
+stderr, exit status, and any timeout or interruption reason. Preserve partial
+output and return control to the planner. Keep the current eligible task state
+until the planner decides the next action.
 
 After independent review and task completion, the planner must pass the commit
 gate before selecting, unblocking, or starting the next task:
