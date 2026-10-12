@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createWorkflowStore, SQLiteWorkflowStore } from "../../dist/workflow/index.js";
+import Database from "better-sqlite3";
+import { createWorkflowStore, SQLiteWorkflowStore, serializeTask } from "../../dist/workflow/index.js";
 import { buildTaskPrompt } from "../../dist/workflow/prompt.js";
 
 const cli = resolve("dist/index.js");
@@ -62,6 +63,28 @@ function snapshot(dir) {
   }
   walk(dir);
   return result;
+}
+
+// Inject historical invalid state directly. Normal store mutations reject it.
+function injectTaskPatch(f, provider, patch) {
+  const { store } = createWorkflowStore(f.cwd);
+  const current = store.getTask("fixture", "task-0001");
+  if (store instanceof SQLiteWorkflowStore) store.close();
+  const next = { ...current, ...patch };
+  if (provider === "markdown") {
+    const dir = join(f.root, "_shared", "tasks");
+    const file = readdirSync(dir).find((file) => file.startsWith("task-0001_"));
+    writeFileSync(join(dir, file), serializeTask(next));
+  } else {
+    const db = new Database(join(f.root, "_shared", "workflow.sqlite"));
+    try {
+      db.transaction(() => {
+        db.prepare("UPDATE tasks SET assigned_to = ?, status = ?, body_markdown = ? WHERE task_id = ?").run(next.assignedTo, next.status, next.body, next.id);
+        db.prepare("DELETE FROM task_dependencies WHERE task_id = ?").run(next.id);
+        for (const id of next.dependsOn) db.prepare("INSERT INTO task_dependencies VALUES (?, ?, ?)").run("fixture", next.id, id);
+      })();
+    } finally { db.close(); }
+  }
 }
 
 function run(cwd, args = ["task-0001", "--agent", "worker"]) {
@@ -183,11 +206,8 @@ for (const provider of ["markdown", "sqlite"]) {
       [{ body: brief + "\n" + "x".repeat(33000) }, /8000-token soft limit/]
     ];
     for (const [patch, error] of cases) {
-      // Close the writer so that the fixture is checkpointed before prompt reads.
-      const { store } = createWorkflowStore(f.cwd);
-      store.updateTask("fixture", "task-0001", patch);
-      if (store instanceof SQLiteWorkflowStore) store.close();
       f.close();
+      injectTaskPatch(f, provider, patch);
       const before = snapshot(f.cwd);
       const result = run(f.cwd);
       assert.equal(result.status, 1);

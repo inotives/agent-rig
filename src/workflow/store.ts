@@ -11,6 +11,7 @@ export interface WorkflowStore {
   listPhaseSummaries(projectIdentifier: ProjectIdentifier): PhaseSummary[];
   createTask(task: WorkflowTask): WorkflowTask;
   updateTask(projectIdentifier: ProjectIdentifier, taskId: string, patch: WorkflowTaskPatch): void;
+  repairTask(projectIdentifier: ProjectIdentifier, taskId: string, status: string, reason: string): void;
   updateTaskWithHandoff(
     projectIdentifier: ProjectIdentifier,
     taskId: string,

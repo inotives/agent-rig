@@ -7,6 +7,7 @@ import { Agent, readAgents, requireWorkspace, validSlug } from "../workspace/wor
 import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, resolveTaskPhase, serializeTask, validateNewHandoff, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./index.js";
 import { replaceFrontmatter } from "./migration.js";
 import { buildTaskPrompt } from "./prompt.js";
+import type { WorkflowTaskPatch } from "./model.js";
 
 export type SharedTask = {
   id: string;
@@ -71,6 +72,8 @@ export function runTasks(args: string[], cwd: string) {
   if (command === "show") return tasksShow(rest, cwd);
   if (command === "prompt") return tasksPrompt(rest, cwd);
   if (command === "update-body") return tasksUpdateBody(rest, cwd);
+  if (command === "edit") return tasksEdit(rest, cwd);
+  if (command === "repair") return tasksRepair(rest, cwd);
   if (command === "set-status") return tasksSetStatus(rest, cwd);
   if (command === "assign") return tasksAssign(rest, cwd);
   if (command === "set-type") return tasksSetType(rest, cwd);
@@ -93,6 +96,9 @@ Commands:
   show <task-id>              Print the task as Markdown
   prompt <task-id> --agent <worker|reviewer>  Print a read-only child prompt
   update-body <task-id>       Replace the full task brief with --body-file
+  edit <task-id>              Edit --title, --body-file, --priority, --type,
+                             --phase, --assigned-to, --depends-on (use none to clear)
+  repair <task-id> --status <status> --reason <reason>  Planner incident repair; cannot set done
   set-status <task-id> <status> [--admin-override]
   assign <task-id> <agent-name>
   set-type <task-id> <type>
@@ -207,6 +213,53 @@ function tasksUpdateBody(args: string[], cwd: string) {
   } catch (cause) {
     return fail(message(cause));
   }
+}
+
+function tasksEdit(args: string[], cwd: string) {
+  try {
+    const id = args[0];
+    if (!id || args.length < 3) return fail("Usage: agent-rig tasks edit <task-id> [--title <title>] [--body-file <path>] [--priority <priority>] [--type <type>] [--phase <phase>] [--assigned-to <agent|none>] [--depends-on <task-id[,task-id]|none>]");
+    if (process.env.AGENT_RIG_ROLE && process.env.AGENT_RIG_ROLE !== "planner") throw new Error("Only the planner can edit a task");
+    const options = parseOptions(args.slice(1), new Set(["--title", "--body-file", "--priority", "--type", "--phase", "--assigned-to", "--depends-on"]));
+    const patch: WorkflowTaskPatch = { updatedOn: dateStamp(new Date()) };
+    for (const [flag, field] of [["--title", "title"], ["--priority", "priority"], ["--type", "type"], ["--phase", "phase"], ["--assigned-to", "assignedTo"]] as const) {
+      const value = option(options, flag);
+      if (typeof value === "undefined") continue;
+      if (!value.trim()) throw new Error(`Empty value for ${flag}`);
+      patch[field] = value;
+    }
+    if (patch.type && !taskTypes.has(patch.type)) throw new Error(`Invalid type: ${patch.type}`);
+    if (patch.priority && !priorities.has(patch.priority)) throw new Error(`Invalid priority: ${patch.priority}`);
+    if (patch.assignedTo === "none") patch.assignedTo = "";
+    else if (patch.assignedTo) requireAgent(requireWorkspace(cwd), patch.assignedTo);
+    if (options.has("--depends-on")) {
+      const values = dependsOn(options);
+      if (!values.length) throw new Error("Use --depends-on none to clear dependencies");
+      if (values.includes("none") && values.length !== 1) throw new Error("Use --depends-on none alone to clear dependencies");
+      patch.dependsOn = values[0] === "none" ? [] : values;
+    }
+    const bodyFile = option(options, "--body-file");
+    if (bodyFile) patch.body = readTaskBrief(resolve(cwd, bodyFile));
+    const task = requireSharedTask(cwd, id);
+    task.store.updateTask(task.projectIdentifier, id, patch);
+    console.log(`Edited ${id}.`);
+    return 0;
+  } catch (cause) { return fail(message(cause)); }
+}
+
+function tasksRepair(args: string[], cwd: string) {
+  try {
+    const id = args[0];
+    const options = parseOptions(args.slice(1), new Set(["--status", "--reason"]));
+    const status = option(options, "--status");
+    const reason = option(options, "--reason");
+    if (!id || !status || !reason?.trim()) return fail("Usage: agent-rig tasks repair <task-id> --status <status> --reason <reason>");
+    if (process.env.AGENT_RIG_ROLE !== "planner") throw new Error("Only the planner can repair a task");
+    const task = requireSharedTask(cwd, id);
+    task.store.repairTask(task.projectIdentifier, id, status, reason);
+    console.log(`Repaired ${id}: status=${status}`);
+    return 0;
+  } catch (cause) { return fail(message(cause)); }
 }
 
 function tasksList(args: string[], cwd: string) {

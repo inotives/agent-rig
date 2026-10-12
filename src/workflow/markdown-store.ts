@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { resolveTaskPhase, summarizePhases, validateNewHandoff, validateTaskTransition } from "./model.js";
+import { resolveTaskPhase, summarizePhases, taskRepairPatch, validateTaskMutation, validateNewHandoff, validateTaskTransition } from "./model.js";
 import type { PhaseSummary, ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
 import type { WorkflowStore } from "./store.js";
 
@@ -68,6 +68,17 @@ export class MarkdownWorkflowStore implements WorkflowStore {
     if (this.actorRole && patch.status) validateTaskTransition(this.actorRole, current.status, patch.status);
     const next: WorkflowTask = { ...current, ...patch, projectIdentifier };
     next.metadata = patch.metadata ?? current.metadata;
+    validateTaskMutation(current, next, this.listTasks(projectIdentifier));
+    writeFileSync(record.file, serializeTask(next), "utf8");
+  }
+
+  repairTask(projectIdentifier: ProjectIdentifier, taskId: string, status: string, reason: string): void {
+    this.assertProject(projectIdentifier);
+    const record = this.taskRecord(taskId);
+    if (!record) throw new Error(`Task not found: ${taskId}`);
+    const current = this.toTask(record.file, record.metadata, record.body, new Set(), new Set());
+    const next = { ...current, ...taskRepairPatch(current, status, reason, this.actorRole) };
+    validateTaskMutation(current, next, this.listTasks(projectIdentifier), true);
     writeFileSync(record.file, serializeTask(next), "utf8");
   }
 
@@ -84,6 +95,7 @@ export class MarkdownWorkflowStore implements WorkflowStore {
     const current = this.toTask(record.file, record.metadata, record.body, new Set(), new Set());
     if (this.actorRole && patch.status) validateTaskTransition(this.actorRole, current.status, patch.status);
     const next: WorkflowTask = { ...current, ...patch, projectIdentifier, metadata: patch.metadata ?? current.metadata };
+    validateTaskMutation(current, next, this.listTasks(projectIdentifier));
     const existing = this.listHandoffs(projectIdentifier, taskId);
     const sequence = handoff.sequence && handoff.sequence > existing.length ? handoff.sequence : existing.length + 1;
     const saved = { ...handoff, sequence };

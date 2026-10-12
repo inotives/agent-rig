@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import { resolveTaskPhase, summarizePhases, validateNewHandoff, validateTaskTransition } from "./model.js";
+import { resolveTaskPhase, summarizePhases, taskRepairPatch, validateTaskMutation, validateNewHandoff, validateTaskTransition } from "./model.js";
 import type { PhaseSummary, ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
 import type { WorkflowStore } from "./store.js";
 
@@ -103,6 +103,15 @@ export class SQLiteWorkflowStore implements WorkflowStore {
   updateTask(projectIdentifier: ProjectIdentifier, taskId: string, patch: WorkflowTaskPatch): void {
     this.assertProject(projectIdentifier);
     this.runTransaction(() => this.updateTaskInTransaction(projectIdentifier, taskId, patch));
+  }
+
+  repairTask(projectIdentifier: ProjectIdentifier, taskId: string, status: string, reason: string): void {
+    this.assertProject(projectIdentifier);
+    this.runTransaction(() => {
+      const current = this.getTask(projectIdentifier, taskId);
+      if (!current) throw new Error(`Task not found: ${taskId}`);
+      this.updateTaskInTransaction(projectIdentifier, taskId, taskRepairPatch(current, status, reason, this.actorRole), true);
+    });
   }
 
   /** Update a task and append its handoff in one commit, enforcing completion integrity. */
@@ -234,11 +243,12 @@ export class SQLiteWorkflowStore implements WorkflowStore {
     for (const id of task.dependsOn) dependency.run(this.projectIdentifier, task.id, id);
   }
 
-  private updateTaskInTransaction(projectIdentifier: string, taskId: string, patch: WorkflowTaskPatch): void {
+  private updateTaskInTransaction(projectIdentifier: string, taskId: string, patch: WorkflowTaskPatch, repair = false): void {
     const current = this.getTask(projectIdentifier, taskId);
     if (!current) throw new Error(`Task not found: ${taskId}`);
-    if (this.actorRole && patch.status) validateTaskTransition(this.actorRole, current.status, patch.status);
+    if (!repair && this.actorRole && patch.status) validateTaskTransition(this.actorRole, current.status, patch.status);
     const next = { ...current, ...patch, projectIdentifier, metadata: patch.metadata ?? current.metadata };
+    validateTaskMutation(current, next, this.listTasks(projectIdentifier), repair);
     this.db.prepare(`UPDATE tasks SET title = ?, type = ?, status = ?, assigned_to = ?, priority = ?, parent = ?, phase = ?, updated_on = ?, body_markdown = ?, metadata_json = ? WHERE project_identifier = ? AND task_id = ?`).run(
       next.title, next.type, next.status, next.assignedTo, next.priority, next.parent, next.phase ?? null, next.updatedOn, next.body, JSON.stringify(next.metadata), projectIdentifier, taskId
     );
