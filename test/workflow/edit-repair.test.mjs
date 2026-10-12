@@ -105,7 +105,10 @@ for (const provider of ["markdown", "sqlite"]) {
     for (const role of ["worker", "reviewer", "human", ""]) {
       const f = fixture(provider, role);
       try {
-        f.store.createTask(task("task-0001"));
+        const setup = provider === "sqlite"
+          ? new SQLiteWorkflowStore(join(f.cwd, ".agent-rig", "_shared", "workflow.sqlite"), "fixture", { actorRole: "planner" })
+          : new MarkdownWorkflowStore(join(f.cwd, ".agent-rig"), "fixture", "planner");
+        try { setup.createTask(task("task-0001")); } finally { setup.close?.(); }
         const before = f.store.getTask("fixture", "task-0001");
         assert.throws(() => f.store.repairTask("fixture", "task-0001", "ready", "Reason"), /Only the planner/);
         assert.equal(f.run(["repair", "task-0001", "--status", "ready", "--reason", "Reason"], role).status, 1);

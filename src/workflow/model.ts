@@ -101,7 +101,7 @@ const handoffRoutes: Record<string, string> = {
   "reviewer\u0000worker": "changes_requested",
   "planner\u0000worker": "changes_requested",
   "reviewer\u0000planner": "approved",
-  "planner\u0000planner": "approved"
+  "human\u0000planner": "changes_requested"
 };
 
 /** Validate a newly-created handoff. Historical imports intentionally bypass this check. */
@@ -123,10 +123,13 @@ export function validateNewHandoff(handoff: Pick<WorkflowHandoff, "sender" | "re
 /** Validate task status changes made by an identified workflow actor. */
 export function validateTaskTransition(role: string, currentStatus: string, nextStatus: string): void {
   if (role === "planner") return;
-  if (role === "worker" && currentStatus === "in_progress" && nextStatus === "review") return;
-  if (role === "reviewer" && currentStatus === "review" && nextStatus === "review") return;
   if (["done", "blocked"].includes(nextStatus)) throw new Error(`Only the planner can set a task to ${nextStatus}`);
   throw new Error(`${role} cannot transition task from ${currentStatus} to ${nextStatus}`);
+}
+
+/** Identified children return content; the planner records all workflow mutations. */
+export function validateWorkflowWriter(role?: string): void {
+  if (role && role !== "planner") throw new Error("Only the planner can mutate workflow state");
 }
 
 export type WorkflowTaskQuery = {

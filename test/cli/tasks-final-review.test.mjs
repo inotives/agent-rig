@@ -54,10 +54,13 @@ for (const provider of ["markdown", "sqlite"]) {
       assert.equal(run("done", task.id).status, 1);
       const approved = run("handoff", task.id, "--sender", "planner", "--recipient", "planner",
         "--status", "approved", "--message", "Integrated review passed");
-      assert.equal(approved.status, 0, approved.stderr);
-      const completed = run("done", task.id);
+      assert.equal(approved.status, 1);
+      assert.match(approved.stderr, /Invalid handoff route/);
+      const completed = run("done", task.id, "--message", "Integrated review passed");
       assert.equal(completed.status, 0, completed.stderr);
       assert.equal(store.getTask("fixture", task.id).status, "done");
+      assert.equal(store.getTask("fixture", task.id).metadata.completion_evidence, "Integrated review passed");
+      assert.deepEqual(store.listHandoffs("fixture", task.id), []);
     } finally {
       store.close?.();
       rmSync(cwd, { recursive: true, force: true });

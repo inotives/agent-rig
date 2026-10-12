@@ -176,15 +176,15 @@ test("Markdown handoffs enforce canonical routes and completion decisions", () =
   });
   const base = { projectIdentifier: "fixture", taskId: "task-0001", message: "message", createdAt: "2026-10-04T10:03:00.000Z", metadata: {} };
   assert.throws(() => store.addHandoff({ ...base, sequence: 1, sender: "worker", recipient: "planner", status: "review" }), /Invalid handoff decision/);
-  assert.throws(() => store.addHandoff({ ...base, sequence: 1, sender: "planner", recipient: "planner", status: "blocked" }), /Invalid handoff decision/);
-  assert.doesNotThrow(() => store.addHandoff({ ...base, sequence: 1, sender: "planner", recipient: "planner", status: "approved" }));
+  assert.throws(() => store.addHandoff({ ...base, sequence: 1, sender: "planner", recipient: "planner", status: "blocked" }), /Invalid handoff route/);
+  assert.throws(() => store.addHandoff({ ...base, sequence: 1, sender: "planner", recipient: "planner", status: "approved" }), /Invalid handoff route/);
   store.addHandoff({ ...base, sequence: 1, sender: "worker", recipient: "reviewer", status: "review" });
   store.addHandoff({ ...base, sequence: 2, sender: "reviewer", recipient: "planner", status: "approved" });
   store.completeTask("fixture", "task-0001");
   assert.equal(store.getTask("fixture", "task-0001").status, "done");
 });
 
-test("Markdown planner-owned final review completes from an approved planner handoff", () => {
+test("Markdown planner-owned final review completes from planner completion evidence", () => {
   const { store } = storeFixture();
   store.createTask({
     projectIdentifier: "fixture", id: "task-0001", title: "Final review", type: "task", status: "review",
@@ -192,9 +192,11 @@ test("Markdown planner-owned final review completes from an approved planner han
     createdBy: "planner", createdOn: "2026-10-04", updatedOn: "2026-10-04", body: "# Task\n",
     metadata: { planner_owned_final_review: true }
   });
-  store.addHandoff({ projectIdentifier: "fixture", taskId: "task-0001", sequence: 1, sender: "planner", recipient: "planner", status: "approved", message: "integrated review passed", createdAt: "2026-10-04T10:03:00.000Z", metadata: {} });
-  store.completeTask("fixture", "task-0001");
+  assert.throws(() => store.completeTask("fixture", "task-0001"), /requires worker and reviewer/);
+  store.completeTask("fixture", "task-0001", false, "Integrated review passed");
   assert.equal(store.getTask("fixture", "task-0001").status, "done");
+  assert.equal(store.getTask("fixture", "task-0001").metadata.completion_evidence, "Integrated review passed");
+  assert.deepEqual(store.listHandoffs("fixture", "task-0001"), []);
 });
 
 test("Markdown normal tasks reject planner-only completion", () => {
@@ -204,8 +206,8 @@ test("Markdown normal tasks reject planner-only completion", () => {
     assignedTo: "worker", priority: "normal", parent: "", dependsOn: [], dependencyReady: true, blockedBy: [],
     createdBy: "planner", createdOn: "2026-10-04", updatedOn: "2026-10-04", body: "# Task\n", metadata: {}
   });
-  store.addHandoff({ projectIdentifier: "fixture", taskId: "task-0001", sequence: 1, sender: "planner", recipient: "planner", status: "approved", message: "integrated review passed", createdAt: "2026-10-04T10:03:00.000Z", metadata: {} });
   assert.throws(() => store.completeTask("fixture", "task-0001"), /requires worker and reviewer/);
+  assert.throws(() => store.completeTask("fixture", "task-0001", false, "Planner evidence"), /requires worker and reviewer/);
 });
 
 function sqliteFixture() {
@@ -223,13 +225,15 @@ function sqliteTask(id = "", status = "ready") {
   };
 }
 
-test("SQLite planner-owned final review completes from an approved planner handoff", () => {
+test("SQLite planner-owned final review completes from planner completion evidence", () => {
   const { store } = sqliteFixture();
   try {
     store.createTask({ ...sqliteTask("task-0001", "review"), assignedTo: "planner", metadata: { planner_owned_final_review: true } });
-    store.addHandoff({ projectIdentifier: "fixture", taskId: "task-0001", sender: "planner", recipient: "planner", status: "approved", message: "integrated review passed", createdAt: "2026-10-04T10:03:00.000Z", metadata: {} });
-    store.completeTask("fixture", "task-0001");
+    assert.throws(() => store.completeTask("fixture", "task-0001"), /requires worker and reviewer/);
+    store.completeTask("fixture", "task-0001", false, "Integrated review passed");
     assert.equal(store.getTask("fixture", "task-0001").status, "done");
+    assert.equal(store.getTask("fixture", "task-0001").metadata.completion_evidence, "Integrated review passed");
+    assert.deepEqual(store.listHandoffs("fixture", "task-0001"), []);
   } finally { store.close(); }
 });
 
@@ -237,8 +241,8 @@ test("SQLite normal tasks reject planner-only completion", () => {
   const { store } = sqliteFixture();
   try {
     store.createTask(sqliteTask("task-0001", "review"));
-    store.addHandoff({ projectIdentifier: "fixture", taskId: "task-0001", sender: "planner", recipient: "planner", status: "approved", message: "integrated review passed", createdAt: "2026-10-04T10:03:00.000Z", metadata: {} });
     assert.throws(() => store.completeTask("fixture", "task-0001"), /requires worker and reviewer/);
+    assert.throws(() => store.completeTask("fixture", "task-0001", false, "Planner evidence"), /requires worker and reviewer/);
   } finally { store.close(); }
 });
 

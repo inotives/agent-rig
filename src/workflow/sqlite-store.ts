@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import { resolveTaskPhase, summarizePhases, taskRepairPatch, validateTaskMutation, validateNewHandoff, validateTaskTransition } from "./model.js";
+import { resolveTaskPhase, summarizePhases, taskRepairPatch, validateTaskMutation, validateNewHandoff, validateTaskTransition, validateWorkflowWriter } from "./model.js";
 import type { PhaseSummary, ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
 import type { WorkflowStore } from "./store.js";
 
@@ -85,6 +85,7 @@ export class SQLiteWorkflowStore implements WorkflowStore {
   }
 
   createTask(task: WorkflowTask): WorkflowTask {
+    validateWorkflowWriter(this.actorRole);
     this.assertProject(task.projectIdentifier);
     let created: WorkflowTask;
     this.runTransaction(() => {
@@ -96,6 +97,7 @@ export class SQLiteWorkflowStore implements WorkflowStore {
   }
 
   allocateTaskId(projectIdentifier: ProjectIdentifier): string {
+    validateWorkflowWriter(this.actorRole);
     this.assertProject(projectIdentifier);
     return this.runTransaction(() => this.allocateTaskIdInTransaction());
   }
@@ -141,11 +143,13 @@ export class SQLiteWorkflowStore implements WorkflowStore {
   }
 
   addHandoff(handoff: WorkflowHandoff): void {
+    validateWorkflowWriter(this.actorRole);
     this.assertProject(handoff.projectIdentifier);
     this.runTransaction(() => { validateNewHandoff(handoff); this.appendHandoffInTransaction(handoff); });
   }
 
   appendHandoff(handoff: Omit<WorkflowHandoff, "sequence"> & { sequence?: number }): WorkflowHandoff {
+    validateWorkflowWriter(this.actorRole);
     this.assertProject(handoff.projectIdentifier);
     return this.runTransaction(() => { validateNewHandoff(handoff); return this.appendHandoffInTransaction(handoff); });
   }
@@ -169,6 +173,7 @@ export class SQLiteWorkflowStore implements WorkflowStore {
 
   /** Import historical records without changing their lifecycle status. */
   importTask(task: WorkflowTask, handoffs: WorkflowHandoff[]): void {
+    validateWorkflowWriter(this.actorRole);
     this.assertProject(task.projectIdentifier);
     this.runTransaction(() => {
       const metadata: Record<string, unknown> = { ...task.metadata, imported_handoff_count: handoffs.length };
@@ -181,12 +186,13 @@ export class SQLiteWorkflowStore implements WorkflowStore {
     });
   }
 
-  completeTask(projectIdentifier: ProjectIdentifier, taskId: string, administrativeOverride = false): void {
+  completeTask(projectIdentifier: ProjectIdentifier, taskId: string, administrativeOverride = false, evidence = ""): void {
     this.assertProject(projectIdentifier);
     if (this.actorRole && this.actorRole !== "planner") throw new Error("Only the planner can complete a task");
     this.runTransaction(() => {
-      this.assertCompleteTrail(taskId, administrativeOverride);
-      this.updateTaskInTransaction(projectIdentifier, taskId, { status: "done", updatedOn: new Date().toISOString() });
+      this.assertCompleteTrail(taskId, administrativeOverride, evidence);
+      const task = this.getTask(projectIdentifier, taskId)!;
+      this.updateTaskInTransaction(projectIdentifier, taskId, { status: "done", updatedOn: new Date().toISOString(), ...(evidence.trim() ? { metadata: { ...task.metadata, completion_evidence: evidence.trim() } } : {}) });
     });
   }
 
@@ -247,6 +253,7 @@ export class SQLiteWorkflowStore implements WorkflowStore {
     const current = this.getTask(projectIdentifier, taskId);
     if (!current) throw new Error(`Task not found: ${taskId}`);
     if (!repair && this.actorRole && patch.status) validateTaskTransition(this.actorRole, current.status, patch.status);
+    validateWorkflowWriter(this.actorRole);
     const next = { ...current, ...patch, projectIdentifier, metadata: patch.metadata ?? current.metadata };
     validateTaskMutation(current, next, this.listTasks(projectIdentifier), repair);
     this.db.prepare(`UPDATE tasks SET title = ?, type = ?, status = ?, assigned_to = ?, priority = ?, parent = ?, phase = ?, updated_on = ?, body_markdown = ?, metadata_json = ? WHERE project_identifier = ? AND task_id = ?`).run(
@@ -280,14 +287,11 @@ export class SQLiteWorkflowStore implements WorkflowStore {
     return `task-${String(next).padStart(4, "0")}`;
   }
 
-  private assertCompleteTrail(taskId: string, administrativeOverride = false): void {
+  private assertCompleteTrail(taskId: string, administrativeOverride = false, evidence = ""): void {
     if (administrativeOverride) return;
     const task = this.getTask(this.projectIdentifier, taskId);
     const handoffs = this.listHandoffs(this.projectIdentifier, taskId).slice(-2);
-    if (task?.metadata.planner_owned_final_review === true) {
-      const handoff = handoffs.at(-1);
-      if (handoff?.sender === "planner" && handoff.recipient === "planner" && handoff.status === "approved") return;
-    }
+    if (task?.metadata.planner_owned_final_review === true && task.assignedTo === "planner" && task.status === "review" && evidence.trim()) return;
     if (handoffs.length < 2 || handoffs[0].sender !== this.workRole || handoffs[0].metadata.source_order_conflict || handoffs[1].sender !== this.reviewRole || !["approved", "done"].includes(handoffs[1].status)) {
       throw new Error(`Task completion requires ${this.workRole} and ${this.reviewRole} handoffs`);
     }

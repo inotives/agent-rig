@@ -4,7 +4,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { Agent, readAgents, requireWorkspace, validSlug } from "../workspace/workspace.js";
-import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, resolveTaskPhase, serializeTask, validateNewHandoff, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./index.js";
+import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, resolveTaskPhase, serializeTask, validateNewHandoff, validateWorkflowWriter, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./index.js";
 import { replaceFrontmatter } from "./migration.js";
 import { buildTaskPrompt } from "./prompt.js";
 import type { WorkflowTaskPatch } from "./model.js";
@@ -67,6 +67,9 @@ export function runTasks(args: string[], cwd: string) {
   const [command, ...rest] = args;
   if (!command || command === "--help" || command === "-h" || command === "help") return tasksHelp();
   if (rest[0] === "--help" || rest[0] === "-h") return tasksHelp(); // for example `tasks handoff --help`
+  if (!["show", "prompt", "next"].includes(command) || rest.includes("--claim")) {
+    try { validateWorkflowWriter(process.env.AGENT_RIG_ROLE); } catch (cause) { return fail(message(cause)); }
+  }
   if (command === "create") return tasksCreate(rest, cwd);
   if (command === "mark-final-review") return tasksMarkFinalReview(rest, cwd);
   if (command === "show") return tasksShow(rest, cwd);
@@ -414,8 +417,8 @@ function tasksDone(args: string[], cwd: string) {
       console.log(`Recorded reviewer approval for ${id}; planner completion is required.`);
       return 0;
     }
-    task.store.completeTask(task.projectIdentifier, id, options.has("--admin-override"));
-    updateSharedTask(task, updates);
+    task.store.completeTask(task.projectIdentifier, id, options.has("--admin-override"), msg);
+    updateSharedTask(requireSharedTask(cwd, id), updates);
     console.log(`Done ${id}${msg ? `: ${msg}` : ""}`);
     return 0;
   } catch (cause) {
@@ -589,7 +592,7 @@ export function assemblePrompt(root: string, agent: Agent, task: SharedTask) {
     `Project: ${task.projectIdentifier}`,
     `Active workflow provider: ${provider}`,
     `AgentRig command for this run: ${cli}`,
-    "Use that command for task status and handoff mutations. In SQLite mode, never edit migrated task or handoff Markdown; it is historical reference only.",
+    "This deprecated loop is diagnostic only. Use that command only to read task context. Do not mutate task status, dependencies, handoffs, or workflow-store files. Do not commit, push, or start a nested loop. In SQLite mode, migrated task and handoff Markdown is historical reference only.",
     ...(agent.tool === "claude" ? [claudePromptNote(agent.role)] : []),
     phaseDocPath ? `Phase doc: ${phaseDocPath}` : "Phase doc: not inferred",
     "",
@@ -1035,14 +1038,13 @@ function staleLoopTaskMessage(agent: Agent, taskId: string, status: string) {
   return `${agent.role} ${agent.name} left ${taskId} ${location} after ${agent.tool} run`;
 }
 
-// Only the planner can set `blocked` or `done`, and the reviewer cannot change
-// the task state (see validateTaskTransition). The outcome text asks only for
-// what the CLI accepts from a loop agent.
+// Diagnostic children return content. Only the planner records workflow state.
 function lifecycleInstructions(role: string) {
+  const output = " Return proposed handoff content to the planner for recording and routing. Use these Markdown fields: Decision, Recipient, Summary, Findings, Evidence, Requested action. Include exact check commands and results in Evidence. Do not mutate workflow state or write handoffs.";
   if (role === "reviewer") {
-    return "Review the task against the phase docs and current repo behavior. Record exactly one decision with the AgentRig `tasks handoff` command: `approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`. Leave the task in `review`; do not change the task state. The loop sends `changes_requested` back to the worker, and the planner acts on `approved` and `blocked`.";
+    return "Review the task against the phase docs and current repo behavior. Return exactly one decision: `approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`. Do not edit implementation files or repository notes." + output;
   }
-  return "Implement only the assigned task. Before you finish, do one of these: when the work is ready for review, set the task to `review` and record a `review` handoff to `reviewer`; when you cannot continue, record a `blocked` handoff to `planner` with the reason and leave the task state as it is. The loop then sets the task to `blocked`.";
+  return "Implement only the assigned task and run focused checks. Return `review` to `reviewer` when the work is ready, or `blocked` to `planner` with the reason for a real blocker." + output;
 }
 
 function inferPhaseDocPath(task: SharedTask) {

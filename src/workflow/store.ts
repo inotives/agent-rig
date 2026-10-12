@@ -19,7 +19,7 @@ export interface WorkflowStore {
     handoff: Omit<WorkflowHandoff, "sequence"> & { sequence?: number },
     options?: { administrativeOverride?: boolean }
   ): WorkflowHandoff;
-  completeTask(projectIdentifier: ProjectIdentifier, taskId: string, administrativeOverride?: boolean): void;
+  completeTask(projectIdentifier: ProjectIdentifier, taskId: string, administrativeOverride?: boolean, evidence?: string): void;
   listDependencies(projectIdentifier: ProjectIdentifier, taskId: string): string[];
   addHandoff(handoff: WorkflowHandoff): void;
   listHandoffs(projectIdentifier: ProjectIdentifier, taskId: string): WorkflowHandoff[];
