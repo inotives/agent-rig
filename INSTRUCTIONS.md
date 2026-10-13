@@ -142,6 +142,28 @@ Each child agent uses its configured runtime. AgentRig does not require a
 specific model, mode, or vendor. Live child-agent smoke testing is manual and
 is not part of CI.
 
+### Upgrade deployed instructions to 0.2.0
+
+When upgrading a deployed project, use this instruction:
+
+> Upgrade this project's deployed AgentRig instructions to
+> `@inotives/agent-rig` version `0.2.0`.
+>
+> 1. Check the installed AgentRig version and the active workflow provider.
+> 2. Read the `0.2.0` upgrade guide. Run `agent-rig upgrade --dry-run` from
+>    the project root and report the planned changes.
+> 3. Preserve tasks, handoffs, SQLite files, skills, tools, configuration, and
+>    local decisions. Explain any conflict before changing project-specific
+>    instructions or assets.
+> 4. Wait for human approval of the dry run. Then run `agent-rig upgrade`.
+> 5. Verify that the deployed instructions use the planner-managed
+>    worker/reviewer workflow: the planner owns task and handoff updates;
+>    workers and reviewers return handoffs to the planner; the planner commits
+>    between completed tasks; and workers and reviewers do not start nested
+>    AgentRig loops.
+> 6. Report the installed version, changed files, preserved data, and
+>    verification results. Do not commit or push unless asked.
+
 ## GitHub issue planning
 
 GitHub planning is separate from normal local task work and requires an
