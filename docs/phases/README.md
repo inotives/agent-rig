@@ -31,6 +31,7 @@ This folder breaks `docs/project_specs.md` into implementation phases. Each phas
 25. [Phase 25: Handoff Timeline Redesign](phase-25-handoff-timeline-redesign.md) — active
 26. [Phase 26: Planner-Manager Worker-Reviewer Contract](phase-26-planner-manager-worker-reviewer-contract.md) — complete
 27. [Phase 27: Safe Operations, Live Claude Test, and Phase-Based UI Pages](phase-27-live-claude-test-and-phase-pages.md) — active
+28. [Phase 28: Planner-Mediated Direct Execution](phase-28-planner-mediated-direct-execution.md) — planning
 
 ## Workflow
 

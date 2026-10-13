@@ -434,17 +434,22 @@ test("claude prompt tells the agent to run each Bash command as one simple comma
   assert.match(call.stdin, /run it again once in its simplest form/);
 });
 
-test("loop prompt states the task outcome that the CLI accepts for each role", () => {
+test("diagnostic child prompts return structured outcomes without directing workflow mutations", () => {
   const worker = runMockedClaude("worker", "in_progress").call.stdin;
   const outcome = (text) => text.split("# Required Task Outcome\n")[1].split("\n")[0];
-  // Live run (task-0107): the CLI refused `tasks block` from the worker ("Only the planner can set a task to blocked").
-  assert.match(outcome(worker), /set the task to `review`/);
-  assert.match(outcome(worker), /`blocked` handoff to `planner`/);
-  assert.doesNotMatch(outcome(worker), /terminal state/);
+  assert.match(outcome(worker), /Return `review` to `reviewer`/);
+  assert.match(outcome(worker), /`blocked` to `planner`/);
   const reviewer = runMockedClaude("reviewer", "review").call.stdin;
-  // The CLI refuses review -> ready for the reviewer; the loop routes changes_requested to the worker.
-  assert.doesNotMatch(outcome(reviewer), /`ready`/);
   assert.match(outcome(reviewer), /exactly one decision/);
   assert.match(outcome(reviewer), /`approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`/);
-  assert.match(outcome(reviewer), /Leave the task in `review`/);
+  assert.match(outcome(reviewer), /Do not edit implementation files or repository notes/);
+  for (const prompt of [worker, reviewer]) {
+    assert.match(prompt, /deprecated loop is diagnostic only/);
+    assert.match(prompt, /Do not mutate task status, dependencies, handoffs, or workflow-store files/);
+    assert.match(outcome(prompt), /Return proposed handoff content to the planner for recording and routing/);
+    assert.match(outcome(prompt), /Decision, Recipient, Summary, Findings, Evidence, Requested action/);
+    assert.match(outcome(prompt), /exact check commands and results/);
+    assert.doesNotMatch(prompt, /tasks (?:handoff|set-status|done|block|unblock|repair|edit|assign|create|update-body|set-type|set-phase|mark-final-review|sync)\b|--claim/);
+    assert.doesNotMatch(prompt, /Use that command for task status and handoff mutations|set the task to|record a .*handoff|Record exactly one decision with/);
+  }
 });

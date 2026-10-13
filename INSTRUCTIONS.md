@@ -102,19 +102,19 @@ ready -> in_progress -> review -> done
                          \-> blocked
 ```
 
-Run one deterministic tick with `agent-rig loop --once`. The continuous loop
-uses `agent-rig loop`. `agent-rig watch --once` is the older filesystem-only
-single-task adapter.
+Use planner-mediated direct worker/reviewer execution. The planner launches
+one worker for the selected task, records its handoff, and launches one
+independent reviewer in the same project workspace.
 
 ### Process boundary
 
-Run the manager loop from a normal host terminal, outside any worker or
-reviewer task session. Do not start `agent-rig loop` from inside a worker or
-reviewer task. Child agents do not start nested AgentRig loops.
+The planner controls worker and reviewer execution. Workers and reviewers
+return handoff content to the planner. They do not launch other agents or
+change task or handoff state.
 
-Before starting the loop, verify the selected child runtime from the same
-terminal. Confirm that its executable is available and that its documented
-version command succeeds:
+Before launching a worker or reviewer, verify the selected child runtime
+from the same terminal. Confirm that its executable is available and that
+its documented version command succeeds:
 
 ```sh
 command -v agent-rig

@@ -40,6 +40,7 @@ export async function runWatch(args: string[], cwd: string) {
 export async function runLoop(args: string[], cwd: string) {
   try {
     if (args.includes("--help") || args.includes("-h") || args.includes("help")) return loopHelp();
+    console.warn("Deprecated diagnostic command: agent-rig loop. Use planner-mediated direct worker/reviewer execution.");
     const options = parseOptions(args, new Set(["--once", "--worker", "--reviewer", "--interval"]), new Set(["--once"]));
     const root = requireWorkspace(cwd);
     const workerName = option(options, "--worker") ?? "worker";

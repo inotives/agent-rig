@@ -6,46 +6,94 @@ Type: Node.js project
 README: ./README.md
 # AgentRig Coordination Contract
 
-The `planner` profile is the planner-manager. It works with the human, owns
-the approved plan, selects tasks, manages dependencies, and controls task
-state. The profile token and handoff recipient remain `planner`.
+The profile token and handoff recipient remain `planner`. The planner-manager
+is the only task and handoff state writer for both Markdown and SQLite.
+Workers and reviewers return handoff content to the planner. They do not write
+task status, dependencies, canonical handoffs, or workflow-store files. They
+do not commit, push, or start nested AgentRig loops.
 
-Task states are exactly:
+For each selected task:
 
-- `ready`: eligible for worker selection.
-- `in_progress`: the assigned worker is implementing or repairing the task.
-- `review`: the worker handoff is ready for independent review.
-- `blocked`: a real blocker prevents progress.
-- `done`: the planner-manager accepted an approved review.
+1. The planner checks task status and dependencies, selects one eligible task,
+   and sets it to `in_progress` before launching one worker.
+2. The worker reads the supplied instructions and task, makes scoped changes,
+   runs focused checks, and returns `review` to `reviewer`, or `blocked` to
+   `planner`. The planner records the handoff and sets `review` or `blocked`.
+3. The planner launches one independent reviewer in the same project workspace.
+   The reviewer inspects the task, worker handoff, docs, and current diff. It
+   does not edit implementation files or repository notes. It runs focused
+   checks and returns exactly one decision: `approved` to `planner`,
+   `changes_requested` to `worker`, or `blocked` to `planner`.
+4. The planner records the reviewer handoff. For `approved`, it marks the task
+   `done` with completion evidence. The next task stays `blocked` until the
+   commit gate passes.
+   For `changes_requested`, it sets `review -> in_progress` before sending
+   the same worker the focused findings. The worker reads both handoffs,
+   repairs the task, and returns a new `review` handoff. The planner records
+   it, sets `review`, and launches independent review again. For `blocked`,
+   the planner sets `blocked` and resolves the blocker with the human.
+5. Human findings use `human -> planner: changes_requested`. The planner
+   records the findings and sends a focused
+   `planner -> worker: changes_requested` handoff. Repairs pass independent review before acceptance.
 
-The worker implements the assigned task, verifies it, and writes a handoff with
-decision `review`. The reviewer independently checks the worker handoff and
-changed files. The reviewer writes exactly one handoff decision:
-`approved`, `changes_requested`, or `blocked`. The reviewer sends the handoff
-to the role that acts next:
+After independent review and task completion, the planner must pass the commit
+gate before selecting, unblocking, or starting the next task:
 
-- `approved`: to `planner`. The planner-manager marks the task `done`.
-- `changes_requested`: to `worker`. The same worker repairs the task.
-- `blocked`: to `planner`. The planner-manager resolves the blocker with the
-  human.
+- Stage only the completed task's changes with explicit paths. Check the staged
+  diff and commit with a task-specific message that includes the task ID.
+- Verify the commit with `git log -1 --oneline` and `git show --stat HEAD`.
+  Confirm that it contains the completed task's changes. Run
+  `git status --porcelain` and require a clean working tree before proceeding.
+- If commit or verification fails, keep the next task `blocked`. Treat the
+  failure as a planner blocker and resolve it before proceeding. Do not include
+  unrelated changes or discard them to make the working tree clean.
+- Only after the gate passes, select and unblock the next eligible task.
+  Do not push automatically. Workers and reviewers must not commit or push.
 
-The reviewer does not change task state or dependencies.
+Child prompt inputs must include the project repository root, complete role
+instructions, shared context, the task brief and acceptance criteria, and only
+the latest relevant handoffs. Preserve local role precedence. Include the
+worker handoff and current diff for the reviewer. Include both worker and
+reviewer handoffs for a repair. State the scope, forbidden mutations, required
+checks, and output format. Use the same project workspace for both children.
+Do not add provider-specific launch flags to this contract.
 
-The planner-manager reads each reviewer decision and changes task state. For
-`changes_requested`, the task stays in `review`. The same worker reads both
-handoffs, repairs the task, and writes a new `review` handoff. Then an
-independent reviewer reviews the task again. The planner-manager does not set
-the task back to `in_progress`. For `approved`, the planner-manager marks the
-task `done` and unblocks only the next selected dependent task. For `blocked`,
-the planner-manager sets the task to `blocked` and resolves the blocker with
-the human. The planner-manager directly performs the final
-integrated review. If it finds a problem, it routes the `changes_requested`
-repair through the same worker and independent reviewer cycle, then repeats the
-integrated review. The planner-manager owns final phase acceptance.
+Return the proposed handoff as Markdown with these six fields:
 
-Child agents do not start nested AgentRig loops. In SQLite mode, mutate tasks
-and handoffs only through the project-local `agent-rig tasks ...` CLI. Migrated
-task and handoff Markdown is historical reference only.
+- **Decision:** `review`, `approved`, `changes_requested`, or `blocked`.
+- **Recipient:** `reviewer`, `worker`, or `planner`, as defined above.
+- **Summary:** State what changed or what the review concluded.
+- **Findings:** List actionable findings with file and line references, or `None`.
+- **Evidence:** Give exact check commands, results, and any check that could not run.
+- **Requested action:** State the next action for the recipient.
+
+The recipient identifies the next role; the planner receives and records every
+child result before routing it. Child failure does not trigger automatic retry.
+The planner saves diagnostic output and decides whether to retry or ask the
+human. Use `blocked` only for a real task or environment blocker.
+
+The planner directly runs final integrated review. Record final approval through
+task completion evidence, not a `planner -> planner` self-handoff. Human final
+review is a separate gate. Record human acceptance before phase completion.
+Use the project-local `agent-rig tasks ...` CLI for all workflow mutations.
+Migrated Markdown is historical reference only when SQLite is active.
+
+## Bounded Investigation
+
+Read the task, acceptance criteria, and latest relevant handoffs. Workers use
+CodeGraph when available to locate implementation symbols and callers before
+a scoped change. Reviewers inspect the supplied diff first, then use CodeGraph
+when available to independently inspect changed symbols, callers, tests, and
+nearby behavior. Inspect relevant source and changed files. If CodeGraph is
+unavailable or reports stale results, use focused `rg` searches and direct file
+inspection.
+
+Use context-mode when available for large files, logs, test output, or generated
+data. Otherwise, inspect relevant sections and keep command output bounded.
+Run focused behavioral tests with normal test commands. Expand investigation
+only when evidence requires it. These optional tools reduce navigation and
+context cost. They do not replace source inspection, behavioral verification,
+or the handoff and state ownership rules above.
 
 ## Safe Operations
 

@@ -27,6 +27,62 @@ export type WorkflowTask = {
 
 export type WorkflowTaskPatch = Partial<Pick<WorkflowTask, "title" | "type" | "status" | "assignedTo" | "priority" | "parent" | "phase" | "dependsOn" | "updatedOn" | "body" | "metadata">>;
 
+/** Check the resulting task graph before writing a normal edit or repair. */
+export function validateTaskMutation(current: WorkflowTask, next: WorkflowTask, tasks: WorkflowTask[], repair = false): void {
+  if (!(taskStatuses as readonly string[]).includes(next.status)) throw new Error(`Invalid status: ${next.status}`);
+  if (!repair) {
+    if (!(taskStatuses as readonly string[]).includes(current.status)) throw new Error(`Invalid current status: ${current.status}; use tasks repair`);
+    const transitions: Record<string, string[]> = {
+      todo: ["ready", "blocked", "done"], ready: ["todo", "in_progress", "blocked", "done"],
+      // The diagnostic loop returns startup failures to ready without retrying.
+      in_progress: ["ready", "review", "blocked", "done"], review: ["in_progress", "blocked", "done"],
+      blocked: ["todo", "ready", "in_progress", "done"], done: []
+    };
+    if (current.status !== next.status && !transitions[current.status].includes(next.status)) {
+      throw new Error(`Invalid task transition: ${current.status} -> ${next.status}; use tasks repair`);
+    }
+  }
+  const graph = new Map(tasks.map((task) => [task.id, task]));
+  graph.set(next.id, next);
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  function visit(id: string): void {
+    if (visiting.has(id)) throw new Error(`Dependency cycle: ${id}`);
+    if (visited.has(id)) return;
+    const task = graph.get(id);
+    if (!task) throw new Error(`Missing dependency: ${id}`);
+    if (new Set(task.dependsOn).size !== task.dependsOn.length) throw new Error(`Duplicate dependency: ${id}`);
+    visiting.add(id);
+    for (const dependency of task.dependsOn) {
+      if (dependency === id) throw new Error(`Task cannot depend on itself: ${id}`);
+      visit(dependency);
+    }
+    visiting.delete(id);
+    visited.add(id);
+  }
+  visit(next.id);
+  if (["ready", "in_progress", "review", "done"].includes(next.status) && next.dependsOn.some((id) => graph.get(id)?.status !== "done")) {
+    throw new Error(`Task ${next.id} has incomplete dependencies`);
+  }
+  // Reopening a predecessor must not invalidate an active or completed task.
+  if (current.status === "done" && next.status !== "done" && tasks.some((task) => task.id !== next.id && ["ready", "in_progress", "review", "done"].includes(task.status) && task.dependsOn.includes(next.id))) {
+    throw new Error(`Task ${next.id} has active or completed dependents`);
+  }
+}
+
+/** Repair is an explicit planner action. Keep its audit separate from handoffs. */
+export function taskRepairPatch(current: WorkflowTask, status: string, reason: string, actorRole?: string): WorkflowTaskPatch {
+  if (actorRole !== "planner") throw new Error("Only the planner can repair a task");
+  if (!reason.trim()) throw new Error("Task repair requires a reason");
+  if (status === "done") throw new Error("Task repair cannot mark a task done");
+  const history = current.metadata.repair_history;
+  if (typeof history !== "undefined" && !Array.isArray(history)) throw new Error("Invalid repair_history; preserve the audit before repairing");
+  const updatedOn = new Date().toISOString();
+  return { status, updatedOn, metadata: { ...current.metadata, repair_history: [...(history ?? []), {
+    actor: "planner", from_status: current.status, to_status: status, reason: reason.trim(), created_at: updatedOn
+  }] } };
+}
+
 export type WorkflowHandoff = {
   projectIdentifier: ProjectIdentifier;
   taskId: string;
@@ -45,7 +101,7 @@ const handoffRoutes: Record<string, string> = {
   "reviewer\u0000worker": "changes_requested",
   "planner\u0000worker": "changes_requested",
   "reviewer\u0000planner": "approved",
-  "planner\u0000planner": "approved"
+  "human\u0000planner": "changes_requested"
 };
 
 /** Validate a newly-created handoff. Historical imports intentionally bypass this check. */
@@ -67,10 +123,13 @@ export function validateNewHandoff(handoff: Pick<WorkflowHandoff, "sender" | "re
 /** Validate task status changes made by an identified workflow actor. */
 export function validateTaskTransition(role: string, currentStatus: string, nextStatus: string): void {
   if (role === "planner") return;
-  if (role === "worker" && currentStatus === "in_progress" && nextStatus === "review") return;
-  if (role === "reviewer" && currentStatus === "review" && nextStatus === "review") return;
   if (["done", "blocked"].includes(nextStatus)) throw new Error(`Only the planner can set a task to ${nextStatus}`);
   throw new Error(`${role} cannot transition task from ${currentStatus} to ${nextStatus}`);
+}
+
+/** Identified children return content; the planner records all workflow mutations. */
+export function validateWorkflowWriter(role?: string): void {
+  if (role && role !== "planner") throw new Error("Only the planner can mutate workflow state");
 }
 
 export type WorkflowTaskQuery = {

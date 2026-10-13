@@ -11,6 +11,7 @@ export interface WorkflowStore {
   listPhaseSummaries(projectIdentifier: ProjectIdentifier): PhaseSummary[];
   createTask(task: WorkflowTask): WorkflowTask;
   updateTask(projectIdentifier: ProjectIdentifier, taskId: string, patch: WorkflowTaskPatch): void;
+  repairTask(projectIdentifier: ProjectIdentifier, taskId: string, status: string, reason: string): void;
   updateTaskWithHandoff(
     projectIdentifier: ProjectIdentifier,
     taskId: string,
@@ -18,18 +19,18 @@ export interface WorkflowStore {
     handoff: Omit<WorkflowHandoff, "sequence"> & { sequence?: number },
     options?: { administrativeOverride?: boolean }
   ): WorkflowHandoff;
-  completeTask(projectIdentifier: ProjectIdentifier, taskId: string, administrativeOverride?: boolean): void;
+  completeTask(projectIdentifier: ProjectIdentifier, taskId: string, administrativeOverride?: boolean, evidence?: string): void;
   listDependencies(projectIdentifier: ProjectIdentifier, taskId: string): string[];
   addHandoff(handoff: WorkflowHandoff): void;
   listHandoffs(projectIdentifier: ProjectIdentifier, taskId: string): WorkflowHandoff[];
   listAllHandoffs(projectIdentifier: ProjectIdentifier): WorkflowHandoff[];
 }
 
-export function createWorkflowStore(cwd: string): { store: WorkflowStore; projectIdentifier: ProjectIdentifier } {
+export function createWorkflowStore(cwd: string, options: { readonly?: boolean } = {}): { store: WorkflowStore; projectIdentifier: ProjectIdentifier } {
   const config = readWorkspaceWorkflowConfig(cwd);
   if (config.workflow_store.provider === "sqlite") {
     return {
-      store: new SQLiteWorkflowStore(join(cwd, ".agent-rig", "_shared", "workflow.sqlite"), config.project_identifier, { actorRole: process.env.AGENT_RIG_ROLE }),
+      store: new SQLiteWorkflowStore(join(cwd, ".agent-rig", "_shared", "workflow.sqlite"), config.project_identifier, { actorRole: process.env.AGENT_RIG_ROLE, readonly: options.readonly }),
       projectIdentifier: config.project_identifier
     };
   }

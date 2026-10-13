@@ -46,7 +46,7 @@ project coordination into a separate hosted system.
 
 Handoff logs are intended for cross-session resume notes when work stops midstream or a session closes after a meaningful milestone. They are not meant to duplicate normal planner, worker, or reviewer task flow, which should already live in phase docs, task files, code review notes, and task status changes.
 
-The current MVP can scaffold a workspace, manage agents and credentials, install profile-declared skills, create fully briefed Markdown- or SQLite-backed tasks, run a Codex/OpenCode worker-reviewer loop, report live status, and serve a read-only task board.
+The current MVP can scaffold a workspace, manage agents and credentials, install profile-declared skills, create fully briefed Markdown- or SQLite-backed tasks, support planner-mediated direct worker/reviewer execution, report live status, and serve a read-only task board.
 
 Detailed maintainer and agent workflow instructions are in
 [INSTRUCTIONS.md](INSTRUCTIONS.md).
@@ -252,7 +252,7 @@ already-built assets and do not build frontend dependencies at runtime.
 | `agent-rig ui --port <port>` | Serve the read-only local task board on a custom port. |
 | `agent-rig creds` | Create credential placeholders and `.env.example` files. |
 | `agent-rig skills` | Install and list shared or agent-local skills. |
-| `agent-rig status` | Show live session state, task counts, loop observability, and recent handoffs. |
+| `agent-rig status` | Show live session state, task counts, deprecated loop diagnostics, and recent handoffs. |
 | `agent-rig start --agent <agent-name>` | Print launch guidance plus relevant resume context for a configured agent. |
 | `agent-rig tasks create "<title>" --body-file <path>` | Create a fully briefed task in the active store. |
 | `agent-rig tasks update-body <task-id> --body-file <path>` | Replace a task brief through the active store. |
@@ -274,8 +274,7 @@ already-built assets and do not build frontend dependencies at runtime.
 | `agent-rig workflow import --from markdown` | Import new unmarked Markdown records without overwriting SQLite. |
 | `agent-rig workflow backup [--output <path>]` | Create and validate a consistent read-only SQLite snapshot. |
 | `agent-rig workflow rebuild [--replace --confirm "REPLACE SQLITE"]` | Preview or guardedly rebuild SQLite from Markdown. |
-| `agent-rig loop` | Run the Codex/OpenCode worker-reviewer loop continuously. |
-| `agent-rig loop --once` | Run one Codex/OpenCode worker-reviewer loop tick and exit. |
+| `agent-rig loop` | Deprecated diagnostic command retained for isolated regression tests. See [removal conditions](docs/tasks.md#deprecated-loop-diagnostics). |
 | `agent-rig watch --once` | Process one ready shared task and exit. |
 
 ## Implementation Phases

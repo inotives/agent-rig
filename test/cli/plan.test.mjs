@@ -16,6 +16,8 @@ function run(args, cwd, env = {}) {
   return spawnSync(process.execPath, [cli, ...args], {
     cwd,
     encoding: "utf8",
+    timeout: 10000,
+    killSignal: "SIGKILL",
     env: { ...process.env, ...env, AGENT_RIG_SKIP_SKILLS: "1" }
   });
 }
@@ -392,7 +394,8 @@ test("plan tasks generates complete dependency-gated tasks and prevents duplicat
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Generated 2 implementation task\(s\)/);
-  assert.match(result.stdout, /agent-rig loop --once/);
+  assert.match(result.stdout, /planner-mediated direct worker\/reviewer execution/);
+  assert.doesNotMatch(result.stdout, /agent-rig loop/);
   const first = run(["tasks", "show", "task-0001"], cwd);
   const second = run(["tasks", "show", "task-0002"], cwd);
   assert.equal(first.status, 0, first.stderr);
@@ -420,10 +423,33 @@ test("plan tasks marks the planner-owned final review and completes it through t
   assert.equal(generated.status, 0, generated.stderr);
   const task = run(["tasks", "show", "task-0003"], cwd);
   assert.match(task.stdout, /planner_owned_final_review: true/);
-  assert.equal(run(["tasks", "handoff", "task-0003", "--sender", "planner", "--recipient", "planner", "--status", "approved", "--message", "integrated review passed"], cwd).status, 0);
-  const completed = run(["tasks", "done", "task-0003"], cwd);
+  const selfHandoff = run(["tasks", "handoff", "task-0003", "--sender", "planner", "--recipient", "planner", "--status", "approved", "--message", "integrated review passed"], cwd);
+  assert.equal(selfHandoff.status, 1);
+  assert.match(selfHandoff.stderr, /Invalid handoff route/);
+  assert.equal(run(["tasks", "done", "task-0003"], cwd).status, 1);
+  for (const id of ["task-0001", "task-0002"]) {
+    for (const args of [
+      ["set-status", id, "in_progress"],
+      ["handoff", id, "--sender", "worker", "--recipient", "reviewer", "--status", "review", "--message", "Worker checks passed"],
+      ["set-status", id, "review"],
+      ["handoff", id, "--sender", "reviewer", "--recipient", "planner", "--status", "approved", "--message", "Independent review passed"],
+      ["done", id, "--message", "Reviewed implementation"]
+    ]) {
+      const result = run(["tasks", ...args], cwd, { AGENT_RIG_ROLE: "planner" });
+      assert.equal(result.status, 0, result.stderr);
+    }
+  }
+  assert.equal(run(["tasks", "set-status", "task-0003", "in_progress"], cwd).status, 0);
+  assert.equal(run(["tasks", "set-status", "task-0003", "review"], cwd).status, 0);
+  assert.equal(run(["tasks", "done", "task-0003"], cwd).status, 1);
+  const completed = run(["tasks", "done", "task-0003", "--message", "Integrated review passed; all phase checks pass"], cwd);
   assert.equal(completed.status, 0, completed.stderr);
   assert.match(completed.stdout, /Done task-0003/);
+  const final = run(["tasks", "show", "task-0003"], cwd);
+  assert.match(final.stdout, /status: done/);
+  assert.match(final.stdout, /completion_evidence: Integrated review passed; all phase checks pass/);
+  const state = JSON.parse(run(["status", "--json"], cwd).stdout);
+  assert.equal(state.handoffs.filter(({ task_id }) => task_id === "task-0003").length, 0);
 });
 
 test("plan tasks rejects an unapproved plan before creating tasks", () => {

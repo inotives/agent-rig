@@ -4,8 +4,10 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { Agent, readAgents, requireWorkspace, validSlug } from "../workspace/workspace.js";
-import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, resolveTaskPhase, serializeTask, validateNewHandoff, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./index.js";
+import { createWorkflowStore, MarkdownWorkflowStore, SQLiteWorkflowStore, parseHandoff, readWorkspaceWorkflowConfig, resolveTaskPhase, serializeTask, validateNewHandoff, validateWorkflowWriter, WorkflowHandoff, WorkflowStore, WorkflowTask } from "./index.js";
 import { replaceFrontmatter } from "./migration.js";
+import { buildTaskPrompt } from "./prompt.js";
+import type { WorkflowTaskPatch } from "./model.js";
 
 export type SharedTask = {
   id: string;
@@ -65,10 +67,16 @@ export function runTasks(args: string[], cwd: string) {
   const [command, ...rest] = args;
   if (!command || command === "--help" || command === "-h" || command === "help") return tasksHelp();
   if (rest[0] === "--help" || rest[0] === "-h") return tasksHelp(); // for example `tasks handoff --help`
+  if (!["show", "prompt", "next"].includes(command) || rest.includes("--claim")) {
+    try { validateWorkflowWriter(process.env.AGENT_RIG_ROLE); } catch (cause) { return fail(message(cause)); }
+  }
   if (command === "create") return tasksCreate(rest, cwd);
   if (command === "mark-final-review") return tasksMarkFinalReview(rest, cwd);
   if (command === "show") return tasksShow(rest, cwd);
+  if (command === "prompt") return tasksPrompt(rest, cwd);
   if (command === "update-body") return tasksUpdateBody(rest, cwd);
+  if (command === "edit") return tasksEdit(rest, cwd);
+  if (command === "repair") return tasksRepair(rest, cwd);
   if (command === "set-status") return tasksSetStatus(rest, cwd);
   if (command === "assign") return tasksAssign(rest, cwd);
   if (command === "set-type") return tasksSetType(rest, cwd);
@@ -89,7 +97,11 @@ Commands:
   create <title>              Create a shared workflow task with --body-file
   mark-final-review <task-id> Mark an eligible planner-owned final review
   show <task-id>              Print the task as Markdown
+  prompt <task-id> --agent <worker|reviewer>  Print a read-only child prompt
   update-body <task-id>       Replace the full task brief with --body-file
+  edit <task-id>              Edit --title, --body-file, --priority, --type,
+                             --phase, --assigned-to, --depends-on (use none to clear)
+  repair <task-id> --status <status> --reason <reason>  Planner incident repair; cannot set done
   set-status <task-id> <status> [--admin-override]
   assign <task-id> <agent-name>
   set-type <task-id> <type>
@@ -109,6 +121,18 @@ List options:
 Statuses: todo, ready, in_progress, blocked, review, done
 Types: task, bug, story, epic, chore, research, doc`);
   return 0;
+}
+
+function tasksPrompt(args: string[], cwd: string) {
+  try {
+    if (args.length !== 3 || args[1] !== "--agent") throw new Error("Usage: agent-rig tasks prompt <task-id> --agent worker|reviewer");
+    const { prompt, estimatedTokens } = buildTaskPrompt(cwd, args[2], args[0]);
+    console.error(`Prompt size: approximately ${estimatedTokens} tokens (UTF-8 bytes / 4); soft limit: 8000.`);
+    process.stdout.write(prompt);
+    return 0;
+  } catch (cause) {
+    return fail(message(cause));
+  }
 }
 
 function tasksCreate(args: string[], cwd: string) {
@@ -192,6 +216,53 @@ function tasksUpdateBody(args: string[], cwd: string) {
   } catch (cause) {
     return fail(message(cause));
   }
+}
+
+function tasksEdit(args: string[], cwd: string) {
+  try {
+    const id = args[0];
+    if (!id || args.length < 3) return fail("Usage: agent-rig tasks edit <task-id> [--title <title>] [--body-file <path>] [--priority <priority>] [--type <type>] [--phase <phase>] [--assigned-to <agent|none>] [--depends-on <task-id[,task-id]|none>]");
+    if (process.env.AGENT_RIG_ROLE && process.env.AGENT_RIG_ROLE !== "planner") throw new Error("Only the planner can edit a task");
+    const options = parseOptions(args.slice(1), new Set(["--title", "--body-file", "--priority", "--type", "--phase", "--assigned-to", "--depends-on"]));
+    const patch: WorkflowTaskPatch = { updatedOn: dateStamp(new Date()) };
+    for (const [flag, field] of [["--title", "title"], ["--priority", "priority"], ["--type", "type"], ["--phase", "phase"], ["--assigned-to", "assignedTo"]] as const) {
+      const value = option(options, flag);
+      if (typeof value === "undefined") continue;
+      if (!value.trim()) throw new Error(`Empty value for ${flag}`);
+      patch[field] = value;
+    }
+    if (patch.type && !taskTypes.has(patch.type)) throw new Error(`Invalid type: ${patch.type}`);
+    if (patch.priority && !priorities.has(patch.priority)) throw new Error(`Invalid priority: ${patch.priority}`);
+    if (patch.assignedTo === "none") patch.assignedTo = "";
+    else if (patch.assignedTo) requireAgent(requireWorkspace(cwd), patch.assignedTo);
+    if (options.has("--depends-on")) {
+      const values = dependsOn(options);
+      if (!values.length) throw new Error("Use --depends-on none to clear dependencies");
+      if (values.includes("none") && values.length !== 1) throw new Error("Use --depends-on none alone to clear dependencies");
+      patch.dependsOn = values[0] === "none" ? [] : values;
+    }
+    const bodyFile = option(options, "--body-file");
+    if (bodyFile) patch.body = readTaskBrief(resolve(cwd, bodyFile));
+    const task = requireSharedTask(cwd, id);
+    task.store.updateTask(task.projectIdentifier, id, patch);
+    console.log(`Edited ${id}.`);
+    return 0;
+  } catch (cause) { return fail(message(cause)); }
+}
+
+function tasksRepair(args: string[], cwd: string) {
+  try {
+    const id = args[0];
+    const options = parseOptions(args.slice(1), new Set(["--status", "--reason"]));
+    const status = option(options, "--status");
+    const reason = option(options, "--reason");
+    if (!id || !status || !reason?.trim()) return fail("Usage: agent-rig tasks repair <task-id> --status <status> --reason <reason>");
+    if (process.env.AGENT_RIG_ROLE !== "planner") throw new Error("Only the planner can repair a task");
+    const task = requireSharedTask(cwd, id);
+    task.store.repairTask(task.projectIdentifier, id, status, reason);
+    console.log(`Repaired ${id}: status=${status}`);
+    return 0;
+  } catch (cause) { return fail(message(cause)); }
 }
 
 function tasksList(args: string[], cwd: string) {
@@ -346,8 +417,8 @@ function tasksDone(args: string[], cwd: string) {
       console.log(`Recorded reviewer approval for ${id}; planner completion is required.`);
       return 0;
     }
-    task.store.completeTask(task.projectIdentifier, id, options.has("--admin-override"));
-    updateSharedTask(task, updates);
+    task.store.completeTask(task.projectIdentifier, id, options.has("--admin-override"), msg);
+    updateSharedTask(requireSharedTask(cwd, id), updates);
     console.log(`Done ${id}${msg ? `: ${msg}` : ""}`);
     return 0;
   } catch (cause) {
@@ -521,7 +592,7 @@ export function assemblePrompt(root: string, agent: Agent, task: SharedTask) {
     `Project: ${task.projectIdentifier}`,
     `Active workflow provider: ${provider}`,
     `AgentRig command for this run: ${cli}`,
-    "Use that command for task status and handoff mutations. In SQLite mode, never edit migrated task or handoff Markdown; it is historical reference only.",
+    "This deprecated loop is diagnostic only. Use that command only to read task context. Do not mutate task status, dependencies, handoffs, or workflow-store files. Do not commit, push, or start a nested loop. In SQLite mode, migrated task and handoff Markdown is historical reference only.",
     ...(agent.tool === "claude" ? [claudePromptNote(agent.role)] : []),
     phaseDocPath ? `Phase doc: ${phaseDocPath}` : "Phase doc: not inferred",
     "",
@@ -967,14 +1038,13 @@ function staleLoopTaskMessage(agent: Agent, taskId: string, status: string) {
   return `${agent.role} ${agent.name} left ${taskId} ${location} after ${agent.tool} run`;
 }
 
-// Only the planner can set `blocked` or `done`, and the reviewer cannot change
-// the task state (see validateTaskTransition). The outcome text asks only for
-// what the CLI accepts from a loop agent.
+// Diagnostic children return content. Only the planner records workflow state.
 function lifecycleInstructions(role: string) {
+  const output = " Return proposed handoff content to the planner for recording and routing. Use these Markdown fields: Decision, Recipient, Summary, Findings, Evidence, Requested action. Include exact check commands and results in Evidence. Do not mutate workflow state or write handoffs.";
   if (role === "reviewer") {
-    return "Review the task against the phase docs and current repo behavior. Record exactly one decision with the AgentRig `tasks handoff` command: `approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`. Leave the task in `review`; do not change the task state. The loop sends `changes_requested` back to the worker, and the planner acts on `approved` and `blocked`.";
+    return "Review the task against the phase docs and current repo behavior. Return exactly one decision: `approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`. Do not edit implementation files or repository notes." + output;
   }
-  return "Implement only the assigned task. Before you finish, do one of these: when the work is ready for review, set the task to `review` and record a `review` handoff to `reviewer`; when you cannot continue, record a `blocked` handoff to `planner` with the reason and leave the task state as it is. The loop then sets the task to `blocked`.";
+  return "Implement only the assigned task and run focused checks. Return `review` to `reviewer` when the work is ready, or `blocked` to `planner` with the reason for a real blocker." + output;
 }
 
 function inferPhaseDocPath(task: SharedTask) {
@@ -1068,7 +1138,10 @@ function handoffFileName(agent: Agent, runId: string, date: Date) {
 export function loopHelp() {
   console.log(`Usage: agent-rig loop [--once] [--worker <agent>] [--reviewer <agent>] [--interval <seconds>]
 
-Supports loop agents with \`tool = "codex"\`, \`tool = "opencode"\`, or \`tool = "claude"\`.
+Deprecated diagnostic command. Use planner-mediated direct worker/reviewer execution.
+Retained temporarily for isolated regression tests; not a supported workflow.
+
+Supports diagnostic loop agents with \`tool = "codex"\`, \`tool = "opencode"\`, or \`tool = "claude"\`.
 OpenCode uses its configured default model; AgentRig does not pass \`--model\` or \`--auto\`.
 Claude receives the assembled prompt on stdin. AgentRig runs \`claude -p\` with
 \`--permission-mode dontAsk\`, \`--no-session-persistence\`, \`--strict-mcp-config\`,
@@ -1383,13 +1456,17 @@ function defaultTaskBody() {
 function readTaskBrief(file: string) {
   if (!existsSync(file)) throw new Error(`Task brief not found: ${file}`);
   const body = readFileSync(file, "utf8");
+  validateTaskBrief(body);
+  return body;
+}
+
+export function validateTaskBrief(body: string) {
   const required = ["Context", "Goal", "Scope", "Planner Notes", "Implementation Plan", "Acceptance Criteria"];
   const missing = required.filter((section) => {
     const content = taskBriefSection(body, section);
     return !content.trim() || (section === "Acceptance Criteria" && !/^- \[[ xX]\] .+/m.test(content));
   });
   if (missing.length) throw new Error(`Task brief is incomplete. Add non-empty sections and acceptance checkboxes: ${missing.join(", ")}`);
-  return body;
 }
 
 function taskBriefSection(body: string, section: string) {

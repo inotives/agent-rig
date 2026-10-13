@@ -141,43 +141,38 @@ blocked -> todo | ready | in_progress
 
 AgentRig allows any valid status update so humans and agents can recover from mistakes or unusual workflows.
 
-Phase 13 standard execution flow is:
+## Supported Execution Workflow
 
-```text
-planner or human prepares tasks -> create/switch feature branch manually -> agent-rig loop
-```
+Use planner-mediated direct worker/reviewer execution. The planner selects one
+eligible task, sets `in_progress`, and launches one worker. The worker returns
+handoff content. The planner records it, sets `review`, and launches one
+independent reviewer in the same project workspace. The planner records the
+reviewer decision and owns all task and handoff state changes. Children do not
+write workflow state, commit, or push.
 
-`agent-rig loop` supports agents configured with `tool = "codex"`, `tool = "opencode"`, or `tool = "claude"`. It prefers `review` work before claiming new `ready` work and keeps branch creation outside the loop.
+For `changes_requested`, the planner sets `in_progress` and sends the findings
+to the worker. After approval, the planner marks the task `done` and verifies
+the task commit before starting the next task. See [Planner Child
+Execution](provider-execution.md) for prompt generation and provider launches.
 
-Codex agents run through headless `codex exec` sessions. OpenCode agents run through `opencode run` using the OpenCode default model configured outside AgentRig; AgentRig does not pass OpenCode `--model` or `--auto`.
+## Deprecated Loop Diagnostics
 
-Claude agents run through headless `claude -p` sessions. AgentRig sends the assembled prompt on stdin and passes role-scoped permissions:
+`agent-rig loop` is deprecated. It remains temporarily available only for
+isolated diagnostic regression tests. Do not use it for supported task execution.
+Generated role instructions use the planner-mediated direct execution contract.
 
-- Both roles: `--permission-mode dontAsk` (a tool call that no allow rule matches is denied without a prompt), `--no-session-persistence`, `--strict-mcp-config` (no user MCP servers), `--setting-sources project` (user and local settings files do not apply; see the settings trade-off below), `--output-format stream-json --verbose` (tool-call evidence, see below), and `--add-dir <project>`.
-- Worker `--allowedTools`: `Read(/**)` (Claude checks file permissions against `Read` and `Edit` path rules only, so this rule also covers `Glob` and `Grep`), `Edit(/**)` (an `Edit` path rule also covers the `Write` tool), and `Bash` for the AgentRig task command (`agent-rig tasks` and the exact command form that the prompt prints), `node`, `npm test`, `npm run`, and read-only `git status`, `git diff`, `git log`, `git show`.
-- Reviewer `--allowedTools`: the same list without `Edit(/**)`. The reviewer also gets `Edit`, `Write`, and `NotebookEdit` in `--disallowedTools`.
-- Both roles `--disallowedTools`: `rm`, `rmdir`, `mv`, `sudo`, `chmod`, `chown`, `curl`, `wget`, `git push`, `git commit`, `git reset`, `git clean`, `git checkout`, `git branch -D`, a nested `agent-rig loop` in each command form, `WebFetch`, and `WebSearch`. Claude Code evaluates deny rules before allow rules, so a deny rule wins.
-- AgentRig never passes `--dangerously-skip-permissions` or `--permission-mode bypassPermissions`.
+Loop removal can occur in a later phase after direct worker/reviewer execution
+has regression coverage for task selection, child failure, review, repairs,
+and completion, and the planner integrated review and human end-to-end acceptance
+are recorded. Before removal, migrate retained loop diagnostic checks to direct
+execution coverage or document why they are obsolete. Phase 28 retains the loop
+implementation and its diagnostic regression tests.
 
-The rule lists are the `CLAUDE_*` constants in `src/workflow/commands.ts`. Each run records the full argument list in `result.json` (`command_args`). Each run folder also keeps the Claude event stream in `claude-stream.jsonl`: one JSON event per line, with every tool call, its result, and the `permission_denials` of the final `result` event. `last-message.md` and the `stdout` field of `result.json` hold only the text of that final `result` event, as in text output. Claude writes its standard output straight to that file, so a large stream does not hit the 1 MiB buffer limit of `spawnSync`. When the stream has JSON events but no `result` event, the message is a short note that points to `claude-stream.jsonl`; raw JSON never goes into the message. Output with no JSON event is kept as it is. `--no-session-persistence` stops the session transcript, so this file is the only record of the tool calls.
-
-A loop agent cannot set `blocked` or `done`, and the reviewer cannot change the task state (the CLI refuses it). The prompt asks the worker to set `review` and record a `review` handoff, or to record a `blocked` handoff to `planner`. It asks the reviewer to record exactly one decision: `approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`, and to leave the task in `review`. When the agent records a `blocked` handoff, the loop sets the task to `blocked` with the first line of that handoff as the reason. The Claude prompt also asks for each `Bash` command as one simple command, because Claude Code denies a command with `;`, `&&`, a pipe, a redirection, or a shell variable such as `$?` even when the simple command is allowed. The environment passes to Claude unchanged, with `AGENT_RIG_ROLE` and, for the reviewer, `AGENT_RIG_LOOP_REVIEW_TASK`. When the loop runs inside `.agent-rig/_shared/tools/sandbox-run.sh`, set `CLAUDE_CODE_TMPDIR` to a folder that the sandbox allows, because Claude creates its `Bash` folder under `/private/tmp/claude-<uid>/` by default.
-
-Settings trade-off of `--setting-sources project`: Claude does not read `~/.claude/settings.json` or `.claude/settings.local.json`. User-level `env`, `apiKeyHelper`, and `model` settings do not apply. Credentials must come from the Claude login or from the process environment, for example `ANTHROPIC_API_KEY`. The project settings file `.claude/settings.json` still loads and can add rules, hooks, and `env` values.
-
-Limits: the Bash rules are not a security boundary. `Bash(node:*)` and `Bash(npm run:*)` can write files and start child processes, and Claude does not check those child processes against the deny rules. A deny rule also matches only the command text that the agent writes, not the same program in another form. The reviewer has no edit or write tool, but this is true only at the tool level: the reviewer can still change files through `node` or `npm run`. The real boundary is the sandbox runner `.agent-rig/_shared/tools/sandbox-run.sh`, which the human or a script starts around `agent-rig loop`. Loop agents cannot call the sandbox runner themselves: no allow rule matches it, and the runner cannot start inside another sandbox.
-
-Live OpenCode smoke testing is still a manual verification step and is not part of CI.
-
-`agent-rig status` is read-only. It now includes compact loop observability for the default `worker` and `reviewer`: lock state, next loop action, and latest run summaries. `agent-rig status --json` exposes the same data under a top-level `loop` object. For full details, inspect the run paths reported there under `.agent-rig/worker/runs/` or `.agent-rig/reviewer/runs/`.
-
-Typical loop-driven lifecycle:
-
-```text
-ready -> in_progress -> review -> done
-review -> ready
-review -> blocked
-```
+`agent-rig status` is read-only. Its deprecated loop diagnostics report lock
+state, next diagnostic action, and latest run summaries. `status --json` retains
+the top-level `loop` object for compatibility. These fields describe the old
+loop, not the supported planner-mediated execution. Run details remain under
+`.agent-rig/worker/runs/` and `.agent-rig/reviewer/runs/`.
 
 ## Lifecycle Commands
 
@@ -281,7 +276,7 @@ agent-rig watch --once
 
 `watch --once` processes canonical shared tasks from `.agent-rig/_shared/tasks/`. It skips ready tasks without `assigned_to` because watch needs a target agent.
 
-`watch --once` remains the older filesystem-only single-task adapter. It does not launch headless Codex sessions and is unchanged by the Phase 13 worker-reviewer loop.
+`watch --once` remains the older filesystem-only single-task adapter. It does not launch headless Codex sessions and is retained as a legacy diagnostic adapter.
 
 ## Workflow Storage And Migration
 
@@ -334,7 +329,7 @@ next live sequence and preserves the source timestamp in `source_created_at`.
 If that time predates the preceding handoff, `status --json` exposes
 `source_order_conflict: true`; a new worker/reviewer pair is required for normal
 completion.
-Inside a running worker-reviewer loop, a reviewer's `done` request is held
+Inside the deprecated diagnostic worker-reviewer loop, a reviewer's `done` request is held
 until AgentRig can append the reviewer handoff and commit completion together.
 
 The manager replanning process remains in the generated

@@ -61,10 +61,19 @@ test("prompt assembly includes provider, role instructions, task body, and recen
 });
 
 test("task transitions and handoffs enforce the planner-manager contract", () => {
-  assert.doesNotThrow(() => validateTaskTransition("worker", "in_progress", "review"));
-  assert.doesNotThrow(() => validateTaskTransition("reviewer", "review", "review"));
+  assert.throws(() => validateTaskTransition("worker", "in_progress", "review"), /cannot transition/);
+  assert.throws(() => validateTaskTransition("reviewer", "review", "review"), /cannot transition/);
   assert.throws(() => validateTaskTransition("worker", "in_progress", "done"), /Only the planner/);
   assert.throws(() => validateNewHandoff({ sender: "planner", recipient: "reviewer", status: "approved" }), /Invalid handoff route/);
+  assert.throws(() => validateNewHandoff({ sender: "planner", recipient: "planner", status: "approved" }), /Invalid handoff route/);
+  assert.doesNotThrow(() => validateNewHandoff({ sender: "human", recipient: "planner", status: "changes_requested" }));
+  assert.throws(() => validateNewHandoff({ sender: "human", recipient: "worker", status: "changes_requested" }), /Invalid handoff route/);
+  assert.throws(() => validateNewHandoff({ sender: "human", recipient: "planner", status: "approved" }), /Invalid handoff decision/);
+  assert.doesNotThrow(() => validateNewHandoff({ sender: "worker", recipient: "reviewer", status: "review" }));
+  assert.doesNotThrow(() => validateNewHandoff({ sender: "reviewer", recipient: "worker", status: "changes_requested" }));
+  for (const [current, next] of [["ready", "in_progress"], ["in_progress", "review"], ["review", "in_progress"], ["review", "done"]]) {
+    assert.doesNotThrow(() => validateTaskTransition("planner", current, next));
+  }
   assert.doesNotThrow(() => validateNewHandoff({ sender: "planner", recipient: "worker", status: "changes_requested" }));
   assert.doesNotThrow(() => validateNewHandoff({ sender: "reviewer", recipient: "planner", status: "approved" }));
   // The contract lets the reviewer record `blocked`. The reviewer -> planner `approved` route

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { resolveTaskPhase, summarizePhases, validateNewHandoff, validateTaskTransition } from "./model.js";
+import { resolveTaskPhase, summarizePhases, taskRepairPatch, validateTaskMutation, validateNewHandoff, validateTaskTransition, validateWorkflowWriter } from "./model.js";
 import type { PhaseSummary, ProjectIdentifier, WorkflowHandoff, WorkflowTask, WorkflowTaskPatch, WorkflowTaskQuery } from "./model.js";
 import type { WorkflowStore } from "./store.js";
 
@@ -52,6 +52,7 @@ export class MarkdownWorkflowStore implements WorkflowStore {
   }
 
   createTask(task: WorkflowTask): WorkflowTask {
+    validateWorkflowWriter(this.actorRole);
     this.assertProject(task.projectIdentifier);
     mkdirSync(this.tasksDirectory, { recursive: true });
     const file = join(this.tasksDirectory, `${task.id}_${slug(task.title)}.md`);
@@ -66,8 +67,20 @@ export class MarkdownWorkflowStore implements WorkflowStore {
     if (!record) throw new Error(`Task not found: ${taskId}`);
     const current = this.toTask(record.file, record.metadata, record.body, new Set(), new Set());
     if (this.actorRole && patch.status) validateTaskTransition(this.actorRole, current.status, patch.status);
+    validateWorkflowWriter(this.actorRole);
     const next: WorkflowTask = { ...current, ...patch, projectIdentifier };
     next.metadata = patch.metadata ?? current.metadata;
+    validateTaskMutation(current, next, this.listTasks(projectIdentifier));
+    writeFileSync(record.file, serializeTask(next), "utf8");
+  }
+
+  repairTask(projectIdentifier: ProjectIdentifier, taskId: string, status: string, reason: string): void {
+    this.assertProject(projectIdentifier);
+    const record = this.taskRecord(taskId);
+    if (!record) throw new Error(`Task not found: ${taskId}`);
+    const current = this.toTask(record.file, record.metadata, record.body, new Set(), new Set());
+    const next = { ...current, ...taskRepairPatch(current, status, reason, this.actorRole) };
+    validateTaskMutation(current, next, this.listTasks(projectIdentifier), true);
     writeFileSync(record.file, serializeTask(next), "utf8");
   }
 
@@ -83,7 +96,9 @@ export class MarkdownWorkflowStore implements WorkflowStore {
     if (!record) throw new Error(`Task not found: ${taskId}`);
     const current = this.toTask(record.file, record.metadata, record.body, new Set(), new Set());
     if (this.actorRole && patch.status) validateTaskTransition(this.actorRole, current.status, patch.status);
+    validateWorkflowWriter(this.actorRole);
     const next: WorkflowTask = { ...current, ...patch, projectIdentifier, metadata: patch.metadata ?? current.metadata };
+    validateTaskMutation(current, next, this.listTasks(projectIdentifier));
     const existing = this.listHandoffs(projectIdentifier, taskId);
     const sequence = handoff.sequence && handoff.sequence > existing.length ? handoff.sequence : existing.length + 1;
     const saved = { ...handoff, sequence };
@@ -106,20 +121,21 @@ export class MarkdownWorkflowStore implements WorkflowStore {
     }
   }
 
-  completeTask(projectIdentifier: ProjectIdentifier, taskId: string, administrativeOverride = false): void {
+  completeTask(projectIdentifier: ProjectIdentifier, taskId: string, administrativeOverride = false, evidence = ""): void {
+    validateWorkflowWriter(this.actorRole);
     if (!administrativeOverride) {
       const task = this.getTask(projectIdentifier, taskId);
       const handoffs = this.listHandoffs(projectIdentifier, taskId).slice(-2);
-      const plannerHandoff = handoffs.at(-1);
-      if (task?.metadata.planner_owned_final_review === true && plannerHandoff?.sender === "planner" && plannerHandoff.recipient === "planner" && plannerHandoff.status === "approved") {
-        this.updateTask(projectIdentifier, taskId, { status: "done", updatedOn: new Date().toISOString() });
+      if (task?.metadata.planner_owned_final_review === true && task.assignedTo === "planner" && task.status === "review" && evidence.trim()) {
+        this.updateTask(projectIdentifier, taskId, { status: "done", updatedOn: new Date().toISOString(), metadata: { ...task.metadata, completion_evidence: evidence.trim() } });
         return;
       }
       if (handoffs.length < 2 || handoffs[0].sender !== "worker" || handoffs[0].metadata.source_order_conflict || handoffs[1].sender !== "reviewer" || handoffs[1].status !== "approved") {
         throw new Error("Task completion requires worker and reviewer handoffs");
       }
     }
-    this.updateTask(projectIdentifier, taskId, { status: "done", updatedOn: new Date().toISOString() });
+    const task = this.getTask(projectIdentifier, taskId)!;
+    this.updateTask(projectIdentifier, taskId, { status: "done", updatedOn: new Date().toISOString(), ...(evidence.trim() ? { metadata: { ...task.metadata, completion_evidence: evidence.trim() } } : {}) });
   }
 
   listDependencies(projectIdentifier: ProjectIdentifier, taskId: string): string[] {
@@ -127,6 +143,7 @@ export class MarkdownWorkflowStore implements WorkflowStore {
   }
 
   addHandoff(handoff: WorkflowHandoff): void {
+    validateWorkflowWriter(this.actorRole);
     this.assertProject(handoff.projectIdentifier);
     validateNewHandoff(handoff);
     mkdirSync(this.handoffsDirectory, { recursive: true });

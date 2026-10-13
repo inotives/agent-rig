@@ -1,7 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, accessSync, chmodSync, symlinkSync, readFileSync, constants } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { userInfo } from "node:os";
 import { join, basename } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -11,9 +11,10 @@ const deployedRunner = fileURLToPath(new URL("../../.agent-rig/_shared/tools/san
 const hasSandbox = process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec");
 const skip = hasSandbox ? false : "sandbox-exec is not available";
 
-// Every path below is inside this fresh temporary directory.
-// HOME for every child process is the decoy home inside it. The real home is never used.
-const base = realpathSync(mkdtempSync(join(tmpdir(), "agent-rig-sandbox-")));
+// Keep the decoy HOME outside /private/tmp so --allow-tmp does not contain HOME.
+// Every fixture path remains inside this fresh repository-local temporary directory.
+const repositoryRoot = realpathSync(fileURLToPath(new URL("../..", import.meta.url)));
+const base = realpathSync(mkdtempSync(join(repositoryRoot, ".sandbox-run-test-")));
 const decoyHome = join(base, "home");
 const work = join(base, "work");
 const outside = join(base, "outside");
@@ -25,8 +26,8 @@ for (const file of decoyFiles) writeFileSync(file, "decoy\n", "utf8");
 
 after(() => {
   // Delete only the fresh temporary directory that this file created.
-  assert.ok(basename(base).startsWith("agent-rig-sandbox-"));
-  assert.ok(base.startsWith(realpathSync(tmpdir()) + "/"));
+  assert.ok(basename(base).startsWith(".sandbox-run-test-"));
+  assert.ok(base.startsWith(repositoryRoot + "/"));
   rmSync(base, { recursive: true, force: true });
 });
 
@@ -313,7 +314,11 @@ test("--allow-tmp puts the real /private/tmp and TMPDIR in the profile", { skip 
 });
 
 test("HOME inside TMPDIR with --allow-tmp is refused (documented pitfall)", { skip }, () => {
-  assert.match(sentinelRefusal(["--allow-tmp"], "tmp-parent-of-home").stderr, /refused/);
+  const sentinel = join(work, "sentinel-tmp-parent-of-home");
+  const result = run(["--allow-write", work, "--allow-tmp", "--", "/usr/bin/touch", sentinel], { TMPDIR: base });
+  assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+  assert.equal(existsSync(sentinel), false);
+  assert.match(result.stderr, /refused/);
 });
 
 test("a nested sandbox exits with status 71 and the command does not run", { skip }, () => {
