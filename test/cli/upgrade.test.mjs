@@ -33,7 +33,7 @@ function fixture(provider = "markdown") {
     const store = new SQLiteWorkflowStore(join(root, "_shared", "workflow.sqlite"), "fixture");
     store.createTask(task); store.close();
   } else put("_shared/tasks/task-0001.md", "---\nid: task-0001\ntitle: Retain task\ntype: task\nstatus: ready\nassigned_to: worker\npriority: normal\ncreated_by: human\ncreated_on: 2026-10-13\nupdated_on: 2026-10-13\ndepends_on: []\n---\nKeep task body\n");
-  const run = (...args) => spawnSync(process.execPath, [cli, "upgrade", ...args], { cwd, encoding: "utf8", env: { ...process.env, PATH: join(cwd, "bin") } });
+  const run = (...args) => spawnSync(process.execPath, [cli, "upgrade", ...args], { cwd, encoding: "utf8", timeout: 10000, env: { ...process.env, PATH: join(cwd, "bin") } });
   return { cwd, root, put, run };
 }
 function snapshot(root, prefix = "") {
@@ -79,6 +79,22 @@ for (const provider of ["markdown", "sqlite"]) {
     } finally { rmSync(cwd, { recursive: true, force: true }); }
   });
 }
+test("SQLite upgrade refuses a live WAL without backups or instruction changes", () => {
+  const { cwd, root, run } = fixture("sqlite");
+  const store = new SQLiteWorkflowStore(join(root, "_shared", "workflow.sqlite"), "fixture");
+  try {
+    store.updateTask("fixture", "task-0001", { title: "Uncheckpointed writer" });
+    const before = snapshot(root);
+    for (const args of [[], ["--dry-run"]]) {
+      const result = run(...args);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /checkpointed SQLite database/);
+      assert.deepEqual(snapshot(root), before);
+      assert.equal(readdirSync(cwd).some((name) => name.startsWith(".agent-rig-backup-")), false);
+    }
+  } finally { store.close(); rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test("invalid Markdown records are reported without repair or instruction changes", () => {
   const { cwd, root, put, run } = fixture();
   try {

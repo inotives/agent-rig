@@ -43,10 +43,29 @@ test("shared contracts define planner ownership, repair transitions, and human r
 });
 
 test("deployed roles preserve the template contract and local role paths", () => {
+  const normalize = (text, role) => text
+    .replaceAll(`.agent-rig/${role}/`, ".agent-rig/<agent>/")
+    .replace("## Bounded Investigation", "## Investigation");
   for (const role of ["planner", "worker", "reviewer"]) {
     const template = read(`templates/profiles/${role}.md`);
-    assert.equal(read(`.agent-rig/_shared/profiles/${role}.md`), template);
-    assert.equal(read(`.agent-rig/${role}/instructions.md`), template.replaceAll("<agent>", role));
+    const shared = read(`.agent-rig/_shared/profiles/${role}.md`);
+    const local = read(`.agent-rig/${role}/instructions.md`);
+    // Shared profiles keep placeholders. Local instructions use role paths.
+    // The shared investigation heading names the same bounded contract.
+    assert.equal(normalize(shared, role), normalize(template, role));
+    assert.equal(normalize(local, role), normalize(template, role));
+    assert.ok(local.includes(`.agent-rig/${role}/context.md`));
+    assert.doesNotMatch(local, /\.agent-rig\/<agent>\//);
+    if (role !== "planner") {
+      assert.match(shared, /## Bounded Investigation/);
+      for (const text of [shared, local, template]) {
+        assert.match(text, /CodeGraph/);
+        assert.match(text, /context-mode/);
+        assert.match(text.replace(/\s+/g, " "), /focused `rg` searches and direct file inspection/);
+        assert.match(text.replace(/\s+/g, " "), /Run focused behavioral tests with normal test commands/);
+        assert.match(text, /only when evidence requires it/);
+      }
+    }
     for (const field of fields) assert.ok(template.includes(`**${field}:**`), `${role}: ${field}`);
     assert.match(template, /only task and handoff state writer for Markdown and SQLite/);
     assert.doesNotMatch(template, /agent-rig loop/);

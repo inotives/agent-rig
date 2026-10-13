@@ -20,7 +20,20 @@ function run(args, cwd, input = "", env = {}) {
     writeFileSync(bodyFile, `# Task\n\n## Context\n\nTest context.\n\n## Goal\n\nTest goal.\n\n## Scope\n\nTest scope.\n\n## Planner Notes\n\nTest planner notes.\n\n## Implementation Plan\n\n1. Run the test.\n\n## Acceptance Criteria\n\n- [ ] First verifiable criterion.\n\n## Notes\n`, "utf8");
     effectiveArgs.push("--body-file", bodyFile);
   }
-  return spawnSync(process.execPath, [cli, ...effectiveArgs], { cwd, input, encoding: "utf8", env: { ...process.env, ...env, AGENT_RIG_SKIP_SKILLS: "1" } });
+  const result = spawnSync(process.execPath, [cli, ...effectiveArgs], { cwd, input, encoding: "utf8", timeout: 10000, killSignal: "SIGKILL", env: { ...process.env, ...env, AGENT_RIG_SKIP_SKILLS: "1" } });
+  if (args[0] === "loop" && result.status === 0) {
+    for (const provider of ["codex", "opencode", "claude"]) {
+      const file = join(cwd, `fake-${provider}-log`, "mutation-attempts.jsonl");
+      if (!existsSync(file)) continue;
+      for (const line of readFileSync(file, "utf8").trim().split("\n")) {
+        const attempt = JSON.parse(line);
+        assert.equal(attempt.status, 1, JSON.stringify(attempt));
+        assert.match(attempt.stderr, /Only the planner/);
+        assert.equal(attempt.error, undefined);
+      }
+    }
+  }
+  return result;
 }
 
 function fakeGh(cwd, issues) {
@@ -60,6 +73,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
+function attemptMutation(args) {
+  const result = spawnSync(process.execPath, [cliPath, "tasks", ...args], { cwd: process.cwd(), encoding: "utf8", timeout: 2000, killSignal: "SIGKILL" });
+  fs.appendFileSync(path.join(logDir, "mutation-attempts.jsonl"), JSON.stringify({ status: result.status, stderr: result.stderr, error: result.error?.message }) + "\\n");
+}
 const input = fs.readFileSync(0, "utf8");
 const logDir = process.env.AGENT_RIG_FAKE_CODEX_LOG_DIR;
 fs.writeFileSync(path.join(logDir, "args.json"), JSON.stringify(args, null, 2), "utf8");
@@ -86,9 +103,9 @@ if (lastMessageIndex !== -1 && args[lastMessageIndex + 1]) {
 const statusSequence = (process.env.AGENT_RIG_FAKE_CODEX_SET_STATUS_SEQUENCE || "").split(",").map((item) => item.trim()).filter(Boolean);
 const nextStatus = statusSequence[callIndex - 1] || process.env.AGENT_RIG_FAKE_CODEX_SET_STATUS || "";
 const cliPath = ${JSON.stringify(cli)};
-if (taskIdMatch && nextStatus) spawnSync(process.execPath, [cliPath, "tasks", "set-status", taskIdMatch[1].trim(), nextStatus], { cwd: process.cwd(), stdio: "ignore" });
+if (taskIdMatch && nextStatus) attemptMutation(["set-status", taskIdMatch[1].trim(), nextStatus]);
 if (taskIdMatch && process.env.AGENT_RIG_FAKE_CODEX_RECORD_HANDOFF === "1") {
-  spawnSync(process.execPath, [cliPath, "tasks", "handoff", taskIdMatch[1].trim(), "--sender", roleMatch[1].trim(), "--recipient", "worker", "--status", nextStatus, "--message", "Reviewer recorded evidence"], { cwd: process.cwd(), stdio: "ignore" });
+  attemptMutation(["handoff", taskIdMatch[1].trim(), "--sender", roleMatch[1].trim(), "--recipient", "worker", "--status", nextStatus, "--message", "Reviewer recorded evidence"]);
 }
 if (taskFile && process.env.AGENT_RIG_FAKE_CODEX_APPEND_NOTE) {
   fs.appendFileSync(taskFile, process.env.AGENT_RIG_FAKE_CODEX_APPEND_NOTE);
@@ -121,6 +138,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
+function attemptMutation(args) {
+  const result = spawnSync(process.execPath, [cliPath, "tasks", ...args], { cwd: process.cwd(), encoding: "utf8", timeout: 2000, killSignal: "SIGKILL" });
+  fs.appendFileSync(path.join(logDir, "mutation-attempts.jsonl"), JSON.stringify({ status: result.status, stderr: result.stderr, error: result.error?.message }) + "\\n");
+}
 const logDir = process.env.AGENT_RIG_FAKE_OPENCODE_LOG_DIR;
 fs.writeFileSync(path.join(logDir, "args.json"), JSON.stringify(args, null, 2), "utf8");
 const counterFile = path.join(logDir, "call-count.txt");
@@ -138,7 +159,7 @@ fs.appendFileSync(path.join(logDir, "calls.jsonl"), JSON.stringify({ callIndex, 
 const statusSequence = (process.env.AGENT_RIG_FAKE_OPENCODE_SET_STATUS_SEQUENCE || "").split(",").map((item) => item.trim()).filter(Boolean);
 const nextStatus = statusSequence[callIndex - 1] || process.env.AGENT_RIG_FAKE_OPENCODE_SET_STATUS || "";
 const cliPath = ${JSON.stringify(cli)};
-if (taskIdMatch && nextStatus) spawnSync(process.execPath, [cliPath, "tasks", "set-status", taskIdMatch[1].trim(), nextStatus], { cwd: process.cwd(), stdio: "ignore" });
+if (taskIdMatch && nextStatus) attemptMutation(["set-status", taskIdMatch[1].trim(), nextStatus]);
 if (process.env.AGENT_RIG_FAKE_OPENCODE_STDOUT) process.stdout.write(process.env.AGENT_RIG_FAKE_OPENCODE_STDOUT);
 if (process.env.AGENT_RIG_FAKE_OPENCODE_STDERR) process.stderr.write(process.env.AGENT_RIG_FAKE_OPENCODE_STDERR);
 process.exit(Number(process.env.AGENT_RIG_FAKE_OPENCODE_EXIT_STATUS || "0"));
@@ -160,6 +181,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
+function attemptMutation(args) {
+  const result = spawnSync(process.execPath, [cliPath, "tasks", ...args], { cwd: process.cwd(), encoding: "utf8", timeout: 2000, killSignal: "SIGKILL" });
+  fs.appendFileSync(path.join(logDir, "mutation-attempts.jsonl"), JSON.stringify({ status: result.status, stderr: result.stderr, error: result.error?.message }) + "\\n");
+}
 const logDir = process.env.AGENT_RIG_FAKE_CLAUDE_LOG_DIR;
 const input = fs.readFileSync(0, "utf8");
 fs.writeFileSync(path.join(logDir, "args.json"), JSON.stringify(args, null, 2), "utf8");
@@ -168,7 +193,7 @@ const taskIdMatch = input.match(/^Task ID: (.+)$/m);
 const roleMatch = input.match(/^Role: (.+)$/m);
 const nextStatus = process.env.AGENT_RIG_FAKE_CLAUDE_SET_STATUS || "";
 const cliPath = ${JSON.stringify(cli)};
-if (taskIdMatch && nextStatus) spawnSync(process.execPath, [cliPath, "tasks", "set-status", taskIdMatch[1].trim(), nextStatus], { cwd: process.cwd(), stdio: "ignore" });
+if (taskIdMatch && nextStatus) attemptMutation(["set-status", taskIdMatch[1].trim(), nextStatus]);
 if (process.env.AGENT_RIG_FAKE_CLAUDE_STDOUT) process.stdout.write(process.env.AGENT_RIG_FAKE_CLAUDE_STDOUT);
 if (process.env.AGENT_RIG_FAKE_CLAUDE_STDERR) process.stderr.write(process.env.AGENT_RIG_FAKE_CLAUDE_STDERR);
 process.exit(Number(process.env.AGENT_RIG_FAKE_CLAUDE_EXIT_STATUS || "0"));
@@ -229,9 +254,9 @@ test("init --yes creates solo Codex worker scaffold", () => {
   assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "agent.toml"), "utf8"), /tool = "codex"/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /# Worker Profile/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /\.agent-rig\/_shared\/context\.md/);
-  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /project-local `agent-rig tasks \.\.\.` CLI/);
-  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /active provider is SQLite/);
-  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /write a short note under `.agent-rig\/_shared\/notes\/`/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /assigned task with `agent-rig tasks show <task-id>`/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /Migrated Markdown is historical reference only when SQLite is active/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "worker", "instructions.md"), "utf8"), /Include reusable findings in the returned handoff. Do not write workflow records/);
   assert.match(readFileSync(join(cwd, ".gitignore"), "utf8"), /^\.agent-rig\/$/m);
   assert.equal(readFileSync(join(cwd, ".agent-rig", ".creds", ".gitignore"), "utf8"), "*\n!.gitignore\n!*.toml\n!*.env.example\n");
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "skills", "find-skills")));
@@ -408,9 +433,7 @@ writable_paths = ["logs"]
   assert.equal(result.status, 0, result.stderr);
 });
 
-// Live Claude run (task-0107): the CLI refuses `tasks block` and a second `in_progress` from a
-// loop worker, and accepts reviewer decisions only on fixed routes. The generated instructions
-// must ask only for what the CLI accepts.
+// Generated child instructions must return decisions for planner recording.
 test("worker and reviewer instructions name the blocked handoff and the reviewer decision routes", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
@@ -418,11 +441,12 @@ test("worker and reviewer instructions name the blocked handoff and the reviewer
   const flat = (file) => readFileSync(join(cwd, ".agent-rig", file, "instructions.md"), "utf8").replace(/\s+/g, " ");
   const worker = flat("worker");
   assert.doesNotMatch(worker, /Set `blocked` only for a real blocker/);
-  assert.match(worker, /For a real blocker, write a `blocked` handoff to `planner`; the planner-manager sets the task to `blocked`\./);
+  assert.match(worker, /`review` to `reviewer` when ready, or `blocked` to `planner` for a real blocker/);
   assert.doesNotMatch(worker, /manually set the task status to `in_progress`/);
-  assert.match(worker, /When work starts and the task is not already `in_progress`, set it to `in_progress`/);
+  assert.match(worker, /Do not mutate task status, dependencies, canonical handoffs, or workflow-store files/);
   const reviewer = flat("reviewer");
-  assert.match(reviewer, /Write it with `agent-rig tasks handoff`: `approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`\. Leave the task in `review`\./);
+  assert.match(reviewer, /`approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`/);
+  assert.match(reviewer, /The planner records and routes it/);
 });
 
 // Live Claude run (task-0107): every reviewer run first tried `tasks handoff --help` and got
@@ -589,7 +613,7 @@ test("add defaults tool to codex when omitted", () => {
   assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "agent.toml"), "utf8"), /tool = "codex"/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "instructions.md"), "utf8"), /# Planner-manager Profile/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "instructions.md"), "utf8"), /Use the local `plan-tasks` skill/);
-  assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "instructions.md"), "utf8"), /cross-session resume notes, not per-task paperwork/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "planner", "instructions.md"), "utf8"), /only task and handoff state writer for Markdown and SQLite/);
   assert.ok(existsSync(join(cwd, ".agent-rig", "planner", "skills", "plan-tasks", "SKILL.md")));
 });
 
@@ -1095,54 +1119,67 @@ test("late source handoffs retain audit time without changing the live conversat
   assert.equal(run(["tasks", "done", "task-0001"], cwd).status, 0);
 });
 
-test("SQLite loop preserves worker-reviewer fixes and completion integrity", () => {
+test("SQLite planner records worker-reviewer repairs separately from transitions", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
   assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
   const configPath = join(cwd, ".agent-rig", "_shared", "agent-rig.json");
   const config = JSON.parse(readFileSync(configPath, "utf8"));
   config.workflow_store.provider = "sqlite";
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  assert.equal(run(["tasks", "create", "SQLite loop", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
-
-  const fake = fakeCodex(cwd);
-  const statuses = ["review", "ready", "review", "done"];
-  for (const status of statuses) {
-    const result = run(["loop", "--once"], cwd, "", { ...fake, AGENT_RIG_FAKE_CODEX_SET_STATUS: status });
+  writeFileSync(configPath, JSON.stringify(config), "utf8");
+  assert.equal(run(["tasks", "create", "SQLite repair", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  const status = () => run(["tasks", "show", "task-0001"], cwd).stdout.match(/^status: (.+)$/m)[1];
+  const record = (sender, recipient, decision) => {
+    const result = run(["tasks", "handoff", "task-0001", "--sender", sender, "--recipient", recipient, "--status", decision, "--message", "Repair evidence"], cwd, "", { AGENT_RIG_ROLE: "planner" });
     assert.equal(result.status, 0, result.stderr);
-  }
-
+  };
+  const transition = (next) => {
+    const result = run(["tasks", "set-status", "task-0001", next], cwd, "", { AGENT_RIG_ROLE: "planner" });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  transition("in_progress");
+  record("worker", "reviewer", "review");
+  assert.equal(status(), "in_progress");
+  transition("review");
+  record("reviewer", "worker", "changes_requested");
+  assert.equal(status(), "review");
+  transition("in_progress");
+  assert.equal(run(["tasks", "done", "task-0001"], cwd).status, 1);
+  record("worker", "reviewer", "review");
+  transition("review");
+  record("reviewer", "planner", "approved");
+  assert.equal(status(), "review");
+  assert.equal(run(["tasks", "done", "task-0001", "--message", "Repair reviewed"], cwd).status, 0);
+  assert.equal(status(), "done");
   const state = JSON.parse(run(["status", "--json"], cwd).stdout);
   assert.equal(state.workflow.provider, "sqlite");
-  assert.equal(state.queues.shared.review, 0);
-  assert.deepEqual(state.handoffs.slice().reverse().map((handoff) => ({ sequence: handoff.sequence, sender: handoff.sender, status: handoff.status })), [
-    { sequence: 1, sender: "worker", status: "review" }
+  assert.deepEqual(state.handoffs.slice().reverse().map(({ sequence, sender, status }) => [sequence, sender, status]), [
+    [1, "worker", "review"], [2, "reviewer", "changes_requested"],
+    [3, "worker", "review"], [4, "reviewer", "approved"]
   ]);
 });
 
-test("SQLite loop completes with a reviewer handoff already recorded in the run", () => {
+test("SQLite diagnostic reviewer cannot record approval or complete a task", () => {
   const cwd = tempProject();
   assert.equal(run(["init", "--yes"], cwd).status, 0);
   assert.equal(run(["add", "reviewer", "--role", "reviewer"], cwd).status, 0);
   const configPath = join(cwd, ".agent-rig", "_shared", "agent-rig.json");
   const config = JSON.parse(readFileSync(configPath, "utf8"));
   config.workflow_store.provider = "sqlite";
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  assert.equal(run(["tasks", "create", "Review once", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
-  const fake = fakeCodex(cwd);
-  assert.equal(run(["loop", "--once"], cwd, "", { ...fake, AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" }).status, 0);
-  assert.equal(run(["tasks", "set-status", "task-0001", "done"], cwd, "", { AGENT_RIG_LOOP_REVIEW_TASK: "task-0001" }).status, 0);
-  assert.equal(run(["tasks", "set-status", "task-0001", "review"], cwd).status, 0);
-  assert.doesNotMatch(run(["tasks", "show", "task-0001"], cwd).stdout, /pending_completion:/);
-
-  const result = run(["loop", "--once"], cwd, "", { ...fake, AGENT_RIG_FAKE_CODEX_SET_STATUS: "done", AGENT_RIG_FAKE_CODEX_RECORD_HANDOFF: "1" });
+  writeFileSync(configPath, JSON.stringify(config), "utf8");
+  assert.equal(run(["tasks", "create", "Review once", "--assigned-to", "worker", "--status", "review"], cwd).status, 0);
+  const result = run(["loop", "--once"], cwd, "", {
+    ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "done", AGENT_RIG_FAKE_CODEX_RECORD_HANDOFF: "1"
+  });
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(run(["status", "--json"], cwd).stdout);
-  assert.equal(state.queues.shared.review, 1);
-  assert.deepEqual(state.handoffs.slice().reverse().map(({ sequence, sender }) => [sequence, sender]), [[1, "worker"], [2, "reviewer"]]);
+  assert.equal(state.queues.shared.blocked, 1);
+  assert.deepEqual(state.handoffs, []);
+  assert.equal(run(["tasks", "done", "task-0001"], cwd).status, 1);
   const [runId] = readdirSync(join(cwd, ".agent-rig", "reviewer", "runs"));
   const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json"), "utf8"));
-  assert.equal(record.final_task_status, "review");
+  assert.equal(record.final_task_status, "blocked");
+  assert.match(record.failure_summary, /reviewer reviewer left task-0001 in review/);
 });
 
 test("tasks lifecycle commands mutate shared task frontmatter and preserve body", () => {
@@ -1465,7 +1502,7 @@ test("loop refuses an existing loop lock", () => {
   assert.match(result.stderr, /loop\.lock already exists/);
 });
 
-test("loop selects review tasks before ready worker tasks and does not mutate review", () => {
+test("diagnostic loop prioritizes review and rejects child completion", () => {
   const cwd = tempProject();
   const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "done" };
   assert.equal(run(["init", "--yes"], cwd).status, 0);
@@ -1478,11 +1515,11 @@ test("loop selects review tasks before ready worker tasks and does not mutate re
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Ran reviewer reviewer on task-0001\./);
-  assert.match(readFileSync(reviewFile, "utf8"), /status: review/);
+  assert.match(readFileSync(reviewFile, "utf8"), /status: blocked/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: ready/);
 });
 
-test("continuous loop processes review before worker work across ticks", () => {
+test("continuous diagnostic loop processes review before worker work across ticks", () => {
   const cwd = tempProject();
   const env = {
     ...fakeCodex(cwd),
@@ -1498,13 +1535,13 @@ test("continuous loop processes review before worker work across ticks", () => {
   const result = run(["loop"], cwd, "", env);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(fakeCodexCalls(cwd).map((call) => `${call.role}:${call.taskId}`), ["reviewer:task-0001", "reviewer:task-0001"]);
+  assert.deepEqual(fakeCodexCalls(cwd).map((call) => `${call.role}:${call.taskId}`), ["reviewer:task-0001", "worker:task-0002"]);
   assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_review-me.md"), "utf8"), /status: blocked/);
-  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: ready/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: blocked/);
   assert.equal(existsSync(join(cwd, ".agent-rig", "_shared", "loop.lock")), false);
 });
 
-test("loop can move worker output to review and then reviewer can accept it to done", () => {
+test("diagnostic loop requires planner routing between worker and reviewer", () => {
   const cwd = tempProject();
   const workerEnv = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" };
   assert.equal(run(["init", "--yes"], cwd).status, 0);
@@ -1516,22 +1553,24 @@ test("loop can move worker output to review and then reviewer can accept it to d
 
   assert.equal(workerResult.status, 0, workerResult.stderr);
   assert.match(workerResult.stdout, /Ran worker worker on task-0001\./);
-  assert.match(readFileSync(taskFile, "utf8"), /status: review/);
+  assert.match(readFileSync(taskFile, "utf8"), /status: blocked/);
   const workerRuns = readdirSync(join(cwd, ".agent-rig", "worker", "runs"));
   assert.equal(workerRuns.length, 1);
   const workerRecord = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", workerRuns[0], "result.json"), "utf8"));
-  assert.equal(workerRecord.final_task_status, "review");
+  assert.equal(workerRecord.final_task_status, "blocked");
 
+  assert.equal(run(["tasks", "set-status", "task-0001", "in_progress"], cwd).status, 0);
+  assert.equal(run(["tasks", "set-status", "task-0001", "review"], cwd).status, 0);
   const reviewerEnv = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "done" };
   const reviewerResult = run(["loop", "--once"], cwd, "", reviewerEnv);
 
   assert.equal(reviewerResult.status, 0, reviewerResult.stderr);
   assert.match(reviewerResult.stdout, /Ran reviewer reviewer on task-0001\./);
-  assert.match(readFileSync(taskFile, "utf8"), /status: review/);
+  assert.match(readFileSync(taskFile, "utf8"), /status: blocked/);
   const reviewerRuns = readdirSync(join(cwd, ".agent-rig", "reviewer", "runs"));
   assert.equal(reviewerRuns.length, 1);
   const reviewerRecord = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", reviewerRuns[0], "result.json"), "utf8"));
-  assert.equal(reviewerRecord.final_task_status, "review");
+  assert.equal(reviewerRecord.final_task_status, "blocked");
 });
 
 test("loop accepts a codex worker with an opencode reviewer and still prioritizes review first", () => {
@@ -1553,7 +1592,7 @@ test("loop accepts a codex worker with an opencode reviewer and still prioritize
   assert.equal(fakeCodexCalls(cwd).length, 0);
   const opencodeArgs = JSON.parse(readFileSync(join(cwd, "fake-opencode-log", "args.json"), "utf8"));
   assert.equal(opencodeArgs[0], "run");
-  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_review-me.md"), "utf8"), /status: review/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_review-me.md"), "utf8"), /status: blocked/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: ready/);
 });
 
@@ -1579,8 +1618,8 @@ test("loop accepts an opencode worker with a codex reviewer", () => {
   const [runId] = readdirSync(join(cwd, ".agent-rig", "worker", "runs"));
   const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json"), "utf8"));
   assert.equal(record.tool, "opencode");
-  assert.equal(record.final_task_status, "review");
-  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_do-work.md"), "utf8"), /status: review/);
+  assert.equal(record.final_task_status, "blocked");
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_do-work.md"), "utf8"), /status: blocked/);
 });
 
 test("loop claims the next dependency-ready worker task when no review task exists", () => {
@@ -1596,7 +1635,7 @@ test("loop claims the next dependency-ready worker task when no review task exis
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Ran worker worker on task-0002\./);
-  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: review/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_ready-work.md"), "utf8"), /status: blocked/);
 });
 
 test("loop ignores ready tasks assigned to other agents or blocked by dependencies", () => {
@@ -1615,10 +1654,10 @@ test("loop ignores ready tasks assigned to other agents or blocked by dependenci
   assert.match(result.stdout, /Ran worker worker on task-0003\./);
   assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0001_other-agent-work.md"), "utf8"), /status: ready/);
   assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0002_blocked-work.md"), "utf8"), /status: ready/);
-  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0003_actual-work.md"), "utf8"), /status: review/);
+  assert.match(readFileSync(join(cwd, ".agent-rig", "_shared", "tasks", "task-0003_actual-work.md"), "utf8"), /status: blocked/);
 });
 
-test("loop claims returned ready tasks with reviewer notes normally", () => {
+test("diagnostic loop preserves reviewer notes when child mutation is rejected", () => {
   const cwd = tempProject();
   const env = { ...fakeCodex(cwd), AGENT_RIG_FAKE_CODEX_SET_STATUS: "review" };
   assert.equal(run(["init", "--yes"], cwd).status, 0);
@@ -1632,7 +1671,7 @@ test("loop claims returned ready tasks with reviewer notes normally", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Ran worker worker on task-0001\./);
   const updated = readFileSync(taskFile, "utf8");
-  assert.match(updated, /status: review/);
+  assert.match(updated, /status: blocked/);
   assert.match(updated, /Reviewer asked for one more pass\./);
 });
 
@@ -1670,7 +1709,7 @@ test("loop reviewer action invokes codex exec and writes run records", () => {
   const home = JSON.parse(readFileSync(join(cwd, "fake-codex-log", "home.json"), "utf8"));
   assert.equal(home.codexHome, true);
   assert.match(home.home, /agent-rig-codex-home-/);
-  assert.equal(record.final_task_status, "review");
+  assert.equal(record.final_task_status, "blocked");
   assert.deepEqual(record.command_args, args);
   assert.match(record.started_at, /^20/);
   assert.match(record.finished_at, /^20/);
@@ -1699,7 +1738,7 @@ test("loop worker action invokes codex exec and writes run records", () => {
   assert.equal(record.agent, "worker");
   assert.equal(record.role, "worker");
   assert.equal(record.task_id, "task-0001");
-  assert.equal(record.final_task_status, "review");
+  assert.equal(record.final_task_status, "blocked");
 });
 
 test("loop worker action invokes opencode run and writes run records", () => {
@@ -1736,7 +1775,7 @@ test("loop worker action invokes opencode run and writes run records", () => {
   assert.equal(record.tool, "opencode");
   assert.equal(record.task_id, "task-0001");
   assert.equal(record.exit_status, 0);
-  assert.equal(record.final_task_status, "review");
+  assert.equal(record.final_task_status, "blocked");
   assert.deepEqual(record.command_args, args);
 });
 
@@ -1760,7 +1799,7 @@ test("loop falls back when codex does not support output-last-message", () => {
   const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json"), "utf8"));
   assert.equal(record.command_args.includes("--output-last-message"), false);
   assert.equal(record.exit_status, 0);
-  assert.equal(record.final_task_status, "review");
+  assert.equal(record.final_task_status, "blocked");
 });
 
 test("loop exits non-zero when codex exits non-zero but still writes run records", () => {
@@ -1844,7 +1883,7 @@ test("loop reviewer action invokes opencode run and writes run records", () => {
   const record = JSON.parse(readFileSync(join(runsDir, runId, "result.json"), "utf8"));
   assert.equal(record.tool, "opencode");
   assert.equal(record.exit_status, 0);
-  assert.equal(record.final_task_status, "review");
+  assert.equal(record.final_task_status, "blocked");
   assert.deepEqual(record.command_args, args);
 });
 
@@ -1871,7 +1910,7 @@ test("loop worker action invokes claude print mode with the prompt on stdin", ()
   assert.equal(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "last-message.md"), "utf8"), "Fake Claude worker message.\n");
   const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "worker", "runs", runId, "result.json"), "utf8"));
   assert.equal(record.tool, "claude");
-  assert.equal(record.final_task_status, "review");
+  assert.equal(record.final_task_status, "blocked");
   assert.deepEqual(record.command_args, args);
 });
 
@@ -1962,7 +2001,7 @@ test("loop blocks stale reviewer tasks that remain in review after codex exits z
   assert.equal(record.failure_summary, "reviewer reviewer left task-0001 in review after codex run");
 });
 
-test("loop accepts reviewer returning a task to ready with notes", () => {
+test("diagnostic loop rejects reviewer status mutation and preserves notes", () => {
   const cwd = tempProject();
   const env = {
     ...fakeCodex(cwd),
@@ -2000,15 +2039,17 @@ test("worker loop prompt includes identity, lifecycle, and local precedence", ()
   assert.match(prompt, /Project: /);
   assert.match(prompt, /Active workflow provider: markdown/);
   assert.match(prompt, /AgentRig command for this run: /);
-  assert.match(prompt, /In SQLite mode, never edit migrated task or handoff Markdown/);
-  assert.match(prompt, /Use that command for task status and handoff mutations\./);
+  assert.match(prompt, /In SQLite mode, migrated task and handoff Markdown is historical reference only/);
+  assert.match(prompt, /Use that command only to read task context/);
+  assert.match(prompt, /Do not mutate task status, dependencies, handoffs, or workflow-store files/);
   assert.doesNotMatch(prompt, /Task file:/);
   assert.match(prompt, /Phase doc: docs\/phases\/phase-13-worker-reviewer-loop\.md/);
   assert.match(prompt, /# Shared Context File\n\.agent-rig\/_shared\/context\.md/);
   assert.match(prompt, /# Agent Instructions File\n\.agent-rig\/worker\/instructions\.md/);
   assert.match(prompt, /# Agent Context File\n\.agent-rig\/worker\/context\.md/);
-  assert.match(prompt, /Implement only the assigned task\./);
-  assert.match(prompt, /when the work is ready for review, set the task to `review` and record a `review` handoff to `reviewer`; when you cannot continue, record a `blocked` handoff to `planner`/);
+  assert.match(prompt, /Implement only the assigned task and run focused checks/);
+  assert.match(prompt, /Return `review` to `reviewer` when the work is ready, or `blocked` to `planner`/);
+  assert.match(prompt, /Return proposed handoff content to the planner for recording and routing/);
   assert.match(prompt, /Read applicable skills from `\.agent-rig\/worker\/skills\/` first\./);
   assert.match(prompt, /Then read applicable shared skills from `\.agent-rig\/_shared\/skills\/`\./);
   assert.match(prompt, /Use global Codex skills only when no AgentRig-local skill applies\./);
@@ -2033,14 +2074,17 @@ test("reviewer loop prompt includes reviewer lifecycle instructions and local pr
   assert.match(prompt, /Project: /);
   assert.match(prompt, /Active workflow provider: markdown/);
   assert.match(prompt, /AgentRig command for this run: /);
-  assert.match(prompt, /In SQLite mode, never edit migrated task or handoff Markdown/);
-  assert.match(prompt, /Use that command for task status and handoff mutations\./);
+  assert.match(prompt, /In SQLite mode, migrated task and handoff Markdown is historical reference only/);
+  assert.match(prompt, /Use that command only to read task context/);
+  assert.match(prompt, /Do not mutate task status, dependencies, handoffs, or workflow-store files/);
   assert.doesNotMatch(prompt, /Task file:/);
   assert.match(prompt, /Phase doc: docs\/phases\/phase-13-worker-reviewer-loop\.md/);
   assert.match(prompt, /# Agent Instructions File\n\.agent-rig\/reviewer\/instructions\.md/);
   assert.match(prompt, /# Agent Context File\n\.agent-rig\/reviewer\/context\.md/);
   assert.match(prompt, /Review the task against the phase docs and current repo behavior\./);
-  assert.match(prompt, /`approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`\. Leave the task in `review`/);
+  assert.match(prompt, /`approved` to `planner`, `changes_requested` to `worker`, or `blocked` to `planner`/);
+  assert.match(prompt, /Do not edit implementation files or repository notes/);
+  assert.match(prompt, /Do not mutate workflow state or write handoffs/);
   assert.match(prompt, /Read applicable skills from `\.agent-rig\/reviewer\/skills\/` first\./);
   assert.match(prompt, /Check `\.agent-rig\/reviewer\/tools\/` before `\.agent-rig\/_shared\/tools\/`\./);
 });

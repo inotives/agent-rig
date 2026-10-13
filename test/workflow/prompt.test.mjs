@@ -10,6 +10,8 @@ import { createWorkflowStore, SQLiteWorkflowStore, serializeTask } from "../../d
 import { buildTaskPrompt } from "../../dist/workflow/prompt.js";
 
 const cli = resolve("dist/index.js");
+const normalizeMacOSTmpPath = (value) => value.replaceAll("/private/var/folders/", "/var/folders/");
+const normalizeRepositoryRoot = (prompt) => prompt.replace(/^(# AgentRig Task Prompt\n\n(?:[^\n]*\n){4}Repository root: )([^\n]*)/, (_, label, root) => label + normalizeMacOSTmpPath(root));
 const brief = ["Context", "Goal", "Scope", "Planner Notes", "Implementation Plan", "Acceptance Criteria"]
   .map((name) => `## ${name}\n\n${name === "Acceptance Criteria" ? "- [ ] Check output." : "Task content."}`).join("\n\n");
 
@@ -39,7 +41,7 @@ function fixture(provider) {
     if (writer instanceof SQLiteWorkflowStore) writer.close();
   }
   function git(args) {
-    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    const result = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 10000 });
     assert.equal(result.status, 0, result.stderr);
   }
   git(["init", "-q"]);
@@ -88,10 +90,71 @@ function injectTaskPatch(f, provider, patch) {
 }
 
 function run(cwd, args = ["task-0001", "--agent", "worker"]) {
-  return spawnSync(process.execPath, [cli, "tasks", "prompt", ...args], { cwd, encoding: "utf8" });
+  return spawnSync(process.execPath, [cli, "tasks", "prompt", ...args], { cwd, encoding: "utf8", timeout: 10000 });
 }
 
 for (const provider of ["markdown", "sqlite"]) {
+  test(`${provider}: configured role assets are complete and invalid assets fail without writes`, () => {
+    const f = fixture(provider);
+    f.close();
+    mkdirSync(join(f.root, "worker", "guidance"));
+    writeFileSync(join(f.root, "worker", "guidance", "instructions.md"), "Complete configured instructions.");
+    writeFileSync(join(f.root, "worker", "guidance", "context.md"), "Complete configured context.");
+    const config = '[agent]\nrole = "worker"\ntool = "codex"\ninstructions = "guidance/instructions.md"\ncontext = "guidance/context.md"\n';
+    writeFileSync(join(f.root, "worker", "agent.toml"), config);
+    const before = snapshot(f.cwd);
+    const result = run(f.cwd);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Complete configured instructions/);
+    assert.match(result.stdout, /Complete configured context/);
+    assert.doesNotMatch(result.stdout, /worker complete instructions|worker local context/);
+    assert.deepEqual(snapshot(f.cwd), before);
+    for (const [name, content, error] of [
+      ["worker/agent.toml", config.replace('"guidance/instructions.md"', '"../reviewer/instructions.md"'), /must be inside/],
+      ["worker/agent.toml", config.replace('"guidance/context.md"', "42"), /Invalid role asset/],
+      ["worker/guidance/instructions.md", " \n", /input is empty/],
+      ["_shared/context.md", " \n", /input is empty/]
+    ]) {
+      const file = join(f.root, name);
+      const original = readFileSync(file);
+      writeFileSync(file, content);
+      const invalidBefore = snapshot(f.cwd);
+      const rejected = run(f.cwd);
+      assert.equal(rejected.status, 1);
+      assert.equal(rejected.stdout, "");
+      assert.match(rejected.stderr, error);
+      assert.deepEqual(snapshot(f.cwd), invalidBefore);
+      writeFileSync(file, original);
+    }
+  });
+
+  test(`${provider}: planner repair invalidates reviewer evidence until a new worker handoff`, () => {
+    const f = fixture(provider);
+    f.handoff("worker", "reviewer", "review", "Old worker evidence.");
+    f.handoff("human", "planner", "changes_requested", "Human-only finding.");
+    f.handoff("planner", "worker", "changes_requested", "Focused repair scope.");
+    f.close();
+    f.patch({ status: "review" });
+    const before = snapshot(f.cwd);
+    const rejected = run(f.cwd, ["task-0001", "--agent", "reviewer"]);
+    assert.equal(rejected.status, 1);
+    assert.equal(rejected.stdout, "");
+    assert.match(rejected.stderr, /new worker handoff/);
+    assert.deepEqual(snapshot(f.cwd), before);
+    f.patch({ status: "in_progress" });
+    const worker = run(f.cwd);
+    assert.equal(worker.status, 0, worker.stderr);
+    assert.match(worker.stdout, /Old worker evidence/);
+    assert.match(worker.stdout, /Focused repair scope/);
+    assert.doesNotMatch(worker.stdout, /Human-only finding/);
+    f.handoff("worker", "reviewer", "review", "Repaired worker evidence.");
+    f.patch({ status: "review" });
+    const reviewer = run(f.cwd, ["task-0001", "--agent", "reviewer"]);
+    assert.equal(reviewer.status, 0, reviewer.stderr);
+    assert.match(reviewer.stdout, /Repaired worker evidence/);
+    assert.doesNotMatch(reviewer.stdout, /Old worker evidence|Focused repair scope|Human-only finding/);
+  });
+
   test(`${provider}: worker CLI prompt is complete, deterministic and read-only`, () => {
     const f = fixture(provider);
     f.close();
@@ -99,7 +162,7 @@ for (const provider of ["markdown", "sqlite"]) {
     const result = run(f.cwd);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stderr, /approximately \d+ tokens.*soft limit: 8000/);
-    assert.equal(result.stdout, buildTaskPrompt(f.cwd, "worker", "task-0001").prompt);
+    assert.equal(normalizeRepositoryRoot(result.stdout), normalizeRepositoryRoot(buildTaskPrompt(f.cwd, "worker", "task-0001").prompt));
     assert.deepEqual(snapshot(f.cwd), before);
     const headings = ["# AgentRig Task Prompt", "# Agent Instructions", "# Agent Context", "# Agent Configuration", "# Shared Context", "# Task Brief And Acceptance Criteria", "# Latest Relevant Handoffs", "# Scope And Required Checks", "# Local Skill And Tool Precedence", "# Forbidden Mutations", "# Required Handoff Output"];
     const positions = headings.map((heading) => result.stdout.indexOf(heading));

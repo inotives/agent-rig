@@ -30,7 +30,7 @@ function fixture(provider, actorRole = "planner") {
   const database = join(shared, "workflow.sqlite");
   const store = provider === "sqlite" ? new SQLiteWorkflowStore(database, "fixture", { actorRole }) : new MarkdownWorkflowStore(root, "fixture", actorRole);
   const run = (args, role = "planner") => spawnSync(process.execPath, [cli, "tasks", ...args], {
-    cwd, encoding: "utf8", env: { ...process.env, AGENT_RIG_ROLE: role }
+    cwd, encoding: "utf8", timeout: 10000, env: { ...process.env, AGENT_RIG_ROLE: role }
   });
   function corruptStatus(id, status) {
     if (provider === "sqlite") {
@@ -46,6 +46,24 @@ function fixture(provider, actorRole = "planner") {
 }
 
 for (const provider of ["markdown", "sqlite"]) {
+  test(`${provider}: a mixed valid edit and invalid dependency is rejected atomically`, () => {
+    const f = fixture(provider);
+    try {
+      f.store.createTask(task("task-0001"));
+      f.store.addHandoff({ projectIdentifier: "fixture", taskId: "task-0001", sequence: 1, sender: "worker", recipient: "reviewer", status: "review", message: "Keep evidence", createdAt: "2026-10-01", metadata: {} });
+      const before = f.store.getTask("fixture", "task-0001");
+      const handoffs = f.store.listHandoffs("fixture", "task-0001");
+      const file = join(f.cwd, "body.md");
+      writeFileSync(file, brief + "\nReplacement body.\n");
+      const result = f.run(["edit", "task-0001", "--title", "Replacement title", "--body-file", file,
+        "--priority", "high", "--phase", "phase-29", "--depends-on", "task-missing"]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /Missing dependency/);
+      assert.deepEqual(f.store.getTask("fixture", "task-0001"), before);
+      assert.deepEqual(f.store.listHandoffs("fixture", "task-0001"), handoffs);
+    } finally { f.close(); }
+  });
+
   test(`${provider}: edits preserve handoffs, audit metadata, and creation fields`, () => {
     const f = fixture(provider);
     try {
