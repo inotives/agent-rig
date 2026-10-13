@@ -1138,7 +1138,10 @@ function handoffFileName(agent: Agent, runId: string, date: Date) {
 export function loopHelp() {
   console.log(`Usage: agent-rig loop [--once] [--worker <agent>] [--reviewer <agent>] [--interval <seconds>]
 
-Supports loop agents with \`tool = "codex"\`, \`tool = "opencode"\`, or \`tool = "claude"\`.
+Deprecated diagnostic command. Use planner-mediated direct worker/reviewer execution.
+Retained temporarily for isolated regression tests; not a supported workflow.
+
+Supports diagnostic loop agents with \`tool = "codex"\`, \`tool = "opencode"\`, or \`tool = "claude"\`.
 OpenCode uses its configured default model; AgentRig does not pass \`--model\` or \`--auto\`.
 Claude receives the assembled prompt on stdin. AgentRig runs \`claude -p\` with
 \`--permission-mode dontAsk\`, \`--no-session-persistence\`, \`--strict-mcp-config\`,

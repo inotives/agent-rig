@@ -286,7 +286,7 @@ function printStatus(model: ReturnType<typeof statusModel>) {
   console.log(`Workspace: ${model.workspace}`);
   console.log(`Session: ${model.session.path}`);
   console.log(`Shared tasks: ${formatQueue(model.queues.shared)}`);
-  console.log("Loop:");
+  console.log("Loop: deprecated diagnostics (use planner-mediated direct execution)");
   console.log(`  lock: ${formatLoopLock(model.loop.lock)}`);
   console.log(`  next: ${formatLoopNextAction(model.loop.next_action)}`);
   console.log(`  worker: ${formatLoopRun(model.loop.latest_runs.worker)}`);

@@ -669,7 +669,7 @@ test("status lists agents, shared task counts, and handoffs as text and json", (
   assert.equal(text.status, 0, text.stderr);
   assert.match(text.stdout, /worker/);
   assert.match(text.stdout, /Shared tasks: 0 todo, 0 ready, 0 in_progress, 0 blocked, 0 review, 0 done/);
-  assert.match(text.stdout, /Loop:/);
+  assert.match(text.stdout, /Loop: deprecated diagnostics/);
   assert.match(text.stdout, /lock: unlocked path=\.agent-rig\/_shared\/loop\.lock/);
   assert.match(text.stdout, /next: idle/);
   assert.match(text.stdout, /worker: none/);
@@ -1362,11 +1362,13 @@ test("help lists loop command and loop flags", () => {
 
   const help = run(["--help"], cwd);
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /loop\s+Run the worker-reviewer loop shell/);
+  assert.match(help.stdout, /loop\s+Deprecated diagnostic worker-reviewer loop/);
 
   const loopHelp = run(["loop", "--help"], cwd);
   assert.equal(loopHelp.status, 0, loopHelp.stderr);
   assert.match(loopHelp.stdout, /Usage: agent-rig loop/);
+  assert.match(loopHelp.stdout, /Deprecated diagnostic command/);
+  assert.match(loopHelp.stdout, /planner-mediated direct worker\/reviewer execution/);
   assert.match(loopHelp.stdout, /--once/);
   assert.match(loopHelp.stdout, /--worker <agent>.*default: worker/);
   assert.match(loopHelp.stdout, /--reviewer <agent>.*default: reviewer/);
@@ -1391,6 +1393,8 @@ test("loop --once exits zero with a no-action message and cleans loop lock", () 
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /No actionable loop task\./);
+  assert.match(result.stderr, /Deprecated diagnostic command: agent-rig loop/);
+  assert.match(result.stderr, /planner-mediated direct worker\/reviewer execution/);
   assert.equal(existsSync(join(cwd, ".agent-rig", "_shared", "loop.lock")), false);
 });
 

@@ -66,7 +66,7 @@ Commands:
   status     Show live workspace state
   start      Print launch context for an agent
   tasks      Create, update, list, and show shared task files
-  loop       Run the worker-reviewer loop shell
+  loop       Deprecated diagnostic worker-reviewer loop
   watch      Process one ready shared task with --once
   workflow   Manage workflow storage and migrations
   ui         Serve the local task-board UI

@@ -184,7 +184,7 @@ function runIssueTasks(issueNumber: string | undefined, cwd: string) {
       git(cwd, ["commit", "-m", `tasks: generate issue ${issue.number} plan`]);
     }
     console.log(`Generated ${created.length} implementation task(s) for GitHub issue #${issue.number}.`);
-    console.log(`Manager loop: agent-rig loop --once`);
+    console.log(`Supported workflow: planner-mediated direct worker/reviewer execution. See docs/provider-execution.md.`);
     return 0;
   } catch (cause) {
     return fail(message(cause));

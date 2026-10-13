@@ -123,15 +123,9 @@ HOME="$home" .agent-rig/_shared/tools/sandbox-run.sh \
   --allow-write "$work" -- sh "$work/generated.sh"
 ```
 
-A real agent process. Do not add `--allow-tmp` here, because `$home` is inside
-`$TMPDIR`. Allow the folders that the agent needs for its configuration and
-cache as subfolders of `$home`:
-
-```sh
-mkdir "$home/.cache"
-HOME="$home" .agent-rig/_shared/tools/sandbox-run.sh \
-  --allow-write "$work" --allow-write "$home/.cache" -- agent-rig loop --once
-```
+For supported provider child launches, follow [Planner Child
+Execution](provider-execution.md). Apply the provider workspace policy directly.
+Do not wrap Codex child launches in this macOS sandbox runner.
 
 ## What the runner does not do
 

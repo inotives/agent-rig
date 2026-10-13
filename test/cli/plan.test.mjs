@@ -392,7 +392,8 @@ test("plan tasks generates complete dependency-gated tasks and prevents duplicat
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Generated 2 implementation task\(s\)/);
-  assert.match(result.stdout, /agent-rig loop --once/);
+  assert.match(result.stdout, /planner-mediated direct worker\/reviewer execution/);
+  assert.doesNotMatch(result.stdout, /agent-rig loop/);
   const first = run(["tasks", "show", "task-0001"], cwd);
   const second = run(["tasks", "show", "task-0002"], cwd);
   assert.equal(first.status, 0, first.stderr);
