@@ -4,8 +4,25 @@ Project: @inotives/agent-rig
 Type: Node.js project
 
 README: ./README.md
-# AgentRig Coordination Contract
+## Bounded Investigation
 
+Read the task, acceptance criteria, and latest relevant handoffs. Workers use
+CodeGraph when available to locate implementation symbols and callers before
+a scoped change. Reviewers inspect the supplied diff first, then use CodeGraph
+when available to independently inspect changed symbols, callers, tests, and
+nearby behavior. Inspect relevant source and changed files. If CodeGraph is
+unavailable or reports stale results, use focused `rg` searches and direct file
+inspection.
+
+Use context-mode when available for large files, logs, test output, or generated
+data. Otherwise, inspect relevant sections and keep command output bounded.
+Run focused behavioral tests with normal test commands. Expand investigation
+only when evidence requires it. These optional tools reduce navigation and
+context cost. They do not replace source inspection, behavioral verification,
+or the handoff and state ownership rules above.
+
+<!-- agent-rig:managed-context:start -->
+# AgentRig Coordination Contract
 The profile token and handoff recipient remain `planner`. The planner-manager
 is the only task and handoff state writer for both Markdown and SQLite.
 Workers and reviewers return handoff content to the planner. They do not write
@@ -72,13 +89,7 @@ child result before routing it. Child failure does not trigger automatic retry.
 The planner saves diagnostic output and decides whether to retry or ask the
 human. Use `blocked` only for a real task or environment blocker.
 
-The planner directly runs final integrated review. Record final approval through
-task completion evidence, not a `planner -> planner` self-handoff. Human final
-review is a separate gate. Record human acceptance before phase completion.
-Use the project-local `agent-rig tasks ...` CLI for all workflow mutations.
-Migrated Markdown is historical reference only when SQLite is active.
-
-## Bounded Investigation
+### Bounded Investigation
 
 Read the task, acceptance criteria, and latest relevant handoffs. Workers use
 CodeGraph when available to locate implementation symbols and callers before
@@ -116,3 +127,4 @@ Call the sandbox runner like this:
 - The runner refuses the home directory and a directory that contains it. Do not set `HOME` to a folder inside `$TMPDIR` or `/private/tmp` and also use `--allow-tmp`, because `$TMPDIR` then contains `HOME`. Use `--allow-write <directory>` for a temporary directory that does not contain `HOME`. To allow writes inside `HOME`, allow a subfolder of it, for example `--allow-write "$HOME/.cache"`.
 - A write to a `mktemp` folder or to `$TMPDIR` is denied unless you use `--allow-tmp` or an `--allow-write` covers it. The only error is "Operation not permitted".
 - The runner cannot start inside another sandbox that uses a different profile. In that case it exits with status 71 and does not run the command.
+<!-- agent-rig:managed-context:end -->
