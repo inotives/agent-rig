@@ -27,6 +27,10 @@ Investigation evidence is recorded in:
 - Prompts use complete role instructions, shared context, the task brief, and
   only the latest relevant handoffs. The target is 4,000 to 6,000 tokens with
   an 8,000-token soft limit.
+- Worker and reviewer investigation uses CodeGraph when the deployed project
+  provides it. The roles use focused source inspection and tests when CodeGraph
+  or context-mode is unavailable. CodeGraph results reduce navigation work but
+  do not replace changed-file inspection or behavioral verification.
 - Human findings use `human -> planner: changes_requested`. The planner sends
   a focused `planner -> worker: changes_requested` handoff.
 - Planner final approval is recorded through task completion evidence, not a
@@ -105,12 +109,17 @@ blocked -> planner
 9. Add and verify the planner commit gate between completed tasks. This is a
    planner procedure, not a recurring task. Task 0127 records the one-time
    implementation of the procedure.
+10. Add agent-agnostic CodeGraph and context-cost guidance to worker and
+    reviewer instructions, with focused fallbacks when those tools are absent.
 
 ## Acceptance criteria
 
 - The planner can generate worker and reviewer prompts without mutating state.
 - Prompt output contains the required role, context, task, handoff, and outcome
   contract within the context budget.
+- Worker and reviewer instructions define a bounded investigation order that
+  uses CodeGraph when available, uses context-mode for large outputs when
+  available, and retains focused source inspection and test verification.
 - Worker and reviewer output uses the standard Markdown handoff format.
 - Only the planner writes task state and canonical handoffs in the new flow.
 - Human findings route through the planner to the worker.
