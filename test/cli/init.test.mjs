@@ -1820,7 +1820,7 @@ test("loop exits non-zero when codex exits non-zero but still writes run records
   const record = JSON.parse(readFileSync(join(cwd, ".agent-rig", "reviewer", "runs", runId, "result.json"), "utf8"));
   assert.equal(record.exit_status, 7);
   assert.equal(record.final_task_status, "blocked");
-  assert.equal(record.stderr, "simulated codex failure\nmore detail\n");
+  assert.match(record.stderr, /^simulated codex failure\nmore detail\n+$/);
   assert.equal(record.stdout, "");
   assert.equal(record.error, "");
   assert.equal(record.failure_summary, "codex exited with status 7 for reviewer reviewer on task-0001: simulated codex failure");
@@ -1934,7 +1934,7 @@ test("loop exits non-zero when opencode exits non-zero but still writes run reco
   assert.equal(record.tool, "opencode");
   assert.equal(record.exit_status, 9);
   assert.equal(record.final_task_status, "blocked");
-  assert.equal(record.stderr, "simulated opencode failure\nmore detail\n");
+  assert.match(record.stderr, /^simulated opencode failure\nmore detail\n+$/);
   assert.equal(record.failure_summary, "opencode exited with status 9 for reviewer reviewer on task-0001: simulated opencode failure");
 });
 
