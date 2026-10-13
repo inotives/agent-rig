@@ -117,6 +117,23 @@ child result before routing it. Child failure does not trigger automatic retry.
 The planner saves diagnostic output and decides whether to retry or ask the
 human. Use `blocked` only for a real task or environment blocker.
 
+### Bounded Investigation
+
+Read the task, acceptance criteria, and latest relevant handoffs. Workers use
+CodeGraph when available to locate implementation symbols and callers before
+a scoped change. Reviewers inspect the supplied diff first, then use CodeGraph
+when available to independently inspect changed symbols, callers, tests, and
+nearby behavior. Inspect relevant source and changed files. If CodeGraph is
+unavailable or reports stale results, use focused `rg` searches and direct file
+inspection.
+
+Use context-mode when available for large files, logs, test output, or generated
+data. Otherwise, inspect relevant sections and keep command output bounded.
+Run focused behavioral tests with normal test commands. Expand investigation
+only when evidence requires it. These optional tools reduce navigation and
+context cost. They do not replace source inspection, behavioral verification,
+or the handoff and state ownership rules above.
+
 ## 4. Replan When Reality Changes The Plan
 
 - If implementation or review exposes a limitation that changes scope,

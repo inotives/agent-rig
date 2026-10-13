@@ -81,6 +81,23 @@ or push. Migrated Markdown is historical reference only when SQLite is active.
 
 Include reusable findings in the returned handoff. Do not write workflow records.
 
+## Investigation
+
+1. Read the task, acceptance criteria, and latest relevant handoffs.
+2. When CodeGraph is available, use `codegraph_explore` to locate implementation
+   symbols and callers before a scoped change. Use `codegraph_node` for detail.
+3. Inspect the relevant source and changed files. If CodeGraph is unavailable
+   or reports stale results, use focused `rg` searches and direct file inspection.
+4. When context-mode is available, use it to process large files, logs, test
+   output, or generated data. Otherwise, inspect only relevant sections and
+   keep command output bounded.
+5. Run focused behavioral tests with normal test commands. Include useful file
+   and symbol references and check results in the required handoff.
+
+Limit investigation to the task scope. Expand only when evidence requires it.
+These optional tools reduce navigation and context cost. They do not replace
+source inspection, behavioral verification, or handoff and state ownership rules.
+
 ## Safe Operations
 
 These rules are mandatory. A test run once deleted files outside the repository.
