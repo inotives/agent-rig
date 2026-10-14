@@ -5,6 +5,7 @@ import { loadExternalDependencies, renderExternalDependencies } from "./external
 import type { ExternalDependencies } from "./external-panel.js";
 import { externalDependencyIds } from "./graph/external.js";
 import { renderPhaseBreadcrumb } from "./phase-header.js";
+import { createHandoffBubbles } from "./handoff-bubbles.js";
 import { collapseDoneDefault, compactTaskIds } from "./graph/compact.js";
 import { layoutTaskGraph } from "./graph/layout.js";
 import { applyGraphFocus, computeGraphFocus, focusTarget } from "./graph/focus.js";
@@ -37,7 +38,6 @@ function validPhase(value: string) { return value.length > 0 && value.length <= 
 
 export function sortTasks(tasks: readonly TaskSummary[]) { return [...tasks].sort((a, b) => { const priority = (PRIORITY_ORDER[a.priority.toLowerCase()] ?? 99) - (PRIORITY_ORDER[b.priority.toLowerCase()] ?? 99); return priority || Date.parse(b.updated_on) - Date.parse(a.updated_on) || a.id.localeCompare(b.id); }); }
 export function sortHandoffs(handoffs: readonly Handoff[]) { return [...handoffs].sort((a, b) => b.sequence - a.sequence); }
-export function filterHandoffs(handoffs: readonly Handoff[], query: string) { const needle = query.trim().toLowerCase(); return handoffs.filter((item) => [item.sequence, item.sender, item.recipient, item.status, item.message, item.created_at, JSON.stringify(item.metadata)].some((value) => String(value ?? "").toLowerCase().includes(needle))); }
 export function preferredTheme(): "light" | "dark" { const saved = localStorage.getItem(THEME_KEY); if (saved === "light" || saved === "dark") return saved; return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
 export function applyTheme(theme: "light" | "dark") { setTheme(theme, true); }
 export function parseRoute(hash = typeof location === "undefined" ? "#/" : location.hash): UiRoute {
@@ -197,7 +197,6 @@ function badge(value: unknown, tone = "neutral") { const result = node("span", `
 export function openHandoffModal(handoff: Handoff, trigger: HTMLElement | undefined = typeof document !== "undefined" ? document.activeElement as HTMLElement : undefined) { const dialog = node("dialog", "modal"); dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.setAttribute("aria-labelledby", "handoff-dialog-title"); const card = node("div", "card modal-box bg-base-100 shadow-xl"); const top = node("div", "card-title flex items-start justify-between gap-3"); const title = node("h2", "text-lg"); title.setAttribute("id", "handoff-dialog-title"); title.textContent = `Handoff #${handoff.sequence}`; const close = node("button", "btn btn-ghost btn-sm btn-circle"); close.type = "button"; close.setAttribute("aria-label", "Close handoff details"); close.textContent = "×"; top.append(title, close); const details = node("dl", "mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4"); details.append(labelValue("Timestamp", formatDate(handoff.created_at)), labelValue("Sender", handoff.sender), labelValue("Recipient", handoff.recipient), labelValue("Status", handoff.status)); const content = node("div", "prose prose-sm mt-4 max-w-none dark:prose-invert"); content.innerHTML = renderMarkdown(handoff.message); const metadata = document.createElement("details"); metadata.className = "collapse-arrow collapse mt-5 border border-base-300 bg-base-200"; const summary = document.createElement("summary"); summary.className = "collapse-title cursor-pointer text-sm font-medium"; summary.textContent = "Metadata JSON"; const json = node("pre", "collapse-content overflow-x-auto text-xs"); json.textContent = JSON.stringify(handoff.metadata ?? {}, null, 2); metadata.append(summary, json); card.append(top, details, content, metadata); dialog.append(card); document.body.append(dialog); let cleaned = false; const cleanup = () => { if (cleaned) return; cleaned = true; dialog.remove(); document.removeEventListener("keydown", escape); trigger?.focus?.(); }; const escape = (event: KeyboardEvent) => { if (event.key === "Escape") cleanup(); }; close.addEventListener("click", cleanup); dialog.addEventListener("cancel", (event) => { event.preventDefault(); cleanup(); }); dialog.addEventListener("close", cleanup); dialog.addEventListener("click", (event) => { if (event.target === dialog) cleanup(); }); document.addEventListener("keydown", escape); const nativeDialog = dialog as HTMLDialogElement; if (typeof nativeDialog.showModal === "function") nativeDialog.showModal(); else dialog.setAttribute("open", ""); close.focus?.(); }
 const HANDOFF_TONES: Record<string, string> = { done: "success", review: "secondary", ready: "info", blocked: "error", changes_requested: "warning", fixes_required: "warning", findings: "accent", handoff: "primary" };
 // Full class names, so Tailwind can find them.
-const HANDOFF_NODE_CLASSES: Record<string, string> = { success: "btn-success", secondary: "btn-secondary", info: "btn-info", error: "btn-error", warning: "btn-warning", accent: "btn-accent", primary: "btn-primary", neutral: "btn-neutral" };
 const HANDOFF_BADGE_CLASSES: Record<string, string> = { success: "badge-success", secondary: "badge-secondary", info: "badge-info", error: "badge-error", warning: "badge-warning", accent: "badge-accent", primary: "badge-primary", neutral: "badge-neutral" };
 
 /** Map a handoff status to a DaisyUI color token. An unknown status is neutral. */
@@ -221,104 +220,53 @@ export function handoffPreviewText(markdown: string) {
     .trim();
 }
 
-const STAGGER_STEP_MS = 60;
-const STAGGER_CAP_MS = 600;
-
-/** Start delay in ms for entry `index` of `count`. The last delay is at most 600 ms in total. */
-export function handoffStaggerDelay(index: number, count: number) {
-  if (!(count > 1) || !(index > 0)) return 0;
-  const step = Math.min(STAGGER_STEP_MS, STAGGER_CAP_MS / (count - 1));
-  return Math.round(Math.min(index, count - 1) * step);
-}
-
 export function renderHandoffTimeline(handoffs: Handoff[]) {
   const section = node("section", "card min-w-0 bg-base-100 shadow-sm");
   const body = node("div", "card-body min-w-0");
   const heading = node("div", "flex flex-wrap items-center justify-between gap-2");
   const title = node("h2", "card-title text-lg");
   title.textContent = "Handoff timeline";
-  const search = node("input", "input input-bordered input-sm w-full sm:w-auto") as HTMLInputElement;
-  search.type = "search";
-  search.placeholder = "Search handoffs";
-  search.setAttribute("aria-label", "Search handoffs");
-  heading.append(title, search);
-
-  const timeline = node("div", "relative mt-4 pl-14");
-  const rail = node("div", "absolute bottom-2 left-6 top-2 w-1 origin-top bg-base-300 motion-safe:animate-timeline-rail");
-  const events = node("div", "relative space-y-1");
-  timeline.append(rail, events);
+  heading.append(title);
 
   const chip = (value: unknown, classes = "badge-ghost") => { const el = node("span", `badge badge-sm max-w-full ${classes}`); const label = node("span", "truncate"); label.textContent = text(value); el.append(label); return el; };
-  // Motion: the first render animates every entry. A later render (search) animates only entries that were not shown before.
-  let shown = new Set<number>();
-  let firstRender = true;
-  const newestSequence = handoffs.reduce((max, item) => Math.max(max, item.sequence), -Infinity);
-  const renderEvents = () => {
-    const filtered = sortHandoffs(filterHandoffs(handoffs, search.value));
-    const previouslyShown = shown;
-    shown = new Set(filtered.map((item) => item.sequence));
-    const fresh = filtered.filter((item) => !previouslyShown.has(item.sequence));
-    const animateNewest = firstRender;
-    firstRender = false;
-    events.replaceChildren();
-    if (!filtered.length) {
-      const empty = node("p", "py-5 text-sm opacity-70");
-      empty.textContent = handoffs.length ? "No handoffs match your search." : "No handoffs recorded for this task yet.";
-      events.append(empty);
-      return;
-    }
-    const now = Date.now();
-    for (const item of filtered) {
-      const tone = handoffStatusTone(item.status);
-      const freshIndex = fresh.indexOf(item);
-      const isFresh = freshIndex >= 0;
-      const isNewest = animateNewest && item.sequence === newestSequence;
-      const event = node("article", `group relative min-w-0 pb-4 last:pb-0${isFresh ? " motion-safe:animate-timeline-entry" : ""}`);
-      if (isFresh) event.setAttribute("style", `--stagger: ${handoffStaggerDelay(freshIndex, fresh.length)}ms`);
-      // DaisyUI sets "animation" on .btn:active:hover and .btn:active:focus (3 classes). Repeat the same
-      // animation under those states, so a press does not change it and a release does not restart it.
-      // Write each class in full, so Tailwind can find it.
-      const nodeMotion = isNewest
-        ? " motion-safe:animate-timeline-node-newest motion-safe:active:hover:animate-timeline-node-newest motion-safe:active:focus:animate-timeline-node-newest"
-        : isFresh
-          ? " motion-safe:animate-timeline-node motion-safe:active:hover:animate-timeline-node motion-safe:active:focus:animate-timeline-node"
-          : " motion-safe:animate-none motion-safe:active:hover:animate-none motion-safe:active:focus:animate-none";
-      const detail = node("button", `btn btn-circle btn-md absolute -left-14 top-0 z-10 border-4 border-base-100 shadow-md ${HANDOFF_NODE_CLASSES[tone]}${nodeMotion}`);
-      detail.type = "button";
-      detail.textContent = String(item.sequence);
-      detail.setAttribute("aria-label", "Open handoff " + item.sequence + " details");
-      detail.addEventListener("click", () => openHandoffModal(item, detail));
-      const card = node("div", "min-w-0 cursor-pointer rounded-box border border-base-300 bg-base-200 p-3 hover:shadow-md group-has-[:focus-visible]:shadow-md motion-safe:transition-[transform,box-shadow] motion-safe:duration-200 motion-safe:hover:-translate-y-0.5 motion-safe:group-has-[:focus-visible]:-translate-y-0.5");
-      card.addEventListener("click", () => { if (typeof window !== "undefined" && window.getSelection?.()?.toString()) return; openHandoffModal(item, detail); });
-      const top = node("div", "flex flex-wrap items-center gap-x-2 gap-y-1");
-      const status = node("span", `badge badge-sm max-w-full capitalize ${HANDOFF_BADGE_CLASSES[tone]}`);
-      status.title = item.status;
-      const statusLabel = node("span", "truncate");
-      statusLabel.textContent = item.status.replaceAll("_", " ");
-      status.append(statusLabel);
-      const fullDate = item.created_at ? formatDate(item.created_at) : "Unknown time";
-      const time = node("span", "text-xs text-base-content/70");
-      time.title = fullDate;
-      time.textContent = relativeTime(item.created_at, now);
-      const hidden = node("span", "sr-only");
-      hidden.textContent = fullDate;
-      top.append(status, time, hidden);
-      const route = node("div", "mt-2 flex min-w-0 flex-wrap items-center gap-1 text-xs");
-      const arrow = node("span", "text-base-content/60");
-      arrow.textContent = "→";
-      arrow.setAttribute("aria-label", "to");
-      route.append(chip(item.sender), arrow, chip(item.recipient));
-      if (item.answers_sequence !== undefined && item.answers_sequence !== null) { const answers = chip("answers #" + item.answers_sequence, "badge-outline"); route.append(answers); }
-      const preview = node("p", "mt-2 line-clamp-2 break-words text-sm text-base-content/80");
-      preview.textContent = handoffPreviewText(item.message);
-      card.append(top, route, preview);
-      event.append(detail, card);
-      events.append(event);
-    }
+  const renderHover = (item: Handoff) => {
+    const box = node("div", "min-w-0");
+    const top = node("div", "flex flex-wrap items-center gap-x-2 gap-y-1");
+    const status = node("span", `badge badge-sm max-w-full capitalize ${HANDOFF_BADGE_CLASSES[handoffStatusTone(item.status)]}`);
+    status.title = item.status;
+    const statusLabel = node("span", "truncate");
+    statusLabel.textContent = item.status.replaceAll("_", " ");
+    status.append(statusLabel);
+    const fullDate = item.created_at ? formatDate(item.created_at) : "Unknown time";
+    const time = node("span", "text-xs text-base-content/70");
+    time.title = fullDate;
+    time.textContent = relativeTime(item.created_at, Date.now());
+    const number = node("span", "ml-auto font-mono text-xs opacity-60");
+    number.textContent = `#${item.sequence}`;
+    top.append(status, time, number);
+    const route = node("div", "mt-2 flex min-w-0 flex-wrap items-center gap-1 text-xs");
+    const arrow = node("span", "text-base-content/60");
+    arrow.textContent = "→";
+    arrow.setAttribute("aria-label", "to");
+    route.append(chip(item.sender), arrow, chip(item.recipient));
+    if (item.answers_sequence !== undefined && item.answers_sequence !== null) route.append(chip("answers #" + item.answers_sequence, "badge-outline"));
+    const preview = node("p", "mt-2 line-clamp-3 break-words text-sm text-base-content/80");
+    preview.textContent = handoffPreviewText(item.message);
+    box.append(top, route, preview);
+    return box;
   };
-  search.addEventListener("input", renderEvents);
+  const bubbles = createHandoffBubbles({ tone: handoffStatusTone, renderHover, onOpen: openHandoffModal });
+  const empty = node("p", "py-5 text-sm opacity-70");
+  const strip = node("div", "mt-2");
+  const renderEvents = () => {
+    bubbles.update(handoffs);
+    bubbles.element.classList.toggle("hidden", !handoffs.length);
+    empty.classList.toggle("hidden", handoffs.length > 0);
+    empty.textContent = handoffs.length ? "" : "No handoffs recorded for this task yet.";
+  };
+  strip.append(bubbles.element, empty);
   renderEvents();
-  body.append(heading, timeline);
+  body.append(heading, strip);
   section.append(body);
   return section;
 }
@@ -366,7 +314,7 @@ function renderTaskDetail(task: TaskDetail, handoffs: Handoff[], onBack: () => v
 
   const handoffSection = renderHandoffTimeline(handoffs);
   const detailSplit = node("div", "mt-5 grid gap-5");
-  detailSplit.append(markdown, handoffSection);
+  detailSplit.append(handoffSection, markdown);
   const externalSection = renderExternalDependencies(external);
   main.append(back, heading, summary, ...(externalSection ? [externalSection] : []), detailSplit);
   return main;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { applyTheme, beginUiLoad, completeUiLoad, createUiState, failUiLoad, filterHandoffs, layoutTaskGraph, mountBoard, openHandoffModal, parseRoute, positionTaskPreview, preferredTheme, renderTaskPreview, routeHash, setUiRoute, sortHandoffs, sortTasks, STATUS_COLUMNS, taskPreviewHeaderClass, taskPreviewMetadata, taskPreviewTone } from "../../../dist/ui/pages/task-board/index.js";
+import { applyTheme, beginUiLoad, completeUiLoad, createUiState, failUiLoad, layoutTaskGraph, mountBoard, openHandoffModal, parseRoute, positionTaskPreview, preferredTheme, renderTaskPreview, routeHash, setUiRoute, sortHandoffs, sortTasks, STATUS_COLUMNS, taskPreviewHeaderClass, taskPreviewMetadata, taskPreviewTone } from "../../../dist/ui/pages/task-board/index.js";
 import { resolveTaskPhase } from "../../../dist/workflow/index.js";
 
 const task = (id, priority, updated_on, phase = "phase-17") => ({ id, title: id, type: "task", status: "ready", assigned_to: "worker", priority, phase, updated_on, handoff_count: 0 });
@@ -108,11 +108,9 @@ test("task preview replaces previous contents when rendering successive tasks", 
   }
 });
 
-test("handoffs sort newest first and search message and metadata", () => {
+test("handoffs sort newest first", () => {
   const handoffs = [handoff(1, "initial"), { ...handoff(2, "reviewed"), metadata: { ticket: "ABC-42" } }];
   assert.deepEqual(sortHandoffs(handoffs).map(({ sequence }) => sequence), [2, 1]);
-  assert.deepEqual(filterHandoffs(handoffs, "abc-42").map(({ sequence }) => sequence), [2]);
-  assert.deepEqual(filterHandoffs(handoffs, "").map(({ sequence }) => sequence), [1, 2]);
 });
 
 test("theme preference reads system default and persists explicit choice", () => {

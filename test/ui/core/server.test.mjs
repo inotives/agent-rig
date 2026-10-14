@@ -93,7 +93,7 @@ test("browser smoke serves board assets and route behavior without write methods
     const html = await (await fetch(`${base}/`)).text();
     const script = await (await fetch(`${base}/ui/pages/task-board/index.js`)).text();
     assert.match(html, /id="app"/);
-    for (const marker of ["Search handoffs", "No handoffs recorded", "Task not found", "agent-rig-theme", "#/tasks/"]) assert.match(script, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    for (const marker of ["No handoffs recorded", "Task not found", "agent-rig-theme", "#/tasks/"]) assert.match(script, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     const beforeStore = new SQLiteWorkflowStore(join(shared, "workflow.sqlite"), "fixture");
     const before = JSON.stringify(beforeStore.listTasks("fixture"));
     beforeStore.close();
@@ -157,9 +157,6 @@ test("browser smoke serves board assets and route behavior without write methods
        await waitFor(() => root.findAll("[data-task-id]").length === 1);
        assert.equal(drawer.getAttribute("inert"), "");
        assert.equal(scrim.getAttribute("inert"), "");
-      const timeline = root.findAll("article").find((article) => article.textContent.includes("review"));
-      assert.ok(timeline);
-      assert.match(timeline.textContent, /worker.*reviewer/);
       assert.equal(root.findAll("button").filter((button) => button.getAttribute("aria-label") === "Open handoff 1 details").length, 1);
       globalThis.history.back();
       await waitFor(() => root.textContent.includes("2 phases"));
@@ -168,9 +165,6 @@ test("browser smoke serves board assets and route behavior without write methods
       globalThis.history.forward();
       await waitFor(() => root.textContent.includes("Handoff timeline"));
       assert.match(root.textContent, /Handoff timeline/);
-      const search = root.findAll("input")[0];
-      search.value = "needle";
-      search.dispatchEvent({ type: "input", target: search });
       assert.equal(root.findAll("button").filter((button) => button.getAttribute("aria-label") === "Open handoff 1 details").length, 1);
       root.findAll("button").find((button) => button.getAttribute("aria-label") === "Open handoff 1 details").click();
       assert.match(harness.document.body.textContent, /Handoff #1/);
