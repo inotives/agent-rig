@@ -44,13 +44,13 @@ test("phaseState is active when any task is not done and complete when all are d
   assert.equal(phaseState(summary("phase-1", { review: 1 })), "active");
 });
 
-test("orderPhases puts open work first, newest first, other names next, Unassigned last", () => {
+test("orderPhases puts the last updated first, then number, then name, and Unassigned last", () => {
   const input = [
-    summary("phase-25", { done: 3 }), summary("Unassigned", { todo: 1 }), summary("26", { ready: 1 }), summary("hardening", { done: 1 }),
-    summary("phase-27", { in_progress: 1 }), summary("phase-13", { done: 1 }), summary("alpha", { todo: 1 }), summary("phase-9", { done: 1 })
+    summary("phase-25", { done: 3 }, "2026-10-01T00:00:00Z"), summary("Unassigned", { todo: 1 }, "2026-10-12T00:00:00Z"), summary("26", { ready: 1 }, "2026-10-05T00:00:00Z"), summary("hardening", { done: 1 }),
+    summary("phase-27", { in_progress: 1 }, "2026-10-03T00:00:00Z"), summary("phase-13", { done: 1 }), summary("alpha", { todo: 1 }), summary("phase-9", { done: 1 }, "2026-10-11T00:00:00Z")
   ];
   const order = orderPhases(input).map((item) => item.phase);
-  assert.deepEqual(order, ["phase-27", "26", "alpha", "phase-25", "phase-13", "phase-9", "hardening", "Unassigned"]);
+  assert.deepEqual(order, ["phase-9", "phase-13", "alpha", "hardening", "26", "phase-27", "phase-25", "Unassigned"]);
   assert.deepEqual(input.map((item) => item.phase)[0], "phase-25", "the input is not changed");
 });
 
