@@ -272,7 +272,7 @@ test("mountBoard renders and refreshes the project heading", async () => {
     const root = new Element("div");
     const board = mountBoard(root);
     await new Promise((resolve) => setImmediate(resolve));
-    const brand = root.children[0].children[0].children[0].children[0];
+    const brand = root.children[0].children[0].children[0].children[0].children[1];
     assert.equal(brand.children[0].textContent, "AgentRig: first-project");
     assert.equal(brand.children[1].textContent, "Read-only workflow visibility");
     await board.refresh();

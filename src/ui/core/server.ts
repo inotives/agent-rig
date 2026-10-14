@@ -9,7 +9,8 @@ const defaultPort = 8787;
 const contentTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8"
+  ".js": "text/javascript; charset=utf-8",
+  ".png": "image/png"
 };
 
 export function createUiServer(cwd: string, assetsDir = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..", "dist")): Server {
