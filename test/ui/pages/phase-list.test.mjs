@@ -260,7 +260,7 @@ test("dayOf and the date filter use the local day of a timestamp, not the UTC da
 test("a card shows the start date, the last updated date, and the elapsed hours", () => withDom(() => {
   const [card] = cardsOf(renderPhaseCards({ project_identifier: "p", phases: [{ ...summary("phase-5", { done: 1 }, "2026-10-10T12:00:00Z"), started_on: "2026-10-08T06:00:00Z", task_elapsed_ms: 90 * 3_600_000 }] }, NOW));
   const stat = (key) => walk(card).find((item) => item.dataset.stat === key).textContent;
-  assert.equal(stat("task-hours"), "90 h", "task hours is a sum, and can exceed the elapsed time");
+  assert.equal(walk(card).some((item) => item.dataset.stat === "task-hours"), false, "task hours is hidden for now");
   assert.match(stat("started"), /8 Oct 2026/);
   assert.match(stat("updated"), /10 Oct 2026/);
   assert.equal(stat("elapsed"), "54 h");

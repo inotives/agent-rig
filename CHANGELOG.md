@@ -5,7 +5,7 @@
 - Redesigned the UI landing page with a dark Aurora look and the AgentRig logo. Phases sort by last updated, newest first.
 - Added an Auto-refresh icon toggle on the phase page. It is off by default. When on, it reloads the task flow every 10 seconds.
 - Replaced the vertical handoff timeline with a horizontal d3 bubble strip between Summary and Markdown. d3 is bundled locally at `dist/vendor/d3.min.js` (see ADR 0009). The handoff search is removed.
-- Added Started, Updated, Elapsed, and Task hours to each phase card, and Elapsed to the task detail page. `GET /api/phases` returns `started_on` and `task_elapsed_ms`. Task hours is the sum of the task spans and can exceed Elapsed.
+- Added Started, Updated, and Elapsed to each phase card, and Elapsed to the task detail page. `GET /api/phases` returns `started_on` and `task_elapsed_ms`. The card does not show task hours (the sum of the task spans) for now.
 - Changed `created_on` and `updated_on` on tasks to full UTC timestamps for new tasks and updates. Older tasks keep date-only values, so their elapsed times have day resolution.
 
 ## 0.1.9 - 2026-10-11
