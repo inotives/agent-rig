@@ -2088,3 +2088,17 @@ test("reviewer loop prompt includes reviewer lifecycle instructions and local pr
   assert.match(prompt, /Read applicable skills from `\.agent-rig\/reviewer\/skills\/` first\./);
   assert.match(prompt, /Check `\.agent-rig\/reviewer\/tools\/` before `\.agent-rig\/_shared\/tools\/`\./);
 });
+
+test("tasks create and set-status store full UTC timestamps in created_on and updated_on", () => {
+  const cwd = tempProject();
+  assert.equal(run(["init", "--yes"], cwd).status, 0);
+  assert.equal(run(["tasks", "create", "Timed work", "--assigned-to", "worker", "--status", "ready"], cwd).status, 0);
+  const show = () => run(["tasks", "show", "task-0001"], cwd).stdout;
+  const stamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  const first = show();
+  assert.match(first.match(/created_on: ['"]?([^'"\n]+)/)[1], stamp);
+  assert.match(first.match(/updated_on: ['"]?([^'"\n]+)/)[1], stamp);
+  assert.equal(run(["tasks", "block", "task-0001", "--reason", "waiting"], cwd).status, 0);
+  assert.match(show().match(/updated_on: ['"]?([^'"\n]+)/)[1], stamp);
+  assert.match(show().match(/blocked_on: ['"]?([^'"\n]+)/)[1], /^\d{4}-\d{2}-\d{2}$/, "blocked_on stays a date");
+});

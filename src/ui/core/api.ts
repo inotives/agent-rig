@@ -90,7 +90,9 @@ function phasesResponse(store: WorkflowStore, projectIdentifier: string): Phases
       phase: summary.phase,
       total: summary.total,
       counts: summary.counts,
-      latest_updated_on: summary.latestUpdatedOn
+      latest_updated_on: summary.latestUpdatedOn,
+      started_on: summary.earliestCreatedOn,
+      task_elapsed_ms: summary.taskElapsedMs
     }))
   };
 }

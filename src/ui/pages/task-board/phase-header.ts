@@ -9,7 +9,7 @@ export function phaseHeaderInfo(phase: string, tasks: readonly Pick<TaskSummaryD
   const done = tasks.filter((task) => task.status === "done").length;
   const total = tasks.length;
   const counts = { todo: 0, ready: 0, in_progress: 0, blocked: 0, review: 0, done };
-  return { label: phaseLabel(phase), state: phaseState({ phase, total, counts, latest_updated_on: "" }), done, total, progress: `${done} of ${total} done` };
+  return { label: phaseLabel(phase), state: phaseState({ phase, total, counts, latest_updated_on: "", started_on: "", task_elapsed_ms: 0 }), done, total, progress: `${done} of ${total} done` };
 }
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, classes = "") { const element = document.createElement(tag); element.className = classes; return element; }

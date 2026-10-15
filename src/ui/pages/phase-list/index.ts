@@ -1,5 +1,5 @@
 import { PhaseSummaryDto, PhasesResponseDto } from "../../core/contracts.js";
-import { relativeTime } from "../../common/time.js";
+import { elapsedHours, formatDay, formatHours, relativeTime } from "../../common/time.js";
 import { graphStatusLegend } from "../task-board/graph/render.js";
 
 export type PhaseState = "active" | "complete";
@@ -80,6 +80,18 @@ function renderPhaseCard(summary: PhaseSummaryDto, now: number) {
   done.textContent = `${summary.counts.done} of ${summary.total} done`;
   progress.append(bar, done);
 
+  const stats = node("dl", "grid grid-cols-2 gap-x-3 gap-y-2");
+  for (const [name, value, key] of [["Started", formatDay(summary.started_on), "started"], ["Updated", formatDay(summary.latest_updated_on), "updated"], ["Elapsed", elapsedHours(summary.started_on, summary.latest_updated_on), "elapsed"], ["Task hours", formatHours(summary.task_elapsed_ms), "task-hours"]]) {
+    const cell = node("div", "min-w-0");
+    const label = node("dt", "text-[0.6rem] font-medium uppercase tracking-widest opacity-50");
+    label.textContent = name;
+    const data = node("dd", "truncate font-mono text-[0.7rem]");
+    data.dataset.stat = key;
+    data.textContent = value;
+    cell.append(label, data);
+    stats.append(cell);
+  }
+
   const chips = node("ul", "flex min-h-[1.25rem] flex-wrap gap-1.5");
   chips.setAttribute("aria-label", "Open tasks by status");
   for (const item of graphStatusLegend()) {
@@ -105,7 +117,7 @@ function renderPhaseCard(summary: PhaseSummaryDto, now: number) {
   detail.setAttribute("aria-label", `Open ${label}`);
   footer.append(time, detail);
 
-  body.append(top, progress, chips, footer);
+  body.append(top, progress, stats, chips, footer);
   card.append(glow, body);
   return card;
 }

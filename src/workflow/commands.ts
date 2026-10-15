@@ -154,7 +154,7 @@ function tasksCreate(args: string[], cwd: string) {
     if (!taskTypes.has(type)) return fail(`Invalid type: ${type}`);
     if (!priorities.has(priority)) return fail(`Invalid priority: ${priority}`);
 
-    const today = dateStamp(new Date());
+    const now = utcTimestamp(new Date());
     const { store, projectIdentifier } = createWorkflowStore(cwd);
     const requestedId = readWorkspaceProvider(cwd) === "markdown" ? nextSharedTaskId(sharedTasksDir(root)) : "";
     const created = store.createTask({
@@ -165,8 +165,8 @@ function tasksCreate(args: string[], cwd: string) {
       status,
       assignedTo: option(options, "--assigned-to") ?? "",
       createdBy: option(options, "--created-by") ?? "human",
-      createdOn: today,
-      updatedOn: today,
+      createdOn: now,
+      updatedOn: now,
       priority,
       phase: option(options, "--phase"),
       parent: option(options, "--parent") ?? "",
@@ -210,7 +210,7 @@ function tasksUpdateBody(args: string[], cwd: string) {
     if (!bodyFile || args.length !== 3) return fail("Usage: agent-rig tasks update-body <task-id> --body-file <path>");
     const task = requireSharedTask(cwd, id);
     const body = readTaskBrief(resolve(cwd, bodyFile));
-    updateSharedTask(task, { updated_on: dateStamp(new Date()) }, body);
+    updateSharedTask(task, { updated_on: utcTimestamp(new Date()) }, body);
     console.log(`Updated ${id} task brief.`);
     return 0;
   } catch (cause) {
@@ -224,7 +224,7 @@ function tasksEdit(args: string[], cwd: string) {
     if (!id || args.length < 3) return fail("Usage: agent-rig tasks edit <task-id> [--title <title>] [--body-file <path>] [--priority <priority>] [--type <type>] [--phase <phase>] [--assigned-to <agent|none>] [--depends-on <task-id[,task-id]|none>]");
     if (process.env.AGENT_RIG_ROLE && process.env.AGENT_RIG_ROLE !== "planner") throw new Error("Only the planner can edit a task");
     const options = parseOptions(args.slice(1), new Set(["--title", "--body-file", "--priority", "--type", "--phase", "--assigned-to", "--depends-on"]));
-    const patch: WorkflowTaskPatch = { updatedOn: dateStamp(new Date()) };
+    const patch: WorkflowTaskPatch = { updatedOn: utcTimestamp(new Date()) };
     for (const [flag, field] of [["--title", "title"], ["--priority", "priority"], ["--type", "type"], ["--phase", "phase"], ["--assigned-to", "assignedTo"]] as const) {
       const value = option(options, flag);
       if (typeof value === "undefined") continue;
@@ -307,7 +307,7 @@ function tasksSetStatus(args: string[], cwd: string) {
     if (options.has("--admin-override") && status !== "done") return fail("--admin-override applies only to completion");
     const task = requireSharedTask(cwd, id);
     if (status === "done" && process.env.AGENT_RIG_LOOP_REVIEW_TASK === id) {
-      updateSharedTask(task, { pending_completion: true, updated_on: dateStamp(new Date()) });
+      updateSharedTask(task, { pending_completion: true, updated_on: utcTimestamp(new Date()) });
       console.log(`Pending reviewer completion for ${id}`);
       return 0;
     }
@@ -315,7 +315,7 @@ function tasksSetStatus(args: string[], cwd: string) {
     // transitions pair completion with a handoff; direct task maintenance
     // must remain usable with both workflow providers.
     if (status === "done") task.store.completeTask(task.projectIdentifier, id, options.has("--admin-override"));
-    updateSharedTask(task, { status, pending_completion: undefined, updated_on: dateStamp(new Date()) });
+    updateSharedTask(task, { status, pending_completion: undefined, updated_on: utcTimestamp(new Date()) });
     console.log(`Updated ${id}: status=${status}`);
     return 0;
   } catch (cause) {
@@ -330,7 +330,7 @@ function tasksAssign(args: string[], cwd: string) {
     const root = requireWorkspace(cwd);
     requireAgent(root, agentName);
     const task = requireSharedTask(cwd, id);
-    updateSharedTask(task, { assigned_to: agentName, updated_on: dateStamp(new Date()) });
+    updateSharedTask(task, { assigned_to: agentName, updated_on: utcTimestamp(new Date()) });
     console.log(`Updated ${id}: assigned_to=${agentName}`);
     return 0;
   } catch (cause) {
@@ -344,7 +344,7 @@ function tasksSetType(args: string[], cwd: string) {
     if (!id || !type || args.length !== 2) return fail("Usage: agent-rig tasks set-type <task-id> <type>");
     if (!taskTypes.has(type)) return fail(`Invalid type: ${type}`);
     const task = requireSharedTask(cwd, id);
-    updateSharedTask(task, { type, updated_on: dateStamp(new Date()) });
+    updateSharedTask(task, { type, updated_on: utcTimestamp(new Date()) });
     console.log(`Updated ${id}: type=${type}`);
     return 0;
   } catch (cause) {
@@ -357,7 +357,7 @@ function tasksSetPhase(args: string[], cwd: string) {
     const [id, phase] = args;
     if (!id || !phase || args.length !== 2) return fail("Usage: agent-rig tasks set-phase <task-id> <phase>");
     const task = requireSharedTask(cwd, id);
-    updateSharedTask(task, { phase, updated_on: dateStamp(new Date()) });
+    updateSharedTask(task, { phase, updated_on: utcTimestamp(new Date()) });
     console.log(`Updated ${id}: phase=${phase}`);
     return 0;
   } catch (cause) {
@@ -378,7 +378,7 @@ function tasksBlock(args: string[], cwd: string) {
       status: "blocked",
       blocked_reason: reason,
       blocked_on: today,
-      updated_on: today
+      updated_on: utcTimestamp(new Date())
     }, appendBlocker(task.body, today, reason));
     console.log(`Blocked ${id}: ${reason}`);
     return 0;
@@ -395,7 +395,7 @@ function tasksUnblock(args: string[], cwd: string) {
     const status = option(options, "--status");
     if (!status || !unblockStatuses.has(status)) return fail("Usage: agent-rig tasks unblock <task-id> --status <todo|ready|in_progress>");
     const task = requireSharedTask(cwd, id);
-    updateSharedTask(task, { status, blocked_reason: undefined, blocked_on: undefined, updated_on: dateStamp(new Date()) });
+    updateSharedTask(task, { status, blocked_reason: undefined, blocked_on: undefined, updated_on: utcTimestamp(new Date()) });
     console.log(`Unblocked ${id}: status=${status}`);
     return 0;
   } catch (cause) {
@@ -408,7 +408,7 @@ function tasksDone(args: string[], cwd: string) {
     const id = args[0];
     if (!id) return fail("Usage: agent-rig tasks done <task-id> [--message <message>] [--admin-override]");
     const options = parseOptions(args.slice(1), new Set(["--message", "--admin-override"]), new Set(["--admin-override"]));
-    const updates: Record<string, unknown> = { status: "done", updated_on: dateStamp(new Date()) };
+    const updates: Record<string, unknown> = { status: "done", updated_on: utcTimestamp(new Date()) };
     const msg = option(options, "--message");
     if (msg) updates.message = msg;
     const task = requireSharedTask(cwd, id);
@@ -488,7 +488,7 @@ function tasksNext(args: string[], cwd: string) {
     }
 
     if (claim) {
-      updateSharedTask(task, { status: "in_progress", updated_on: dateStamp(new Date()) });
+      updateSharedTask(task, { status: "in_progress", updated_on: utcTimestamp(new Date()) });
       task.status = "in_progress";
       task.record.status = "in_progress";
     }
@@ -542,7 +542,7 @@ function tasksSync(args: string[], cwd: string) {
           imported_at: today,
           labels
          } };
-       if (!dryRun) store.createTask({ projectIdentifier, id, title: issue.title, type: githubIssueType(labels), status: "todo", assignedTo: "", priority: "normal", parent: "", dependsOn: [], dependencyReady: true, blockedBy: [], createdBy: "github-sync", createdOn: today, updatedOn: today, body: githubIssueTaskBody(issue), metadata });
+       if (!dryRun) store.createTask({ projectIdentifier, id, title: issue.title, type: githubIssueType(labels), status: "todo", assignedTo: "", priority: "normal", parent: "", dependsOn: [], dependencyReady: true, blockedBy: [], createdBy: "github-sync", createdOn: utcTimestamp(new Date()), updatedOn: utcTimestamp(new Date()), body: githubIssueTaskBody(issue), metadata });
        imported.push({ issue: issue.number, task: id, ...(workflowProvider === "markdown" ? { path: relative(cwd, join(sharedTasksDir(root), `${id}_${slug(issue.title)}.md`)) } : {}) });
     }
 
@@ -566,7 +566,7 @@ export { runLoop, runWatch } from "./loop.js";
 
 export function finish(root: string, agent: Agent, task: SharedTask, runDir: string, runId: string, status: "done" | "blocked", msg: string, administrativeOverride = false) {
   const finished = new Date().toISOString();
-  updateSharedTaskAndHandoff(task, { status, run_id: runId, finished_at: finished, message: msg, updated_on: dateStamp(new Date()) }, agent, runId, status, msg, administrativeOverride);
+  updateSharedTaskAndHandoff(task, { status, run_id: runId, finished_at: finished, message: msg, updated_on: utcTimestamp(new Date()) }, agent, runId, status, msg, administrativeOverride);
   writeJson(join(runDir, "result.json"), { status, message: msg, handoff: handoffFileName(agent, runId, new Date()) });
   if (status === "blocked") addBlocker(root, agent.name, msg);
   updateAgentSession(root, agent, status === "done" ? "idle" : "blocked");
@@ -947,7 +947,7 @@ export function handleLoopResult(cwd: string, result: LoopRunResult, agent: Agen
       finished_at: new Date().toISOString(),
       message: handoffMessage,
       infrastructure_failure: undefined,
-      updated_on: dateStamp(new Date())
+      updated_on: utcTimestamp(new Date())
     };
     if (handoffs.length > handoffCount && handoffs.at(-1)?.sender === agent.role) {
       updateSharedTask(task, updates);
@@ -972,7 +972,7 @@ function retryLoopTask(task: SharedTask, agent: Agent, reason: string) {
     run_id: undefined,
     finished_at: new Date().toISOString(),
     message: reason,
-    updated_on: dateStamp(new Date())
+    updated_on: utcTimestamp(new Date())
   });
 }
 
@@ -987,7 +987,7 @@ function blockLoopTask(task: SharedTask, reason: string) {
     blocked_reason: reason,
     blocked_on: today,
     message: reason,
-    updated_on: today
+    updated_on: utcTimestamp(new Date())
   }, appendBlocker(task.body, today, reason));
 }
 
@@ -1522,6 +1522,11 @@ function nextSharedTaskNumber(dir: string) {
 
 function slug(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "task";
+}
+
+/** A full UTC timestamp for `created_on` and `updated_on`, so durations are exact. */
+export function utcTimestamp(date: Date) {
+  return date.toISOString();
 }
 
 export function dateStamp(date: Date) {

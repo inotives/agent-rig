@@ -333,7 +333,7 @@ test("Markdown task lookup accepts YAML scalar identifiers", () => {
 // Phase summaries (task-0108): both providers must give identical results for the same fixtures.
 const phaseFixtureTasks = [
   { id: "task-0001", title: "Explicit field", status: "done", phase: "phase-27", updatedOn: "2026-10-01" },
-  { id: "task-0002", title: "Another explicit", status: "ready", phase: "phase-27", updatedOn: "2026-10-05T10:00:00.000Z" },
+  { id: "task-0002", title: "Another explicit", status: "ready", phase: "phase-27", createdOn: "2026-08-15", updatedOn: "2026-10-05T10:00:00.000Z" },
   { id: "task-0003", title: "Phase 26 work in the title", status: "in_progress", updatedOn: "2026-10-03" },
   { id: "task-0004", title: "Field beats title phase-30", status: "review", phase: "phase-26", updatedOn: "2026-10-02" },
   { id: "task-0005", title: "No phase at all", status: "blocked", updatedOn: "2026-09-01" },
@@ -372,9 +372,9 @@ for (const [provider, make] of Object.entries(phaseProviders)) {
       const summaries = store.listPhaseSummaries("fixture");
       assert.deepEqual(summaries.map((summary) => summary.phase), ["phase-26", "phase-27", "Unassigned"]);
       const by = Object.fromEntries(summaries.map((summary) => [summary.phase, summary]));
-      assert.deepEqual(by["phase-27"], { phase: "phase-27", total: 3, counts: { todo: 1, ready: 1, in_progress: 0, blocked: 0, review: 0, done: 1 }, latestUpdatedOn: "2026-10-05T10:00:00.000Z" });
-      assert.deepEqual(by["phase-26"], { phase: "phase-26", total: 2, counts: { todo: 0, ready: 0, in_progress: 1, blocked: 0, review: 1, done: 0 }, latestUpdatedOn: "2026-10-03" });
-      assert.deepEqual(by.Unassigned, { phase: "Unassigned", total: 1, counts: { todo: 0, ready: 0, in_progress: 0, blocked: 1, review: 0, done: 0 }, latestUpdatedOn: "2026-09-01" });
+      assert.deepEqual(by["phase-27"], { phase: "phase-27", total: 3, counts: { todo: 1, ready: 1, in_progress: 0, blocked: 0, review: 0, done: 1 }, latestUpdatedOn: "2026-10-05T10:00:00.000Z", earliestCreatedOn: "2026-08-15", taskElapsedMs: 9885600000 });
+      assert.deepEqual(by["phase-26"], { phase: "phase-26", total: 2, counts: { todo: 0, ready: 0, in_progress: 1, blocked: 0, review: 1, done: 0 }, latestUpdatedOn: "2026-10-03", earliestCreatedOn: "2026-09-01", taskElapsedMs: 5443200000 });
+      assert.deepEqual(by.Unassigned, { phase: "Unassigned", total: 1, counts: { todo: 0, ready: 0, in_progress: 0, blocked: 1, review: 0, done: 0 }, latestUpdatedOn: "2026-09-01", earliestCreatedOn: "2026-09-01", taskElapsedMs: 0 });
       for (const summary of summaries) assert.equal(Object.values(summary.counts).reduce((a, b) => a + b, 0), summary.total);
     } finally { close(); }
   });
