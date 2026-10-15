@@ -80,8 +80,8 @@ export class SQLiteWorkflowStore implements WorkflowStore {
   /** Summaries read no task bodies. Rows without a phase column value also read their small metadata JSON. */
   listPhaseSummaries(projectIdentifier: ProjectIdentifier): PhaseSummary[] {
     this.assertProject(projectIdentifier);
-    const rows = this.db.prepare("SELECT title, status, phase, updated_on, CASE WHEN phase IS NULL THEN metadata_json END AS metadata_json FROM tasks WHERE project_identifier = ?").all(projectIdentifier) as Array<Pick<SQLiteTaskRow, "title" | "status" | "phase" | "updated_on"> & { metadata_json: string | null }>;
-    return summarizePhases(rows.map((row) => ({ ...phaseInput(row), status: row.status, updatedOn: row.updated_on })));
+    const rows = this.db.prepare("SELECT title, status, phase, created_on, updated_on, CASE WHEN phase IS NULL THEN metadata_json END AS metadata_json FROM tasks WHERE project_identifier = ?").all(projectIdentifier) as Array<Pick<SQLiteTaskRow, "title" | "status" | "phase" | "created_on" | "updated_on"> & { metadata_json: string | null }>;
+    return summarizePhases(rows.map((row) => ({ ...phaseInput(row), status: row.status, updatedOn: row.updated_on, createdOn: row.created_on })));
   }
 
   createTask(task: WorkflowTask): WorkflowTask {

@@ -149,6 +149,10 @@ export type PhaseSummary = {
   counts: Record<TaskStatus, number>;
   /** Latest `updatedOn` among the tasks of the phase ("" when none has a value). */
   latestUpdatedOn: string;
+  /** Earliest `createdOn` among the tasks of the phase ("" when none has a value). */
+  earliestCreatedOn: string;
+  /** Sum of `updatedOn - createdOn` in ms over the tasks of the phase. Tasks with a missing, bad, or negative span count as 0. Parallel tasks overlap, so this can exceed the calendar span. */
+  taskElapsedMs: number;
 };
 
 /** Resolve the UI-facing phase without persisting legacy inference. */
@@ -159,18 +163,21 @@ export function resolveTaskPhase(task: Pick<WorkflowTask, "phase" | "title">, so
 }
 
 /** Group tasks by resolved phase. Both providers use this, so their results are equal. */
-export function summarizePhases(tasks: Iterable<Pick<WorkflowTask, "phase" | "title" | "status" | "updatedOn">>): PhaseSummary[] {
+export function summarizePhases(tasks: Iterable<Pick<WorkflowTask, "phase" | "title" | "status" | "updatedOn" | "createdOn">>): PhaseSummary[] {
   const byPhase = new Map<string, PhaseSummary>();
   for (const task of tasks) {
     const phase = resolveTaskPhase(task);
     let summary = byPhase.get(phase);
     if (!summary) {
-      summary = { phase, total: 0, counts: { todo: 0, ready: 0, in_progress: 0, blocked: 0, review: 0, done: 0 }, latestUpdatedOn: "" };
+      summary = { phase, total: 0, counts: { todo: 0, ready: 0, in_progress: 0, blocked: 0, review: 0, done: 0 }, latestUpdatedOn: "", earliestCreatedOn: "", taskElapsedMs: 0 };
       byPhase.set(phase, summary);
     }
     summary.total += 1;
     if ((taskStatuses as readonly string[]).includes(task.status)) summary.counts[task.status as TaskStatus] += 1;
     if (task.updatedOn > summary.latestUpdatedOn) summary.latestUpdatedOn = task.updatedOn;
+    const span = Date.parse(task.updatedOn) - Date.parse(task.createdOn);
+    if (span > 0) summary.taskElapsedMs += span;
+    if (task.createdOn && (!summary.earliestCreatedOn || task.createdOn < summary.earliestCreatedOn)) summary.earliestCreatedOn = task.createdOn;
   }
   return [...byPhase.values()].sort((a, b) => a.phase.localeCompare(b.phase));
 }

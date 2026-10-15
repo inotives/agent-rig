@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { requireWorkspace, Agent } from "../workspace/workspace.js";
 import {
   assemblePrompt,
-  dateStamp,
+  utcTimestamp,
   fail,
   finish,
   handleLoopResult,
@@ -80,7 +80,7 @@ function runLoopTick(root: string, cwd: string, workerName: string, reviewerName
     return;
   }
   if (selection.kind === "worker") {
-    updateSharedTask(selection.task, { status: "in_progress", updated_on: dateStamp(new Date()) });
+    updateSharedTask(selection.task, { status: "in_progress", updated_on: utcTimestamp(new Date()) });
     const handoffCount = selection.task.store.listHandoffs(selection.task.projectIdentifier, selection.task.id).length;
     const result = runLoopAgent(root, cwd, workerAgent, selection.task);
     handleLoopResult(cwd, result, workerAgent, selection.task.id, handoffCount);
@@ -108,7 +108,7 @@ async function processReady(cwd: string) {
 function runOne(cwd: string, root: string, agent: Agent, task: SharedTask) {
   const started = new Date();
   const runId = nextRunId(join(root, agent.name, "runs"), task.id, started);
-  updateSharedTask(task, { status: "in_progress", run_id: runId, started_at: started.toISOString(), message: "", updated_on: dateStamp(started) });
+  updateSharedTask(task, { status: "in_progress", run_id: runId, started_at: started.toISOString(), message: "", updated_on: utcTimestamp(started) });
   updateAgentSession(root, agent, "running");
   try {
     const runDir = join(root, agent.name, "runs", runId);

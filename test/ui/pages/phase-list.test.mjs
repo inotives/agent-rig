@@ -6,7 +6,7 @@ import { routeHash } from "../../../dist/ui/pages/task-board/index.js";
 
 const NOW = Date.parse("2026-10-11T12:00:00Z");
 const counts = (over = {}) => ({ todo: 0, ready: 0, in_progress: 0, blocked: 0, review: 0, done: 0, ...over });
-const summary = (phase, over = {}, latest = "2026-10-10T12:00:00Z") => { const c = counts(over); return { phase, total: Object.values(c).reduce((a, b) => a + b, 0), counts: c, latest_updated_on: latest }; };
+const summary = (phase, over = {}, latest = "2026-10-10T12:00:00Z") => { const c = counts(over); return { phase, total: Object.values(c).reduce((a, b) => a + b, 0), counts: c, latest_updated_on: latest, started_on: "2026-10-08T12:00:00Z", task_elapsed_ms: 0 }; };
 
 class Element {
   constructor(tag) { this.tagName = tag; this.children = []; this.attrs = {}; this.dataset = {}; this.className = ""; this.textContent = ""; this.value = ""; this.listeners = {}; }
@@ -256,3 +256,19 @@ test("dayOf and the date filter use the local day of a timestamp, not the UTC da
     if (before === undefined) delete process.env.TZ; else process.env.TZ = before;
   }
 });
+
+test("a card shows the start date, the last updated date, and the elapsed hours", () => withDom(() => {
+  const [card] = cardsOf(renderPhaseCards({ project_identifier: "p", phases: [{ ...summary("phase-5", { done: 1 }, "2026-10-10T12:00:00Z"), started_on: "2026-10-08T06:00:00Z", task_elapsed_ms: 90 * 3_600_000 }] }, NOW));
+  const stat = (key) => walk(card).find((item) => item.dataset.stat === key).textContent;
+  assert.equal(walk(card).some((item) => item.dataset.stat === "task-hours"), false, "task hours is hidden for now");
+  assert.match(stat("started"), /8 Oct 2026/);
+  assert.match(stat("updated"), /10 Oct 2026/);
+  assert.equal(stat("elapsed"), "54 h");
+}));
+
+test("a card shows dashes when the start date is missing", () => withDom(() => {
+  const [card] = cardsOf(renderPhaseCards({ project_identifier: "p", phases: [{ ...summary("phase-5", { done: 1 }), started_on: "" }] }, NOW));
+  const stat = (key) => walk(card).find((item) => item.dataset.stat === key).textContent;
+  assert.equal(stat("started"), "—");
+  assert.equal(stat("elapsed"), "—");
+}));

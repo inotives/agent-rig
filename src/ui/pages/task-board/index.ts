@@ -1,5 +1,5 @@
 import { HandoffDto, PhasesResponseDto, TaskDetailDto, TaskSummaryDto, WorkflowSummaryDto } from "../../core/contracts.js";
-import { relativeTime } from "../../common/time.js";
+import { elapsedHours, relativeTime } from "../../common/time.js";
 import { parsePhaseFilter, phaseFilterHash, renderPhaseLanding, renderPhaseSkeleton } from "../phase-list/index.js";
 import { loadExternalDependencies, renderExternalDependencies } from "./external-panel.js";
 import type { ExternalDependencies } from "./external-panel.js";
@@ -297,6 +297,7 @@ function renderTaskDetail(task: TaskDetail, handoffs: Handoff[], onBack: () => v
     labelValue("Phase", task.phase),
     labelValue("Created", formatDate(task.created_on)),
     labelValue("Updated", formatDate(task.updated_on)),
+    labelValue("Elapsed", elapsedHours(task.created_on, task.updated_on)),
     labelValue("Dependencies", task.depends_on?.join(", ")),
     labelValue("Dependency ready", task.dependency_ready ? "Yes" : "No")
   );

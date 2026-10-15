@@ -33,6 +33,8 @@ export type PhaseSummaryDto = {
   total: number;
   counts: Record<"todo" | "ready" | "in_progress" | "blocked" | "review" | "done", number>;
   latest_updated_on: string;
+  started_on: string;
+  task_elapsed_ms: number;
 };
 
 export type PhasesResponseDto = {

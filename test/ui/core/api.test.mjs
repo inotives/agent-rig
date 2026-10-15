@@ -67,7 +67,7 @@ for (const provider of ["sqlite", "markdown"]) {
     assert.equal(phases.json.project_identifier, "fixture");
     assert.deepEqual(phases.json.phases.map((entry) => entry.phase), ["26", "Phase A&B", "Unassigned", "phase-27"].sort((a, b) => a.localeCompare(b)));
     for (const entry of phases.json.phases) {
-      assert.deepEqual(Object.keys(entry).sort(), ["counts", "latest_updated_on", "phase", "total"]);
+      assert.deepEqual(Object.keys(entry).sort(), ["counts", "latest_updated_on", "phase", "started_on", "task_elapsed_ms", "total"]);
       assert.deepEqual(Object.keys(entry.counts).sort(), ["blocked", "done", "in_progress", "ready", "review", "todo"]);
       assert.equal(Object.values(entry.counts).reduce((a, b) => a + b, 0), entry.total);
     }
@@ -75,6 +75,10 @@ for (const provider of ["sqlite", "markdown"]) {
     const phase27 = phases.json.phases.find((entry) => entry.phase === "phase-27");
     assert.equal(phase27.total, 50);
     assert.match(phase27.latest_updated_on, /^2026-10-0\d$/);
+    assert.match(phase27.started_on, /^2026-/);
+    assert.ok(phase27.started_on <= phase27.latest_updated_on);
+    assert.equal(typeof phase27.task_elapsed_ms, "number");
+    assert.ok(phase27.task_elapsed_ms >= 0);
     const text = JSON.stringify(phases.json);
     for (const forbidden of ['"tasks"', '"body"', '"depends_on"', '"task-0001"']) assert.equal(text.includes(forbidden), false, forbidden);
 
