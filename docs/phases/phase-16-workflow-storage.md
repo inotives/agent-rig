@@ -9,7 +9,10 @@ workflow store while preserving Markdown as the default for new workspaces.
 
 This workspace has been migrated to SQLite. Its original Markdown task and
 handoff records are marked historical. Integrated review was approved in
-task-0026; Markdown remains the default for new workspaces.
+task-0026. At that time, Markdown remained the default for new workspaces.
+Issue #32 later changed `agent-rig init` to use SQLite by default, with
+`--workflow-store markdown` as the explicit option. Existing workspaces keep
+their configured provider unless users migrate them.
 
 ## Planned Delivery Shape
 

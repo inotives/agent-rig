@@ -33,7 +33,7 @@
 
 AgentRig is a TypeScript CLI tool for scaffolding a filesystem-first agent workspace into any project.
 
-It creates a `.agent-rig/` directory where agents, shared context, workflow records, findings notes, handoff logs, credentials, and launch instructions live. Markdown is the default workflow store. SQLite is available for larger projects and becomes the live source of truth after migration. AgentRig does not orchestrate AI APIs; users run subscription tools such as Claude, Codex, OpenCode, or custom tools directly.
+It creates a `.agent-rig/` directory where agents, shared context, workflow records, findings notes, handoff logs, credentials, and launch instructions live. SQLite is the default workflow store for new workspaces. Select Markdown with `agent-rig init --workflow-store markdown`. Existing workspaces keep their configured provider, and SQLite becomes the live source of truth after migration. AgentRig does not orchestrate AI APIs; users run subscription tools such as Claude, Codex, OpenCode, or custom tools directly.
 
 The main idea is to provide a controllable and customizable engineering loop
 inside the project folder. You can use your existing Codex or Claude
@@ -65,7 +65,7 @@ AgentRig workspaces are ordinary project files:
 
 The default `agent-rig init --yes` workspace is a solo `worker` agent using `codex`. Interactive setup can scaffold solo, coder-reviewer, trinity, supervisor-worker, swarm, testing-reviewer, or custom patterns.
 
-Fresh workspaces can select SQLite directly with `agent-rig init --yes --workflow-store sqlite`. Markdown remains the default.
+Fresh workspaces use SQLite by default. Use `agent-rig init --yes --workflow-store markdown` to select Markdown storage.
 
 Agent instructions start from editable profiles in `.agent-rig/_shared/profiles/`. Built-in profiles are `planner`, `worker`, `reviewer`, `researcher`, `writer`, and `designer`; custom profiles are plain Markdown files with YAML frontmatter.
 
@@ -128,10 +128,10 @@ For the non-interactive MVP default, scaffold a solo `worker` agent using `codex
 agent-rig init --yes
 ```
 
-To start a fresh workspace with SQLite:
+To start a fresh workspace with Markdown storage:
 
 ```bash
-agent-rig init --yes --workflow-store sqlite
+agent-rig init --yes --workflow-store markdown
 ```
 
 Or do the same through `npx`:
@@ -236,8 +236,8 @@ already-built assets and do not build frontend dependencies at runtime.
 | Command | Purpose |
 |---|---|
 | `agent-rig init` | Run the setup-pattern interview and scaffold `.agent-rig/`. |
-| `agent-rig init --yes` | Scaffold a solo `worker` using `codex` with Markdown storage. |
-| `agent-rig init --yes --workflow-store sqlite` | Scaffold a solo `worker` with a fresh SQLite workflow store. |
+| `agent-rig init --yes` | Scaffold a solo `worker` using `codex` with a fresh SQLite workflow store. |
+| `agent-rig init --yes --workflow-store markdown` | Scaffold a solo `worker` using `codex` with Markdown storage. |
 | `agent-rig add <agent-name>` | Add an agent to an existing workspace. |
 | `agent-rig add <agent-name> --profile worker` | Add an agent from an editable profile. |
 | `agent-rig profiles` | List available agent profiles. |

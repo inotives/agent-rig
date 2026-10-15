@@ -53,6 +53,9 @@ function helpText() {
 
 Usage: agent-rig <command> [options]
 
+Init options:
+  --workflow-store <sqlite|markdown>  Workflow storage (default: sqlite)
+
 Commands:
   init       Scaffold .agent-rig/ in the current project
   upgrade    Back up and refresh deployed managed instructions

@@ -4,10 +4,10 @@ Use this workflow for phase and feature work.
 
 ## 0. Choose Workflow Storage
 
-- New workspaces default to Markdown:
+- New workspaces default to SQLite:
   `agent-rig init --yes`.
-- New workspaces can start directly with SQLite:
-  `agent-rig init --yes --workflow-store sqlite`.
+- Select Markdown when needed:
+  `agent-rig init --yes --workflow-store markdown`.
 - Existing Markdown workspaces migrate with:
   `agent-rig workflow migrate --to sqlite`.
 - After migration, SQLite is canonical and migrated Markdown is historical

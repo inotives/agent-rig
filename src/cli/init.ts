@@ -56,7 +56,7 @@ export async function runInit(args: string[], cwd: string) {
     return 1;
   }
 
-  const workflowStore = initOption(args, "--workflow-store") ?? "markdown";
+  const workflowStore = initOption(args, "--workflow-store") ?? "sqlite";
   if (!isWorkflowStoreProvider(workflowStore)) {
     console.error("--workflow-store must be markdown or sqlite.");
     return 1;
