@@ -1,8 +1,10 @@
 # AgentRig Tasks
 
 AgentRig tasks use a backend-neutral workflow-store interface. New workspaces
-default to Markdown files with YAML frontmatter; after an explicit migration,
-SQLite is canonical for live tasks and handoffs.
+created by `agent-rig init` use SQLite by default. Pass
+`--workflow-store markdown` to select Markdown. Existing workspaces keep their
+configured provider; configs without a provider still use the Markdown
+fallback. After migration, SQLite is canonical for live tasks and handoffs.
 
 Canonical task files live in:
 
@@ -280,14 +282,17 @@ agent-rig watch --once
 
 ## Workflow Storage And Migration
 
-The provider is selected in `.agent-rig/_shared/agent-rig.json`:
+The provider is selected in `.agent-rig/_shared/agent-rig.json`. This example
+shows a Markdown-backed workspace:
 
 ```json
 {"workflow_store": {"provider": "markdown"}, "project_identifier": "my-project"}
 ```
 
-Markdown is the default. To switch a completed Markdown-backed workspace to
-SQLite, run:
+New workspaces use SQLite by default. Pass
+`--workflow-store markdown` to `agent-rig init` to select Markdown. Existing
+workspaces keep their configured provider. To migrate a Markdown-backed
+workspace to SQLite, run:
 
 ```bash
 agent-rig workflow migrate --to sqlite

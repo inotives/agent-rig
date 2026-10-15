@@ -230,16 +230,18 @@ test("npm-style symlink bin runs the CLI", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Usage: agent-rig/);
+  assert.match(result.stdout, /--workflow-store <sqlite\|markdown>.*default: sqlite/);
 });
 
-test("init --yes creates solo Codex worker scaffold", () => {
+test("init --yes creates solo Codex worker scaffold with SQLite storage", () => {
   const cwd = tempProject();
   const result = run(["init", "--yes"], cwd);
 
   assert.equal(result.status, 0, result.stderr);
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "agent-rig.json")));
   const workspaceConfig = JSON.parse(readFileSync(join(cwd, ".agent-rig", "_shared", "agent-rig.json"), "utf8"));
-  assert.equal(workspaceConfig.workflow_store.provider, "markdown");
+  assert.equal(workspaceConfig.workflow_store.provider, "sqlite");
+  assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "workflow.sqlite")));
   assert.equal(workspaceConfig.project_identifier, cwd.split(/[\\/]/).pop().toLowerCase());
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "tasks")));
   assert.equal(existsSync(join(cwd, ".agent-rig", "_shared", "task_queue.json")), false);
@@ -289,6 +291,16 @@ test("init can select SQLite for a fresh workspace", () => {
   assert.equal(config.workflow_store.provider, "sqlite");
   assert.ok(existsSync(join(cwd, ".agent-rig", "_shared", "workflow.sqlite")));
   assert.equal(readdirSync(join(cwd, ".agent-rig", "_shared", "tasks")).filter((name) => name.endsWith(".md")).length, 0);
+});
+
+test("init can select Markdown for a fresh workspace", () => {
+  const cwd = tempProject();
+  const result = run(["init", "--yes", "--workflow-store", "markdown"], cwd);
+
+  assert.equal(result.status, 0, result.stderr);
+  const config = JSON.parse(readFileSync(join(cwd, ".agent-rig", "_shared", "agent-rig.json"), "utf8"));
+  assert.equal(config.workflow_store.provider, "markdown");
+  assert.equal(existsSync(join(cwd, ".agent-rig", "_shared", "workflow.sqlite")), false);
 });
 
 test("init rejects an unknown workflow store", () => {
